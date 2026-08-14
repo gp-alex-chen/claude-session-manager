@@ -29,7 +29,7 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CC: x86_64-w64-mingw32-gcc
-        run: go build -ldflags "-s -w" -o claude-sidebar.exe .
+        run: go build -ldflags "-s -w" -o claude-sidebar.exe ./src
 
       - name: 上传产物
         uses: actions/upload-artifact@v4

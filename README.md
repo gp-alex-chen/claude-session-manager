@@ -29,15 +29,15 @@
 ```powershell
 go mod tidy
 # Windows：单 exe 控制台子系统（GUI 模式自隐藏控制台，-run 模式在终端里跑 claude）
-go build -ldflags "-s -w" -o claude-sidebar.exe .
+go build -ldflags "-s -w" -o claude-sidebar.exe ./src
 # macOS / Linux 同样命令各自编译一份
-go build -ldflags "-s -w" -o claude-sidebar .
+go build -ldflags "-s -w" -o claude-sidebar ./src
 ```
 
-> 图标说明：exe 文件图标由根目录的 `rsrc_windows_amd64.syso` 提供（已提交，构建时自动链接；
-> Go 要求 .syso 位于包根目录）。图标源文件在 `assets/`：
-> 编辑 `assets/icon.svg` → 运行 `assets/gen-icon.ps1` 生成 `assets/icon.ico` →
-> 在项目根目录执行 `windres assets/icon.rc -O coff -o rsrc_windows_amd64.syso`。
+> 图标说明：exe 文件图标由 `src/rsrc_windows_amd64.syso` 提供（已提交，构建时自动链接；
+> Go 要求 .syso 位于包目录）。图标源文件在 `src/assets/`：
+> 编辑 `src/assets/icon.svg` → 运行 `src/assets/gen-icon.ps1` 生成 `src/assets/icon.ico` →
+> 在 `src/` 目录执行 `windres assets/icon.rc -O coff -o rsrc_windows_amd64.syso`。
 
 macOS / Linux 同样命令各自编译一份（无平台特定代码）。
 
@@ -50,9 +50,8 @@ macOS / Linux 同样命令各自编译一份（无平台特定代码）。
 
 ## 目录结构
 
-- `*.go`：源码（main/runner/sessions/autostart_*）
-- `assets/`：图标源文件（svg/ico/rc）与生成脚本 `gen-icon.ps1`
-- `rsrc_windows_amd64.syso`：exe 图标资源（构建时自动链接，Go 要求放包根目录）
+- `src/`：全部 Go 源码（main/runner/sessions/autostart_*）与 `rsrc_windows_amd64.syso`（Go 要求 .syso 在包目录）
+- `src/assets/`：图标源文件（svg/ico/rc）与生成脚本 `gen-icon.ps1`
 - `claude-sidebar.exe`、`favorites.json`、`gui.log`：本地产物/个人数据（已在 .gitignore 排除）
 
 ## 已知说明
