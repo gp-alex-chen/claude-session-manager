@@ -297,16 +297,22 @@ func openSession(s *Session) error {
 	}
 	switch runtime.GOOS {
 	case "windows":
+		// GUI 本体是 windowsgui 子系统（无控制台），恢复会话要用同目录的
+		// 控制台子系统 runner（claude-sidebar-run.exe）在标签页里跑 claude
+		runExe := filepath.Join(filepath.Dir(exe), "claude-sidebar-run.exe")
+		if !pathExists(runExe) {
+			runExe = exe // 兜底：没有独立 runner 时退回本程序（控制台子系统构建）
+		}
 		leaf := sanitize(filepath.Base(s.Dir))
 		if strings.HasPrefix(leaf, "-") {
 			leaf = "c" + leaf // wt 会把以 - 开头的值当参数解析
 		}
 		// wt 可用且路径无空格 → wt new-tab（参数必须无空格）
-		if wt, err := exec.LookPath("wt"); err == nil && !strings.ContainsAny(exe, " ") {
-			return start(wt, "new-tab", "--title", leaf, exe, "-run", s.ID)
+		if wt, err := exec.LookPath("wt"); err == nil && !strings.ContainsAny(runExe, " ") {
+			return start(wt, "new-tab", "--title", leaf, runExe, "-run", s.ID)
 		}
-		// 兜底：新控制台窗口直接运行本程序 -run 模式
-		return start("cmd", "/c", "start", "", `"`+exe+`"`, "-run", s.ID)
+		// 兜底：新控制台窗口直接运行 runner -run 模式
+		return start("cmd", "/c", "start", "", `"`+runExe+`"`, "-run", s.ID)
 	case "darwin":
 		// macOS：AppleScript 在 Terminal 新窗口执行
 		script := fmt.Sprintf(`tell application "Terminal" to do script "cd %s && %s -run %s"`,

@@ -19,12 +19,18 @@ jobs:
       - name: 安装 MinGW（Fyne 依赖 CGO/gcc）
         run: choco install mingw --no-progress -y
 
-      - name: 编译 exe
+      - name: 编译 GUI（windowsgui 子系统，无控制台窗口）
         shell: pwsh
-        run: go build -ldflags "-s -w" -o claude-sidebar.exe .
+        run: go build -ldflags "-s -w -H=windowsgui" -o claude-sidebar.exe .
+
+      - name: 编译 runner（控制台子系统，-run 恢复模式在终端标签页内运行 claude）
+        shell: pwsh
+        run: go build -ldflags "-s -w" -o claude-sidebar-run.exe .
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: claude-sidebar-windows
-          path: claude-sidebar.exe
+          path: |
+            claude-sidebar.exe
+            claude-sidebar-run.exe

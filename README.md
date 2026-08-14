@@ -3,6 +3,9 @@
 跨平台 GUI（Go + Fyne），**单二进制零依赖**：双击 = 侧边栏窗口；`-run <会话ID>` = 终端内恢复器。
 逻辑全部用 Go 实现，不依赖 PowerShell 脚本。
 
+> Windows 上为两个 exe：`claude-sidebar.exe`（纯 GUI 子系统，无控制台窗口）+
+> `claude-sidebar-run.exe`（控制台子系统，双击会话时在 Windows Terminal 标签页里恢复 claude 用）。
+
 ## 功能
 
 - 会话目录树（按项目分组，组按目录名排序；组内会话按最近使用时间排序；启动全展开；**双击项目分支 = 折叠/展开**）
@@ -23,7 +26,11 @@
 
 ```powershell
 go mod tidy
-go build -ldflags "-s -w" -o claude-sidebar.exe .   # 控制台子系统：GUI 模式自隐藏控制台，-run 模式在终端里跑 claude
+# Windows：GUI 用 windowsgui 子系统（无控制台），runner 用控制台子系统
+go build -ldflags "-s -w -H=windowsgui" -o claude-sidebar.exe .
+go build -ldflags "-s -w" -o claude-sidebar-run.exe .
+# macOS / Linux：单二进制即可（无子系统之分）
+go build -ldflags "-s -w" -o claude-sidebar .
 ```
 
 > 图标说明：exe 文件图标由 `rsrc_windows_amd64.syso` 提供（已提交，构建时自动链接）。
@@ -33,9 +40,9 @@ macOS / Linux 同样命令各自编译一份（无平台特定代码）。
 
 ## 运行
 
-- 双击 `claude-sidebar.exe`（GUI 模式，控制台自动隐藏）
-- 终端里手动恢复：`claude-sidebar.exe -run <会话ID>`
-- 干跑检查（只检查不执行 claude，调试用）：`claude-sidebar.exe -dry -run <会话ID>`
+- 双击 `claude-sidebar.exe`（纯 GUI 子系统，从源头没有控制台窗口）
+- 终端里手动恢复：`claude-sidebar-run.exe -run <会话ID>`（Windows；GUI 双击会话会自动调用它）
+- 干跑检查（只检查不执行 claude，调试用）：`claude-sidebar-run.exe -dry -run <会话ID>`
 - 诊断：exe 同目录 `gui.log` 记录每次点击与打开动作及结果
 
 ## 已知说明
