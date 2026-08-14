@@ -385,6 +385,9 @@ func main() {
 		os.Setenv("FYNE_FONT", f)
 	}
 	a := app.NewWithID("com.claude.sidebar")
+	// 声明已迁移到 Fyne 2.8 的 fyne.Do 线程模型（消除启动警告）。
+	// 本程序所有 goroutine 的 UI 更新均已通过 fyne.Do 投递，符合新模型要求。
+	a.Metadata().Migrations["fyneDo"] = true
 	a.SetIcon(fyne.NewStaticResource("icon.svg", iconSVG)) // 窗口/任务栏图标
 	a.Settings().SetTheme(theme.DarkTheme())
 	w := a.NewWindow("Claude 会话管理")
