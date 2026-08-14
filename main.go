@@ -26,7 +26,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-//go:embed icon.svg
+//go:embed assets/icon.svg
 var iconSVG []byte
 
 var (

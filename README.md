@@ -34,8 +34,10 @@ go build -ldflags "-s -w" -o claude-sidebar.exe .
 go build -ldflags "-s -w" -o claude-sidebar .
 ```
 
-> 图标说明：exe 文件图标由 `rsrc_windows_amd64.syso` 提供（已提交，构建时自动链接）。
-> 修改图标：编辑 `icon.svg` → 运行 `gen-icon.ps1` 生成 `icon.ico` → `windres icon.rc -O coff -o rsrc_windows_amd64.syso`。
+> 图标说明：exe 文件图标由根目录的 `rsrc_windows_amd64.syso` 提供（已提交，构建时自动链接；
+> Go 要求 .syso 位于包根目录）。图标源文件在 `assets/`：
+> 编辑 `assets/icon.svg` → 运行 `assets/gen-icon.ps1` 生成 `assets/icon.ico` →
+> 在项目根目录执行 `windres assets/icon.rc -O coff -o rsrc_windows_amd64.syso`。
 
 macOS / Linux 同样命令各自编译一份（无平台特定代码）。
 
@@ -45,6 +47,13 @@ macOS / Linux 同样命令各自编译一份（无平台特定代码）。
 - 终端里手动恢复：`claude-sidebar.exe -run <会话ID>`
 - 干跑检查（只检查不执行 claude，调试用）：`claude-sidebar.exe -dry -run <会话ID>`
 - 诊断：exe 同目录 `gui.log` 记录每次点击与打开动作及结果
+
+## 目录结构
+
+- `*.go`：源码（main/runner/sessions/autostart_*）
+- `assets/`：图标源文件（svg/ico/rc）与生成脚本 `gen-icon.ps1`
+- `rsrc_windows_amd64.syso`：exe 图标资源（构建时自动链接，Go 要求放包根目录）
+- `claude-sidebar.exe`、`favorites.json`、`gui.log`：本地产物/个人数据（已在 .gitignore 排除）
 
 ## 已知说明
 
