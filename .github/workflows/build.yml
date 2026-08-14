@@ -37,6 +37,18 @@ jobs:
           name: claude-sidebar-windows
           path: claude-sidebar.exe
 
+      - name: 更新 dev 版产物（每次 push main 覆盖，只留最新）
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev
+          name: dev（最新构建）
+          files: claude-sidebar.exe
+          overwrite_files: true
+          generate_release_notes: true
+          prerelease: true
+          make_latest: false
+
       - name: 发布 GitHub Release（仅打 v* tag 时）
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

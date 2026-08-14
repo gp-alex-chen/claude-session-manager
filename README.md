@@ -48,6 +48,11 @@ macOS / Linux 同样命令各自编译一份（无平台特定代码）。
 - 干跑检查（只检查不执行 claude，调试用）：`claude-sidebar.exe -dry -run <会话ID>`
 - 诊断：exe 同目录 `gui.log` 记录每次点击与打开动作及结果
 
+## 发布
+
+- **dev 滚动版**：每次 push 到 `main`，产物自动覆盖更新到 [dev Release](https://github.com/gp-alex-chen/claude-session-manager/releases/tag/dev)，只保留最新一份
+- **版本化 Release**：打 `v*` tag（如 `v0.1` / `v0.1-beta`）→ 新建独立 Release，含 `-` 后缀的自动标 prerelease
+
 ## 目录结构
 
 - `src/`：全部 Go 源码（main/runner/sessions/autostart_*）与 `rsrc_windows_amd64.syso`（Go 要求 .syso 在包目录）
