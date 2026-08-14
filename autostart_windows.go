@@ -2,41 +2,50 @@
 
 package main
 
-// 开机自启动（Windows）：写 HKCU\Software\Microsoft\Windows\CurrentVersion\Run，
-// 当前用户级别，不需要管理员权限
+// 开机自启动（Windows）：写“启动”文件夹里的 .vbs。
+// wscript 静默拉起本程序（窗口隐藏），无控制台窗口、无注册表、无需管理员权限。
+// 用户可直接在 %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup 看到/删除。
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
-
-	"golang.org/x/sys/windows/registry"
 )
 
-const runKeyName = "ClaudeSessionManager"
+const autostartFileName = "ClaudeSessionManager.vbs"
+
+func autostartFilePath() (string, error) {
+	dir, err := os.UserConfigDir() // Windows 下为 %APPDATA%
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", autostartFileName), nil
+}
 
 func setAutostart(enable bool) error {
 	exe, err := exePath()
 	if err != nil {
 		return err
 	}
-	k, err := registry.OpenKey(registry.CURRENT_USER,
-		`Software\Microsoft\Windows\CurrentVersion\Run`, registry.SET_VALUE)
+	p, err := autostartFilePath()
 	if err != nil {
 		return err
 	}
-	defer k.Close()
-
-	if enable {
-		v := exe
-		if strings.ContainsAny(v, " ") {
-			v = `"` + v + `"` // 路径含空格时注册表值需要引号
+	if !enable {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
-		return k.SetStringValue(runKeyName, v)
+		return nil
 	}
-	if err := k.DeleteValue(runKeyName); err != nil && !errors.Is(err, registry.ErrNotExist) {
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	return nil
+	// WScript.Shell.Run 第二个参数 0 = 隐藏窗口启动；路径放进双引号以兼容空格
+	esc := strings.ReplaceAll(exe, `"`, `""`)
+	content := fmt.Sprintf("CreateObject(\"WScript.Shell\").Run \"\"\"%s\"\"\", 0, False\n", esc)
+	return os.WriteFile(p, []byte(content), 0o644)
 }
 
 func isAutostart() bool {
@@ -44,15 +53,10 @@ func isAutostart() bool {
 	if err != nil {
 		return false
 	}
-	k, err := registry.OpenKey(registry.CURRENT_USER,
-		`Software\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE)
+	p, err := autostartFilePath()
 	if err != nil {
 		return false
 	}
-	defer k.Close()
-	v, _, err := k.GetStringValue(runKeyName)
-	if err != nil {
-		return false
-	}
-	return strings.Trim(v, `"`) == exe
+	b, err := os.ReadFile(p)
+	return err == nil && strings.Contains(string(b), exe)
 }
