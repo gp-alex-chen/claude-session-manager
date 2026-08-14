@@ -1,0 +1,8 @@
+# 构建产物
+claude-sidebar.exe
+*.exe~
+*.test
+
+# 本地数据 / 日志（个人数据不入库）
+gui.log
+favorites.json
