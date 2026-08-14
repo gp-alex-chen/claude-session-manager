@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  linux:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -16,11 +16,15 @@ jobs:
           go-version: '1.23.4'
           cache-dependency-path: go.sum
 
-      - name: 安装 MinGW（Fyne 依赖 CGO/gcc）
-        run: choco install mingw --no-progress -y
+      - name: 安装 MinGW Windows 交叉编译器（Fyne 依赖 CGO）
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
 
-      - name: 编译 exe（控制台子系统；GUI 模式自隐藏控制台，-run 模式在标签页内跑 claude）
-        shell: pwsh
+      - name: 交叉编译 Windows exe
+        env:
+          CGO_ENABLED: '1'
+          GOOS: windows
+          GOARCH: amd64
+          CC: x86_64-w64-mingw32-gcc
         run: go build -ldflags "-s -w" -o claude-sidebar.exe .
 
       - name: 上传产物
