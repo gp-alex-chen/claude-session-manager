@@ -812,9 +812,45 @@ func main() {
 		}
 	})
 
+	// 设置：开机自启动
+	btnSettings := widget.NewButton("设置", func() {
+		applying := false
+		var cb *widget.Check
+		cb = widget.NewCheck("开机自启动（登录后自动在后台运行）", func(v bool) {
+			if applying {
+				return // 回滚 SetChecked 引起的递归
+			}
+			applying = true
+			if err := setAutostart(v); err != nil {
+				status.SetText("开机自启动设置失败: " + err.Error())
+				cb.SetChecked(!v)
+			} else {
+				guiLog("autostart set=%v", v)
+				if v {
+					status.SetText("已开启开机自启动")
+				} else {
+					status.SetText("已关闭开机自启动")
+				}
+			}
+			applying = false
+		})
+		cb.SetChecked(isAutostart())
+
+		var popup *widget.PopUp
+		content := container.NewVBox(
+			cb,
+			container.NewHBox(widget.NewButton("关闭", func() { popup.Hide() })),
+		)
+		card := widget.NewCard("设置", "", content)
+		popup = widget.NewModalPopUp(card, menuCanvas)
+		sz := card.MinSize()
+		cs := menuCanvas.Size()
+		popup.ShowAtPosition(fyne.NewPos((cs.Width-sz.Width)/2, (cs.Height-sz.Height)/2))
+	})
+
 	search.OnChanged = func(string) { applyFilter() }
 
-	btnBox := container.NewHBox(btnRefresh, btnOpenChecked, btnOpenFav)
+	btnBox := container.NewHBox(btnRefresh, btnOpenChecked, btnOpenFav, btnSettings)
 	top := container.NewBorder(nil, nil, nil, btnBox, search)
 	w.SetContent(container.NewBorder(top, status, nil, nil, tree))
 	reload()

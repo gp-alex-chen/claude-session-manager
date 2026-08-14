@@ -1,0 +1,8 @@
+//go:build !windows && !linux
+
+package main
+
+import "fmt"
+
+func setAutostart(bool) error { return fmt.Errorf("当前平台暂不支持开机自启动") }
+func isAutostart() bool      { return false }
