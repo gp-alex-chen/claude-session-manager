@@ -3,7 +3,11 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   linux:
@@ -32,3 +36,11 @@ jobs:
         with:
           name: claude-sidebar-windows
           path: claude-sidebar.exe
+
+      - name: 发布 GitHub Release（仅打 v* tag 时）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: claude-sidebar.exe
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
