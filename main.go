@@ -361,6 +361,15 @@ func (rr *rowBodyRenderer) Objects() []fyne.CanvasObject {
 
 func (rr *rowBodyRenderer) Refresh() {}
 
+func init() {
+	// 双击启动（无参数 = GUI 模式）时尽早隐藏自己的控制台窗口，把闪动压到最小；
+	// 带参数（-run/-dry 恢复模式）不隐藏。共享控制台（从终端启动）不会被隐藏。
+	// 之后 cmd /c claude ... 等子进程会继承这个隐藏控制台，不会再弹出新窗口。
+	if len(os.Args) <= 1 {
+		hideConsole()
+	}
+}
+
 func main() {
 	// -run <会话ID> = 恢复模式（终端内运行，由 openSession 启动）；无参数 = GUI 模式
 	runID := flag.String("run", "", "恢复模式：直接恢复指定会话（在终端内运行）")
@@ -370,7 +379,6 @@ func main() {
 		_ = runSession(*runID, *dry)
 		return
 	}
-	hideConsole()
 
 	// 中文字体：Fyne 默认字体不含 CJK 字形，必须在 app 创建前设置 FYNE_FONT
 	if f := pickCJKFont(); f != "" {

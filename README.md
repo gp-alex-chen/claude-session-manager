@@ -3,8 +3,9 @@
 跨平台 GUI（Go + Fyne），**单二进制零依赖**：双击 = 侧边栏窗口；`-run <会话ID>` = 终端内恢复器。
 逻辑全部用 Go 实现，不依赖 PowerShell 脚本。
 
-> Windows 上为两个 exe：`claude-sidebar.exe`（纯 GUI 子系统，无控制台窗口）+
-> `claude-sidebar-run.exe`（控制台子系统，双击会话时在 Windows Terminal 标签页里恢复 claude 用）。
+> Windows 单 exe 是控制台子系统：双击启动时在 `init()` 里立即隐藏自己的控制台
+> （`cmd /c claude ...` 等子进程继承该隐藏控制台，不会弹新窗口）；`-run` 恢复模式
+> 保留控制台在 Windows Terminal 标签页里跑 claude。
 
 ## 功能
 
@@ -15,7 +16,8 @@
 - **搜索**：按 目录/摘要/ID 过滤（输入即过滤）
 - **收藏**：点击每行左侧 ★/☆ 即收藏/取消（金色 ★，存 exe 同目录 `favorites.json`）；「打开收藏」批量恢复
 - **多选**：每行勾选框；「打开选中」批量恢复
-- **右键菜单**：行上右键 → 打开 / 收藏(取消收藏) / 重命名… / 删除（不再显示）- **重命名**：右键弹框输入新名称（仅本软件的别名，不修改 claude 数据；真正改名在 claude 会话内用 `/rename`）；清空 = 恢复原名
+- **右键菜单**：行上右键 → 打开 / 收藏(取消收藏) / 重命名… / 删除（不再显示）
+- **重命名**：右键弹框输入新名称（仅本软件的别名，不修改 claude 数据；真正改名在 claude 会话内用 `/rename`）；清空 = 恢复原名
 - **删除**：软隐藏 —— 只把 ID 记入 `favorites.json` 的 hidden 列表，界面不再显示，**不物理删除**会话文件
 - **设置**：开机自启动（Windows 写 HKCU Run 键、Linux 写 autostart desktop 文件，均无需管理员权限）
 - **不重复打开**：已打开/后台运行中的会话双击与批量打开时跳过并提示
@@ -26,10 +28,9 @@
 
 ```powershell
 go mod tidy
-# Windows：GUI 用 windowsgui 子系统（无控制台），runner 用控制台子系统
-go build -ldflags "-s -w -H=windowsgui" -o claude-sidebar.exe .
-go build -ldflags "-s -w" -o claude-sidebar-run.exe .
-# macOS / Linux：单二进制即可（无子系统之分）
+# Windows：单 exe 控制台子系统（GUI 模式自隐藏控制台，-run 模式在终端里跑 claude）
+go build -ldflags "-s -w" -o claude-sidebar.exe .
+# macOS / Linux 同样命令各自编译一份
 go build -ldflags "-s -w" -o claude-sidebar .
 ```
 
@@ -40,9 +41,9 @@ macOS / Linux 同样命令各自编译一份（无平台特定代码）。
 
 ## 运行
 
-- 双击 `claude-sidebar.exe`（纯 GUI 子系统，从源头没有控制台窗口）
-- 终端里手动恢复：`claude-sidebar-run.exe -run <会话ID>`（Windows；GUI 双击会话会自动调用它）
-- 干跑检查（只检查不执行 claude，调试用）：`claude-sidebar-run.exe -dry -run <会话ID>`
+- 双击 `claude-sidebar.exe`（GUI 模式，启动时立即隐藏自己的控制台）
+- 终端里手动恢复：`claude-sidebar.exe -run <会话ID>`
+- 干跑检查（只检查不执行 claude，调试用）：`claude-sidebar.exe -dry -run <会话ID>`
 - 诊断：exe 同目录 `gui.log` 记录每次点击与打开动作及结果
 
 ## 已知说明
