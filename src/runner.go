@@ -163,3 +163,28 @@ func runSession(id string, dry bool) error {
 	waitEnter()
 	return nil
 }
+
+// runNew 新建会话模式：在指定目录启动全新 claude 会话（不恢复任何历史会话）
+func runNew(dir string, dry bool) error {
+	os.Unsetenv("NO_COLOR")
+
+	if dir != "" {
+		if !pathExists(dir) {
+			fmt.Printf("警告: 找不到目录 [%s]，留在当前目录\n", dir)
+		} else if err := os.Chdir(dir); err != nil {
+			fmt.Printf("警告: 无法进入目录 [%s]: %v\n", dir, err)
+		}
+	}
+	fmt.Println("正在启动新会话: claude")
+	if dry {
+		fmt.Println("DRY: 已通过检查（目录），未实际启动 claude。")
+		return nil
+	}
+	if err := runClaude(nil); err != nil {
+		fmt.Printf("claude 已退出（错误: %v）。\n", err)
+	} else {
+		fmt.Println("claude 已退出。")
+	}
+	waitEnter()
+	return nil
+}

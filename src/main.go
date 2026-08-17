@@ -42,6 +42,21 @@ var (
 	colGold   = color.NRGBA{R: 0xFF, G: 0xD7, B: 0x00, A: 0xFF} // ★ 收藏
 )
 
+// starGlyph / starColor 收藏星外观：★=已收藏（金色），☆=未收藏（灰色）
+func starGlyph(fav bool) string {
+	if fav {
+		return "★"
+	}
+	return "☆"
+}
+
+func starColor(fav bool) color.Color {
+	if fav {
+		return colGold
+	}
+	return colGray
+}
+
 // pickCJKFont 找系统自带的单字体中文字体（Fyne 不支持 TTC 字体集合，会崩溃；
 // 只选 .ttf/.otf 单字体文件）
 func pickCJKFont() string {
@@ -182,86 +197,79 @@ func hideConsole() {
 	procShowWindow.Call(hwnd, 0) // SW_HIDE
 }
 
-// ---- 收藏星按钮：★(金色)=已收藏 ☆(灰)=未收藏；点击切换，带按压变亮反馈 ----
+// ---- 行内图标按钮（收藏星 ★ / 新建会话 +）：文字图标 + 点击动作 + 按压变亮 ----
 
-type favStar struct {
+type rowIcon struct {
 	widget.BaseWidget
 	text    *canvas.Text
 	onTap   func()
-	fav     bool
 	pressed bool
 }
 
-func newFavStar() *favStar {
-	s := &favStar{}
-	s.text = canvas.NewText("☆", colGray)
-	s.text.TextSize = 17
-	s.ExtendBaseWidget(s)
-	return s
+func newRowIcon(s string, c color.Color) *rowIcon {
+	i := &rowIcon{}
+	i.text = canvas.NewText(s, c)
+	i.text.TextSize = 17
+	i.ExtendBaseWidget(i)
+	return i
 }
 
-// set 由 UpdateNode 调用：绑定当前行的收藏状态与点击动作（树的行对象会被复用）
-func (s *favStar) set(fav bool, onTap func()) {
-	s.fav = fav
-	s.onTap = onTap
-	s.apply()
+// set 由 UpdateNode 调用：绑定当前行的图标文字/颜色/点击动作（树的行对象会被复用）
+func (i *rowIcon) set(s string, c color.Color, onTap func()) {
+	i.text.Text = s
+	i.text.Color = c
+	i.onTap = onTap
+	i.apply()
 }
 
-func (s *favStar) apply() {
-	if s.fav {
-		s.text.Text = "★"
-		s.text.Color = colGold
-	} else {
-		s.text.Text = "☆"
-		s.text.Color = colGray
+func (i *rowIcon) apply() {
+	if i.pressed {
+		i.text.Color = color.White // 按下变亮，同按钮按压手感
 	}
-	if s.pressed {
-		s.text.Color = color.White // 按下变亮，同按钮按压手感
-	}
-	s.text.Refresh()
+	i.text.Refresh()
 }
 
-func (s *favStar) Tapped(*fyne.PointEvent) {
-	if s.onTap != nil {
-		s.onTap()
+func (i *rowIcon) Tapped(*fyne.PointEvent) {
+	if i.onTap != nil {
+		i.onTap()
 	}
 }
 
-func (s *favStar) MouseDown(*desktop.MouseEvent) {
-	s.pressed = true
-	s.apply()
+func (i *rowIcon) MouseDown(*desktop.MouseEvent) {
+	i.pressed = true
+	i.apply()
 }
 
-func (s *favStar) MouseUp(*desktop.MouseEvent) {
-	s.pressed = false
-	s.apply()
+func (i *rowIcon) MouseUp(*desktop.MouseEvent) {
+	i.pressed = false
+	i.apply()
 }
 
-func (s *favStar) CreateRenderer() fyne.WidgetRenderer {
-	return &favStarRenderer{s: s}
+func (i *rowIcon) CreateRenderer() fyne.WidgetRenderer {
+	return &rowIconRenderer{i: i}
 }
 
-type favStarRenderer struct {
-	s *favStar
+type rowIconRenderer struct {
+	i *rowIcon
 }
 
-func (r *favStarRenderer) Destroy() {}
+func (r *rowIconRenderer) Destroy() {}
 
-func (r *favStarRenderer) Layout(sz fyne.Size) {
-	r.s.text.Move(fyne.NewPos(3, 2))
-	r.s.text.Resize(r.s.text.MinSize())
+func (r *rowIconRenderer) Layout(sz fyne.Size) {
+	r.i.text.Move(fyne.NewPos(3, 2))
+	r.i.text.Resize(r.i.text.MinSize())
 }
 
-func (r *favStarRenderer) MinSize() fyne.Size {
-	return r.s.text.MinSize().Add(fyne.NewSize(6, 4)) // 命中区域略大于字形，更好点
+func (r *rowIconRenderer) MinSize() fyne.Size {
+	return r.i.text.MinSize().Add(fyne.NewSize(6, 4)) // 命中区域略大于字形，更好点
 }
 
-func (r *favStarRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.s.text}
+func (r *rowIconRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.i.text}
 }
 
-func (r *favStarRenderer) Refresh() {
-	r.s.apply()
+func (r *rowIconRenderer) Refresh() {
+	r.i.apply()
 }
 
 // ---- 行内水波反馈：复刻 Fyne 按钮的 tap 动画 ----
@@ -272,12 +280,14 @@ func (r *favStarRenderer) Refresh() {
 
 type rowBody struct {
 	widget.BaseWidget
-	content  *fyne.Container // HBox：收藏星/勾选框/文本/徽标
-	tapBG    *canvas.Rectangle
-	tapAnim  *fyne.Animation
-	suppress bool // SetChecked 同步勾选状态时抑制 OnChanged 副作用（行对象复用）
-	onTap    func(*fyne.PointEvent) // 左键回调（转发给树：选中/双击）
-	onMenu   func(*fyne.PointEvent) // 右键回调（UpdateNode 绑定当前行会话）
+	content   *fyne.Container // HBox：收藏星/勾选框/新建+/文本/徽标
+	tapBG     *canvas.Rectangle
+	tapAnim   *fyne.Animation
+	suppress  bool            // SetChecked 同步勾选状态时抑制 OnChanged 副作用（行对象复用）
+	onTap     func(*fyne.PointEvent) // 左键回调（转发给树：选中/双击）
+	onMenu    func(*fyne.PointEvent) // 右键回调（UpdateNode 绑定当前行会话）
+	onTip     func(fyne.Position)    // 悬浮提示回调（UpdateNode 绑定当前行，nil=无提示）
+	onTipHide func()                 // 移出时隐藏提示
 }
 
 func newRowBody(content *fyne.Container) *rowBody {
@@ -338,6 +348,26 @@ func (r *rowBody) TappedSecondary(ev *fyne.PointEvent) {
 	}
 }
 
+// ---- 悬浮提示（Fyne 2.8 无内置 Tooltip，手写）：项目行悬浮显示完整路径 ----
+
+func (r *rowBody) MouseIn(ev *desktop.MouseEvent) {
+	if r.onTip != nil {
+		r.onTip(ev.AbsolutePosition)
+	}
+}
+
+func (r *rowBody) MouseMoved(ev *desktop.MouseEvent) {
+	if r.onTip != nil {
+		r.onTip(ev.AbsolutePosition)
+	}
+}
+
+func (r *rowBody) MouseOut() {
+	if r.onTipHide != nil {
+		r.onTipHide()
+	}
+}
+
 func (r *rowBody) CreateRenderer() fyne.WidgetRenderer {
 	return &rowBodyRenderer{r: r}
 }
@@ -372,11 +402,17 @@ func init() {
 
 func main() {
 	// -run <会话ID> = 恢复模式（终端内运行，由 openSession 启动）；无参数 = GUI 模式
+	// -new <目录> = 新建会话模式（在指定目录启动全新 claude 会话）
 	runID := flag.String("run", "", "恢复模式：直接恢复指定会话（在终端内运行）")
-	dry := flag.Bool("dry", false, "恢复模式干跑：只做检查不实际执行 claude（调试用）")
+	newDir := flag.String("new", "", "新建模式：在指定目录启动全新 claude 会话")
+	dry := flag.Bool("dry", false, "恢复/新建模式干跑：只做检查不实际执行 claude（调试用）")
 	flag.Parse()
 	if *runID != "" {
 		_ = runSession(*runID, *dry)
+		return
+	}
+	if *newDir != "" {
+		_ = runNew(*newDir, *dry)
 		return
 	}
 
@@ -404,6 +440,7 @@ func main() {
 	var tree *widget.Tree
 	checked := map[string]bool{}      // 多选（勾选框）状态：sessionID -> 是否勾选
 	rowByUID := map[string]*rowBody{} // uid -> 当前可见行对象（双击时对对应行播水波）
+	leafCount := map[string]int{}     // 项目末端目录名 -> 出现次数（同名时组名消歧用）
 	fileSig := ""
 
 	// rippleUID 对指定行播放水波（同工具栏按钮的 tap 动画）
@@ -485,6 +522,10 @@ func main() {
 				sessByUID["s:"+p.Sessions[i].ID] = &p.Sessions[i]
 			}
 		}
+		leafCount = map[string]int{} // 组名消歧：统计同名末端目录
+		for _, p := range projects {
+			leafCount[filepath.Base(p.Name)]++
+		}
 		total := 0
 		for _, p := range projects {
 			total += len(p.Sessions)
@@ -547,6 +588,41 @@ func main() {
 	}
 
 	menuCanvas := w.Canvas()
+
+	// 悬浮提示（项目行显示完整路径）：Fyne 2.8 无内置 Tooltip，用非模态 PopUp 手写。
+	// 跟随鼠标，出窗口边界时自动收进可视区。
+	tipLabel := widget.NewLabel("")
+	tipLabel.Alignment = fyne.TextAlignLeading
+	tipPop := widget.NewPopUp(container.NewPadded(tipLabel), menuCanvas)
+	showTip := func(pos fyne.Position, text string) {
+		tipLabel.SetText(text)
+		pos = pos.Add(fyne.NewPos(12, 20)) // 略微偏移鼠标，避免遮住指针
+		ms := tipPop.MinSize()
+		cs := menuCanvas.Size()
+		if pos.X+ms.Width > cs.Width {
+			pos.X = cs.Width - ms.Width - 4
+		}
+		if pos.Y+ms.Height > cs.Height {
+			pos.Y = cs.Height - ms.Height - 4
+		}
+		if pos.X < 0 {
+			pos.X = 0
+		}
+		if pos.Y < 0 {
+			pos.Y = 0
+		}
+		tipPop.ShowAtPosition(pos)
+	}
+
+	// newSession 在指定目录启动全新 claude 会话（-new 模式）
+	newSession := func(dir string) {
+		if err := openNewSession(dir); err != nil {
+			status.SetText("新建会话失败: " + err.Error())
+		} else {
+			guiLog("new session dir=%s", dir)
+			status.SetText("已新建会话: " + filepath.Base(dir))
+		}
+	}
 
 	// applyRename 应用别名（只改本软件的显示名，不修改 claude 数据）
 	applyRename := func(s *Session, name string) {
@@ -658,16 +734,18 @@ func main() {
 			return ok
 		},
 		CreateNode: func(bool) fyne.CanvasObject {
-			star := newFavStar()           // 可点收藏星
-			cb := widget.NewCheck("", nil) // 多选勾选框
+			star := newRowIcon("☆", colGray) // 可点收藏星
+			plus := newRowIcon("+", colGray) // 项目行：在此目录新建会话
+			cb := widget.NewCheck("", nil)   // 多选勾选框
 			main := widget.NewLabel("…")
 			badge := canvas.NewText("", color.White)
-			return newRowBody(container.NewHBox(star, cb, main, badge))
+			return newRowBody(container.NewHBox(star, cb, plus, main, badge))
 		},
 		UpdateNode: func(uid string, branch bool, obj fyne.CanvasObject) {
 			rb := obj.(*rowBody)
 			hb := rb.content
 			rowByUID[uid] = rb
+			rb.onTipHide = func() { tipPop.Hide() } // 行被复用/移出时收起悬浮提示
 			// 行体接管左键：转发选中给树（保持单击选中/双击恢复/双击分支折叠）
 			rb.onTap = func(*fyne.PointEvent) {
 				if tree == nil {
@@ -680,29 +758,35 @@ func main() {
 					}
 				}
 			}
-			star := hb.Objects[0].(*favStar)
+			star := hb.Objects[0].(*rowIcon)
 			cb := hb.Objects[1].(*widget.Check)
-			main := hb.Objects[2].(*widget.Label)
-			badge := hb.Objects[3].(*canvas.Text)
+			plus := hb.Objects[2].(*rowIcon)
+			main := hb.Objects[3].(*widget.Label)
+			badge := hb.Objects[4].(*canvas.Text)
 			if p, ok := projByUID[uid]; ok {
 				star.Hide()
 				cb.Hide()
+				plus.Show()
+				plus.set("+", colGray, func() { newSession(p.Name) })
 				rb.onMenu = nil
-				main.SetText(fmt.Sprintf("%s  (%d)", p.Name, len(p.Sessions)))
+				rb.onTip = func(pos fyne.Position) { showTip(pos, p.Name) }
+				main.SetText(fmt.Sprintf("%s  (%d)", leafLabel(p.Name, leafCount), len(p.Sessions)))
 				main.TextStyle = fyne.TextStyle{Bold: true}
 				badge.Text = ""
 			} else if s, ok := sessByUID[uid]; ok {
 				star.Show()
 				cb.Show()
+				plus.Hide()
+				rb.onTip = nil
 				rb.onMenu = func(ev *fyne.PointEvent) { showMenu(s, ev) }
 				id := s.ID
 				var tap func()
 				tap = func() {
 					toggleFav(s) // 状态/保存/整树刷新/计数
-					star.set(favs[id], tap)
+					star.set(starGlyph(favs[id]), starColor(favs[id]), tap)
 					rb.tapAnimation() // 收藏确认动作 → 水波
 				}
-				star.set(favs[id], tap)
+				star.set(starGlyph(favs[id]), starColor(favs[id]), tap)
 				cb.OnChanged = func(v bool) {
 					if v {
 						checked[id] = true

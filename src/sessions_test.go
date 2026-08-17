@@ -97,3 +97,20 @@ func TestParseSessionBlocksContent(t *testing.T) {
 		t.Errorf("Text = %q, want interrupted text", s.Text)
 	}
 }
+
+// leafLabel 项目组显示名：默认末端目录名；同名目录追加父目录名消歧
+func TestLeafLabel(t *testing.T) {
+	p1 := filepath.Join("D:", "git", "jellyfish-flutter-fixbug")
+	if got := leafLabel(p1, map[string]int{"jellyfish-flutter-fixbug": 1}); got != "jellyfish-flutter-fixbug" {
+		t.Errorf("leafLabel(%q) = %q, want leaf only", p1, got)
+	}
+	p2 := filepath.Join("D:", "a", "app")
+	p3 := filepath.Join("D:", "b", "app")
+	count := map[string]int{"app": 2}
+	if got := leafLabel(p2, count); got != "app · a" {
+		t.Errorf("leafLabel(%q) = %q, want %q", p2, got, "app · a")
+	}
+	if got := leafLabel(p3, count); got != "app · b" {
+		t.Errorf("leafLabel(%q) = %q, want %q", p3, got, "app · b")
+	}
+}

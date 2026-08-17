@@ -265,6 +265,20 @@ func displayName(s *Session) string {
 	return t
 }
 
+// leafLabel 项目组显示名：默认只显示末端目录名（项目名）；存在同名目录时
+// 追加父目录名消歧，避免 C:\a\app 与 D:\b\app 都显示成 "app"。
+// 完整路径在界面悬浮提示中展示。
+func leafLabel(dir string, count map[string]int) string {
+	leaf := filepath.Base(dir)
+	if count[leaf] > 1 {
+		parent := filepath.Base(filepath.Dir(dir))
+		if parent != "" && parent != "." && parent != leaf {
+			return leaf + " · " + parent
+		}
+	}
+	return leaf
+}
+
 func sanitize(s string) string {
 	s = reSafe.ReplaceAllString(s, "-")
 	if s == "" {
@@ -360,6 +374,45 @@ func openSession(s *Session) error {
 		for _, t := range []string{"gnome-terminal", "x-terminal-emulator", "konsole", "xterm"} {
 			if p, err := exec.LookPath(t); err == nil {
 				return exec.Command(p, "--working-directory", s.Dir, "--", exe, "-run", s.ID).Start()
+			}
+		}
+		return fmt.Errorf("找不到终端模拟器")
+	}
+}
+
+// openNewSession 在新终端窗口于指定目录启动全新 claude 会话（-new 模式）
+func openNewSession(dir string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "claude-sidebar"
+	}
+	start := func(name string, arg ...string) error {
+		guiLog("openNewSession: %s %s -> dir=%s", name, strings.Join(arg, " "), dir)
+		if err := exec.Command(name, arg...).Start(); err != nil {
+			guiLog("openNewSession 失败: %v", err)
+			return err
+		}
+		return nil
+	}
+	switch runtime.GOOS {
+	case "windows":
+		leaf := sanitize(filepath.Base(dir))
+		if strings.HasPrefix(leaf, "-") {
+			leaf = "c" + leaf // wt 会把以 - 开头的值当参数解析
+		}
+		if wt, err := exec.LookPath("wt"); err == nil && !strings.ContainsAny(exe, " ") {
+			return start(wt, "new-tab", "--title", leaf, exe, "-new", dir)
+		}
+		// 兜底：新控制台窗口直接运行本程序 -new 模式（dir 手动加引号防空格拆分）
+		return start("cmd", "/c", "start", "", `"`+exe+`"`, "-new", `"`+dir+`"`)
+	case "darwin":
+		script := fmt.Sprintf(`tell application "Terminal" to do script "cd %s && %s -new %s"`,
+			shellQuote(dir), shellQuote(exe), shellQuote(dir))
+		return exec.Command("osascript", "-e", script).Start()
+	default:
+		for _, t := range []string{"gnome-terminal", "x-terminal-emulator", "konsole", "xterm"} {
+			if p, err := exec.LookPath(t); err == nil {
+				return exec.Command(p, "--working-directory", dir, "--", exe, "-new", dir).Start()
 			}
 		}
 		return fmt.Errorf("找不到终端模拟器")
