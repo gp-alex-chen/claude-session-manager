@@ -362,6 +362,40 @@ func (r *tipLayerRenderer) Objects() []fyne.CanvasObject {
 
 func (r *tipLayerRenderer) Refresh() { r.Layout(r.t.Size()) }
 
+// ---- 行布局：水平排列 + 垂直居中 ----
+// Fyne 的 HBox 是顶部对齐（子元素贴行顶），图标/星号会显得偏上；
+// 这个布局在水平排列的同时把每个子元素在行高内垂直居中。
+
+type rowLayout struct{}
+
+func (rowLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	x := float32(0)
+	for _, o := range objects {
+		if !o.Visible() {
+			continue
+		}
+		ms := o.MinSize()
+		o.Resize(ms)
+		o.Move(fyne.NewPos(x, (size.Height-ms.Height)/2))
+		x += ms.Width
+	}
+}
+
+func (rowLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	w, h := float32(0), float32(0)
+	for _, o := range objects {
+		if !o.Visible() {
+			continue
+		}
+		ms := o.MinSize()
+		w += ms.Width
+		if ms.Height > h {
+			h = ms.Height
+		}
+	}
+	return fyne.NewSize(w, h)
+}
+
 // ---- 行内水波反馈：复刻 Fyne 按钮的 tap 动画 ----
 // 与 widget/button.go 的 newButtonTapAnimation 同款：圆角矩形从行水平中点向两侧
 // 扩展，按压色随进度淡出，EaseOut 曲线，时长 300ms（canvas.DurationStandard）。
@@ -370,7 +404,7 @@ func (r *tipLayerRenderer) Refresh() { r.Layout(r.t.Size()) }
 
 type rowBody struct {
 	widget.BaseWidget
-	content   *fyne.Container // HBox：收藏星/勾选框/新建+/文本/徽标
+	content   *fyne.Container // 行布局：收藏星/勾选框/新建+/文本/徽标（垂直居中）
 	tapBG     *canvas.Rectangle
 	tapAnim   *fyne.Animation
 	suppress  bool            // SetChecked 同步勾选状态时抑制 OnChanged 副作用（行对象复用）
@@ -810,7 +844,7 @@ func main() {
 			cb := widget.NewCheck("", nil)   // 多选勾选框
 			main := widget.NewLabel("…")
 			badge := canvas.NewText("", color.White)
-			return newRowBody(container.NewHBox(star, cb, plus, main, badge))
+			return newRowBody(container.New(rowLayout{}, star, cb, plus, main, badge))
 		},
 		UpdateNode: func(uid string, branch bool, obj fyne.CanvasObject) {
 			rb := obj.(*rowBody)
