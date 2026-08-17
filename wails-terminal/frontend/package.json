@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --outfile=dist/main.js --minify",
+    "build": "esbuild src/main.js --bundle --outfile=dist/main.js --minify && node -e \"require('fs').copyFileSync('src/index.html','dist/index.html')\"",
     "watch": "esbuild src/main.js --bundle --outfile=dist/main.js --sourcemap --watch"
   },
   "dependencies": {

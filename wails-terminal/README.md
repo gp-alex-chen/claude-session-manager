@@ -25,14 +25,13 @@ wailsjs/           手写的 Go 绑定（与 wails generate 输出同格式）
 ```powershell
 cd wails-terminal/frontend
 npm install
-npm run build          # 产出 frontend/dist
+npm run build          # 产出 frontend/dist（含 index.html）
 cd ..
 go mod tidy
-go build -tags webview2 -ldflags "-s -w" -o claude-terminal.exe .
+go build -tags webview2 -ldflags "-s -w -H windowsgui" -o claude-terminal.exe .
 ```
 
-或安装 Wails CLI 后 `wails dev`（热重载）/ `wails build`。
-
+> `-H windowsgui`：GUI 子系统，双击不闪黑窗（与 wails build 一致）。
 > 需要 WebView2 Runtime（Win10/11 一般已带 Edge 即有）。CI 里已有
 > `wails-build.yml`（push 到本分支自动出 exe 产物）。
 

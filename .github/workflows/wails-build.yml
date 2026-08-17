@@ -33,7 +33,7 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: '0'
-        run: go build -tags webview2 -ldflags "-s -w" -o claude-terminal.exe .
+        run: go build -tags webview2 -ldflags "-s -w -H windowsgui" -o claude-terminal.exe .
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
