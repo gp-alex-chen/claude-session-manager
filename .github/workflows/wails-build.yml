@@ -1,0 +1,42 @@
+name: wails-build
+
+# 路线 3 demo：Wails + xterm.js + ConPTY 的 Windows exe（仅本分支）
+on:
+  push:
+    branches: [wails-terminal]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.4'
+          cache-dependency-path: wails-terminal/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 构建前端（xterm.js + esbuild）
+        working-directory: wails-terminal/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: 交叉编译 Windows exe（Wails 纯 Go，无需 CGO）
+        working-directory: wails-terminal
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: go build -tags webview2 -ldflags "-s -w" -o claude-terminal.exe .
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-terminal-windows
+          path: wails-terminal/claude-terminal.exe
