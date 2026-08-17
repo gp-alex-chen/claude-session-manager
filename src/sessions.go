@@ -34,10 +34,12 @@ type project struct {
 }
 
 var (
-	reTitle = regexp.MustCompile(`"type":"(ai-title|agent-name)"`)
-	reName  = regexp.MustCompile(`"aiTitle":"([^"]*)"|"agentName":"([^"]*)"`)
-	reProj  = regexp.MustCompile(`^([A-Za-z])--(.+)$`)
-	reSafe  = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+	// reCustomTitle：用户 /rename 的自定义会话名（Claude Code 2.1+ 新增类型）
+	reCustomTitle = regexp.MustCompile(`"customTitle":"([^"]*)"`)
+	// reSessionName：AI 生成的标题（ai-title）与旧版改名字段（agent-name）
+	reSessionName = regexp.MustCompile(`"aiTitle":"([^"]*)"|"agentName":"([^"]*)"`)
+	reProj        = regexp.MustCompile(`^([A-Za-z])--(.+)$`)
+	reSafe        = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 )
 
 // jsonl 行结构化（只取需要的字段）
@@ -87,18 +89,27 @@ func parseSession(path, fallbackDir string) *Session {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 32<<20)
 	n := 0
+	var aiTitle, custom string
 	for sc.Scan() {
 		n++
-		if n > 5000 || (s.Name != "" && s.Text != "") {
+		if n > 5000 || (s.Text != "" && aiTitle != "" && custom != "") {
 			break
 		}
 		raw := sc.Bytes()
-		if s.Name == "" && reTitle.Match(raw) {
-			if m := reName.FindSubmatch(raw); m != nil {
+		// 会话名三来源，优先级：custom-title（用户 /rename）> ai-title/agent-name。
+		// 这些行会被 claude 周期性重写（可能在文件头、也可能在改名时刻），
+		// 因此继续扫描并保留最后一次看到的值，避免被早期的旧标题锁死。
+		if bytes.Contains(raw, []byte(`"type":"custom-title"`)) {
+			if m := reCustomTitle.FindSubmatch(raw); m != nil {
+				custom = string(m[1])
+			}
+		}
+		if bytes.Contains(raw, []byte(`"type":"ai-title"`)) || bytes.Contains(raw, []byte(`"type":"agent-name"`)) {
+			if m := reSessionName.FindSubmatch(raw); m != nil {
 				if len(m[1]) > 0 {
-					s.Name = string(m[1])
+					aiTitle = string(m[1])
 				} else {
-					s.Name = string(m[2])
+					aiTitle = string(m[2])
 				}
 			}
 		}
@@ -114,26 +125,58 @@ func parseSession(path, fallbackDir string) *Session {
 		}
 		s.IsSide = l.IsSide
 		if len(l.Message) > 0 {
-			var str string
-			if err := json.Unmarshal(l.Message, &str); err == nil {
-				s.Text = str
-			} else {
-				var blocks []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				}
-				if err := json.Unmarshal(l.Message, &blocks); err == nil {
-					for _, b := range blocks {
-						if b.Type == "text" && b.Text != "" {
-							s.Text = b.Text
-							break
-						}
-					}
+			s.Text = messageText(l.Message)
+		}
+	}
+	if custom != "" {
+		s.Name = custom // 用户 /rename 的名字优先
+	} else {
+		s.Name = aiTitle
+	}
+	return s
+}
+
+// messageText 从 user 消息的 message 字段提取可显示文本。claude 不同版本格式不同：
+//  1) "message":"纯文本"（早期格式）
+//  2) "message":{"role":"user","content":"纯文本"}（2.1.x 主流格式）
+//  3) content 为 blocks 数组（如系统注入的打断/通知消息）
+//  4) "message":[{"type":"text","text":"…"}]（兼容其他格式）
+func messageText(msg json.RawMessage) string {
+	var str string
+	if json.Unmarshal(msg, &str) == nil && str != "" {
+		return str
+	}
+	var obj struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(msg, &obj) == nil && len(obj.Content) > 0 {
+		if json.Unmarshal(obj.Content, &str) == nil && str != "" {
+			return str
+		}
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(obj.Content, &blocks) == nil {
+			for _, b := range blocks {
+				if b.Type == "text" && b.Text != "" {
+					return b.Text
 				}
 			}
 		}
 	}
-	return s
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(msg, &blocks) == nil {
+		for _, b := range blocks {
+			if b.Type == "text" && b.Text != "" {
+				return b.Text
+			}
+		}
+	}
+	return ""
 }
 
 func scanAll() []*Session {
