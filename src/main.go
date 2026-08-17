@@ -272,6 +272,96 @@ func (r *rowIconRenderer) Refresh() {
 	r.i.apply()
 }
 
+// ---- 悬浮提示层：自绘 tooltip ----
+// Fyne 2.8 无内置 Tooltip；PopUp 的 OverlayContainer 是全画布 Hoverable，会抢走
+// hover 事件导致提示"先关再开"闪烁且不跟手。改用内容层顶部的自绘层：
+// 不实现任何事件接口（不参与命中测试），移动时只改坐标并重绘，平滑跟随。
+
+type tipLayer struct {
+	widget.BaseWidget
+	bg   *canvas.Rectangle
+	text *canvas.Text
+	pos  fyne.Position
+	size fyne.Size
+	show bool
+}
+
+func newTipLayer() *tipLayer {
+	th := fyne.CurrentApp().Settings().Theme()
+	v := fyne.CurrentApp().Settings().ThemeVariant()
+	t := &tipLayer{}
+	t.bg = canvas.NewRectangle(th.Color(theme.ColorNameOverlayBackground, v))
+	t.bg.CornerRadius = 6
+	t.text = canvas.NewText("", th.Color(theme.ColorNameForeground, v))
+	t.text.TextSize = 13
+	t.bg.Hide()
+	t.text.Hide()
+	t.ExtendBaseWidget(t)
+	return t
+}
+
+// showAt 在 pos 处显示文本，自动收进 bounds（窗口画布）内
+func (t *tipLayer) showAt(pos fyne.Position, text string, bounds fyne.Size) {
+	t.text.Text = text
+	ms := t.text.MinSize().Add(fyne.NewSize(16, 10)) // 内边距
+	pos = pos.Add(fyne.NewPos(12, 20))               // 略微偏移鼠标，避免遮住指针
+	if pos.X+ms.Width > bounds.Width {
+		pos.X = bounds.Width - ms.Width - 4
+	}
+	if pos.Y+ms.Height > bounds.Height {
+		pos.Y = bounds.Height - ms.Height - 4
+	}
+	if pos.X < 0 {
+		pos.X = 0
+	}
+	if pos.Y < 0 {
+		pos.Y = 0
+	}
+	t.pos = pos
+	t.size = ms
+	t.show = true
+	t.bg.Show()
+	t.text.Show()
+	t.text.Refresh()
+	t.Refresh()
+}
+
+func (t *tipLayer) hide() {
+	if !t.show {
+		return
+	}
+	t.show = false
+	t.bg.Hide()
+	t.text.Hide()
+	t.Refresh()
+}
+
+func (t *tipLayer) CreateRenderer() fyne.WidgetRenderer {
+	return &tipLayerRenderer{t: t}
+}
+
+type tipLayerRenderer struct {
+	t *tipLayer
+}
+
+func (r *tipLayerRenderer) Destroy() {}
+
+// Layout 忽略传入的布局尺寸：位置/大小完全由 showAt 指定（手动定位）
+func (r *tipLayerRenderer) Layout(sz fyne.Size) {
+	r.t.bg.Move(r.t.pos)
+	r.t.bg.Resize(r.t.size)
+	r.t.text.Move(r.t.pos.Add(fyne.NewPos(8, 5)))
+	r.t.text.Resize(r.t.text.MinSize())
+}
+
+func (r *tipLayerRenderer) MinSize() fyne.Size { return fyne.NewSize(1, 1) }
+
+func (r *tipLayerRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.t.bg, r.t.text}
+}
+
+func (r *tipLayerRenderer) Refresh() { r.Layout(r.t.Size()) }
+
 // ---- 行内水波反馈：复刻 Fyne 按钮的 tap 动画 ----
 // 与 widget/button.go 的 newButtonTapAnimation 同款：圆角矩形从行水平中点向两侧
 // 扩展，按压色随进度淡出，EaseOut 曲线，时长 300ms（canvas.DurationStandard）。
@@ -589,29 +679,10 @@ func main() {
 
 	menuCanvas := w.Canvas()
 
-	// 悬浮提示（项目行显示完整路径）：Fyne 2.8 无内置 Tooltip，用非模态 PopUp 手写。
-	// 跟随鼠标，出窗口边界时自动收进可视区。
-	tipLabel := widget.NewLabel("")
-	tipLabel.Alignment = fyne.TextAlignLeading
-	tipPop := widget.NewPopUp(container.NewPadded(tipLabel), menuCanvas)
+	// 悬浮提示（项目行显示完整路径）：自绘 tipLayer 挂在内容层顶部（见 tipLayer 说明）
+	tip := newTipLayer()
 	showTip := func(pos fyne.Position, text string) {
-		tipLabel.SetText(text)
-		pos = pos.Add(fyne.NewPos(12, 20)) // 略微偏移鼠标，避免遮住指针
-		ms := tipPop.MinSize()
-		cs := menuCanvas.Size()
-		if pos.X+ms.Width > cs.Width {
-			pos.X = cs.Width - ms.Width - 4
-		}
-		if pos.Y+ms.Height > cs.Height {
-			pos.Y = cs.Height - ms.Height - 4
-		}
-		if pos.X < 0 {
-			pos.X = 0
-		}
-		if pos.Y < 0 {
-			pos.Y = 0
-		}
-		tipPop.ShowAtPosition(pos)
+		tip.showAt(pos, text, w.Canvas().Size())
 	}
 
 	// newSession 在指定目录启动全新 claude 会话（-new 模式）
@@ -745,7 +816,7 @@ func main() {
 			rb := obj.(*rowBody)
 			hb := rb.content
 			rowByUID[uid] = rb
-			rb.onTipHide = func() { tipPop.Hide() } // 行被复用/移出时收起悬浮提示
+			rb.onTipHide = func() { tip.hide() } // 行被复用/移出时收起悬浮提示
 			// 行体接管左键：转发选中给树（保持单击选中/双击恢复/双击分支折叠）
 			rb.onTap = func(*fyne.PointEvent) {
 				if tree == nil {
@@ -947,7 +1018,8 @@ func main() {
 
 	btnBox := container.NewHBox(btnRefresh, btnOpenChecked, btnOpenFav, btnSettings)
 	top := container.NewBorder(nil, nil, nil, btnBox, search)
-	w.SetContent(container.NewBorder(top, status, nil, nil, tree))
+	// 悬浮提示层叠在最上层（不拦截任何事件），主界面在下面
+	w.SetContent(container.NewStack(container.NewBorder(top, status, nil, nil, tree), tip))
 	reload()
 
 	// 自动刷新：5s 检测文件变化（有变化才重扫）
