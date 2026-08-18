@@ -7,6 +7,9 @@ claude-sidebar.exe
 wails-terminal/frontend/node_modules/
 wails-terminal/frontend/dist/
 wails-terminal/claude-terminal.exe
+wails-terminal/claude-terminal-console.exe
+wails-terminal/*.log
+# 注意：wails-terminal/rsrc_windows_amd64.syso 必须提交（图标资源，构建自动链接）
 
 # 本地数据 / 日志（个人数据不入库）
 gui.log

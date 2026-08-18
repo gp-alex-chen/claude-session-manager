@@ -1,6 +1,6 @@
-package main
-
-// 会话数据层：解析 ~/.claude/projects/**/*.jsonl（与 PowerShell 版同源逻辑）
+// Package session 会话数据层：解析 ~/.claude/projects/**/*.jsonl
+// （与 PowerShell 版同源逻辑）
+package session
 
 import (
 	"bufio"
@@ -174,7 +174,7 @@ func messageText(msg json.RawMessage) string {
 	return ""
 }
 
-func scanAll() []*Session {
+func ScanAll() []*Session {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
@@ -245,7 +245,7 @@ func groupSessions(list []*Session) []*project {
 }
 
 // displayName 会话显示名：ai-title -> 首条消息摘要（≤48 字符）
-func displayName(s *Session) string {
+func DisplayName(s *Session) string {
 	if s.Name != "" {
 		return s.Name
 	}

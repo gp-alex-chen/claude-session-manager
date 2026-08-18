@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- 背景：深色圆角方块（与暗色主题一致） -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#2B2B33"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="none" stroke="#3F3F4A" stroke-width="4"/>
+
+  <!-- 左侧：会话列表栏 -->
+  <rect x="30" y="36" width="64" height="184" rx="18" fill="#3A3A45"/>
+
+  <!-- 收藏星（金色） -->
+  <path d="M62 50 L66.8 59.7 L77.5 60.4 L69.8 67.2 L72.3 77.6 L62 71.9 L51.7 77.6 L54.2 67.2 L46.5 60.4 L57.2 59.7 Z" fill="#FFD700"/>
+
+  <!-- 会话行（第一行高亮=当前） -->
+  <rect x="44" y="94" width="36" height="11" rx="5.5" fill="#FFB347"/>
+  <rect x="44" y="113" width="36" height="11" rx="5.5" fill="#5C5C68"/>
+  <rect x="44" y="132" width="36" height="11" rx="5.5" fill="#5C5C68"/>
+  <rect x="44" y="151" width="36" height="11" rx="5.5" fill="#5C5C68"/>
+
+  <!-- 右侧：对话气泡 -->
+  <rect x="110" y="52" width="116" height="104" rx="26" fill="#4A4A55"/>
+
+  <!-- 气泡中的省略号（橙色） -->
+  <circle cx="144" cy="104" r="8" fill="#FFB347"/>
+  <circle cx="168" cy="104" r="8" fill="#FFB347"/>
+  <circle cx="192" cy="104" r="8" fill="#FFB347"/>
+</svg>
