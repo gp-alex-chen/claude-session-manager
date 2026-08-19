@@ -6,6 +6,14 @@ export function GetAgents() {
   return window['go']['main']['App']['GetAgents']();
 }
 
+export function GetLastSession() {
+  return window['go']['main']['App']['GetLastSession']();
+}
+
+export function SetLastSession(id) {
+  return window['go']['main']['App']['SetLastSession'](id);
+}
+
 export function NotifyBeep() {
   return window['go']['main']['App']['NotifyBeep']();
 }

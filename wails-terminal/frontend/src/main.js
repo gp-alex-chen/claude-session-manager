@@ -4,6 +4,8 @@ import '@xterm/xterm/css/xterm.css';
 import './style.css';
 import {
   GetAgents,
+  GetLastSession,
+  SetLastSession,
   NotifyBeep,
   DebugLog,
   ListSessions,
@@ -296,6 +298,7 @@ function activate(token) {
   const s = sessions.get(token);
   if (!s) return;
   activeToken = token;
+  SetLastSession(token).catch(() => {}); // 记住当前会话：下次启动自动恢复
   for (const [t, e] of sessions) {
     const on = t === token;
     e.host.classList.toggle('active', on);
@@ -922,4 +925,13 @@ paintEye();
 (async () => {
   await refreshAgents(); // 先取一轮 agents：首屏折叠/徽标不依赖轮询迟到
   await loadSessions();
+  // 自动恢复上次打开/使用过的会话（已被归档或已从磁盘消失则自然跳过；
+  // 恢复过程走 openFromList，与手动点击行为完全一致）
+  try {
+    const last = await GetLastSession();
+    if (last) {
+      const s = lastLoaded.find(x => x.id === last);
+      if (s) await openFromList(s);
+    }
+  } catch (e) { /* 恢复失败不影响主界面 */ }
 })();

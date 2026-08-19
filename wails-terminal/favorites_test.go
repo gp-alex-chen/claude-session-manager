@@ -115,3 +115,24 @@ func TestFavAliasAndDelete(t *testing.T) {
 	os.Remove(favorites.FavPath()) // 清理测试残留
 	t.Log("favorites 数据链路 OK")
 }
+
+// TestLastSessionRoundtrip 上次会话记忆：new- 前缀不记录。
+func TestLastSessionRoundtrip(t *testing.T) {
+	os.Remove(favorites.LastPath())
+	a := &App{}
+
+	if a.GetLastSession() != "" {
+		t.Fatal("初始应为空")
+	}
+	a.SetLastSession("new-abc123") // 临时新建会话 token，重启无法恢复
+	if a.GetLastSession() != "" {
+		t.Fatal("new- 前缀的 token 不应被记录")
+	}
+	a.SetLastSession("real-session-id")
+	if a.GetLastSession() != "real-session-id" {
+		t.Fatalf("应记录真实会话 id，实际 %q", a.GetLastSession())
+	}
+
+	os.Remove(favorites.LastPath()) // 清理测试残留
+	t.Log("last-session 数据链路 OK")
+}

@@ -186,6 +186,7 @@ func (a *App) StartSession(id, dir string) (string, error) {
 	if err := a.startPTY(id, "cmd /c claude -r "+id, dir); err != nil {
 		return "", err
 	}
+	favorites.SaveLast(id) // 记住：下次启动自动恢复此会话
 	return id, nil
 }
 

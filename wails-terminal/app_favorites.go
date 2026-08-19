@@ -42,3 +42,17 @@ func (a *App) UnhideSession(id string) error {
 	}
 	return nil
 }
+
+// GetLastSession 返回上次打开/使用过的会话 id（启动时前端自动恢复）。
+func (a *App) GetLastSession() string {
+	return favorites.LastID()
+}
+
+// SetLastSession 记录"当前正在使用的会话"（前端切换激活会话时调用）。
+// new- 前缀的 token 是临时新建会话，重启后无法恢复，不记录。
+func (a *App) SetLastSession(id string) {
+	if strings.HasPrefix(id, "new-") {
+		return
+	}
+	favorites.SaveLast(id)
+}
