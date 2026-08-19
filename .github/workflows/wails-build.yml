@@ -1,10 +1,17 @@
 name: wails-build
 
 # 路线 3 demo：Wails + xterm.js + ConPTY 的 Windows exe（仅本分支）
+# 分支推推送触发普通构建；打 v*-wails tag 额外发布 GitHub Release
+# （与 main 分支的 fyne 版 Release 按 tag 后缀分开：v1.2 无后缀= fyne 版，
+#  v1.2-wails= wails 版；tag 是仓库级，不按分支过滤）
 on:
   push:
     branches: [wails-terminal]
+    tags: ['v*-wails']
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -40,3 +47,12 @@ jobs:
         with:
           name: claude-terminal-windows
           path: wails-terminal/claude-terminal.exe
+
+      - name: 发布 GitHub Release（仅打 v*-wails tag 时）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wails-terminal/claude-terminal.exe
+          generate_release_notes: true
+          # 仅以 -pre / -rc 结尾的 tag 标为预发布（v0.1-wails 为正式版）
+          prerelease: ${{ endsWith(github.ref_name, '-pre') || endsWith(github.ref_name, '-rc') }}
