@@ -1,12 +1,12 @@
 name: wails-build
 
 # 路线 3 demo：Wails + xterm.js + ConPTY 的 Windows exe（仅本分支）
-# 分支推推送触发普通构建；打 v*-wails tag 额外发布 GitHub Release
+# 每次 push 分支不再自动构建（2026-08-19 起）：只在打 v*-wails tag
+# 发布或手动触发时构建
 # （与 main 分支的 fyne 版 Release 按 tag 后缀分开：v1.2 无后缀= fyne 版，
 #  v1.2-wails= wails 版；tag 是仓库级，不按分支过滤）
 on:
   push:
-    branches: [wails-terminal]
     tags: ['v*-wails']
   workflow_dispatch:
 
