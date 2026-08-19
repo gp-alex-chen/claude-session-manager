@@ -1,68 +1,22 @@
-# Claude 会话管理 - Fyne 版
+# Claude 会话管理
 
-跨平台 GUI（Go + Fyne），**单二进制零依赖**：双击 = 侧边栏窗口；`-run <会话ID>` = 终端内恢复器；`-new <目录>` = 终端内新建会话。
-逻辑全部用 Go 实现，不依赖 PowerShell 脚本。
+Wails 内嵌终端版：**左侧会话栏 + 右侧真终端**。每个 Claude Code 会话在后台常驻，可同时开多个、来回切换不中断，方便多会话一起用。
 
-> Windows 单 exe 是控制台子系统：双击启动时在 `init()` 里立即隐藏自己的控制台
-> （`cmd /c claude ...` 等子进程继承该隐藏控制台，不会弹新窗口）；`-run` 恢复模式
-> 保留控制台在 Windows Terminal 标签页里跑 claude。
+## 主要功能
 
-## 功能
+- **内嵌真终端**：xterm.js + ConPTY，方向键、`/` 命令、交互菜单都原生支持
+- **左侧会话栏**：按项目分组展示，当前终端对应行高亮；行尾 × 结束会话，右键可重命名 / 归档（软隐藏，不删数据）
+- **多会话**：点击会话恢复、点分组行 `+` 新建，切换互不关闭
+- **运行状态**：会话行徽标实时显示运行状态，任务完成有提示音 + 横幅 + 未读标记
+- **外观**：日间 / 夜间模式 + 8 种终端配色（左下角 ⚙ 设置）
+- **快捷键**：`Ctrl+V` 粘贴、`Ctrl+Enter` 换行而不提交
 
-- **会话目录树**（按项目分组，组显示**末端目录名**（悬浮显示完整路径），同名目录自动追加父目录名消歧；组按目录名排序；组内会话按最近使用时间排序；启动全展开；**双击项目分支 = 折叠/展开**）
-- **双击会话** = 恢复（新终端窗口/标签页运行本程序 `-run <id>`：自动 cd、检查活动状态、`claude -r`）；双击 / 点收藏星 / 勾选时该行有按钮同款水波扩散动画
-- **新建会话**：项目行左侧 **+** 按钮 = 在该目录打开新终端标签页启动全新 `claude` 会话（本程序 `-new <目录>` 模式）
-- **运行徽标**：● 后台运行中（橙）/ ● 已打开（绿）/ 后台（灰），每 10s 复查 `claude agents --json`
-- **自动刷新**：每 5s 检测会话文件变化（快照签名），有变化才重扫
-- **搜索**：按 目录/摘要/ID 过滤（输入即过滤）
-- **收藏**：点击每行左侧 ★/☆ 即收藏/取消（金色 ★，存 exe 同目录 `favorites.json`）；「打开收藏」批量恢复
-- **多选**：每行勾选框；「打开选中」批量恢复
-- **右键菜单**：行上右键 → 打开 / 收藏(取消收藏) / 重命名… / 删除（不再显示）
-- **重命名**：右键弹框输入新名称（仅本软件的别名，不修改 claude 数据；真正改名在 claude 会话内用 `/rename`）；清空 = 恢复原名
-- **删除**：软隐藏 —— 只把 ID 记入 `favorites.json` 的 hidden 列表，界面不再显示，**不物理删除**会话文件
-- **设置**：开机自启动（Windows 写启动文件夹的 `.vbs`（无注册表/无管理员权限，静默启动）、Linux 写 autostart desktop 文件）
-- **不重复打开**：已打开/后台运行中的会话双击与批量打开时跳过并提示
+## 使用
 
-## 构建
+从 [Releases](https://github.com/gp-alex-chen/claude-session-manager/releases) 下载 `claude-terminal.exe`（Windows，需 WebView2 运行时），双击即可。
 
-需要 Go 1.21+ 和 C 编译器（Fyne 依赖 CGO；Windows 需 gcc/MinGW）：
+## 开发
 
-```powershell
-go mod tidy
-# Windows：单 exe 控制台子系统（GUI 模式自隐藏控制台，-run 模式在终端里跑 claude）
-go build -ldflags "-s -w" -o claude-sidebar.exe ./src
-# macOS / Linux 同样命令各自编译一份
-go build -ldflags "-s -w" -o claude-sidebar ./src
-```
+Go（Wails v2）+ xterm.js + ConPTY，代码在 `wails-terminal/`。目录结构、构建与维护经验见 [`wails-terminal/README.md`](wails-terminal/README.md)。
 
-> 图标说明：exe 文件图标由 `src/rsrc_windows_amd64.syso` 提供（已提交，构建时自动链接；
-> Go 要求 .syso 位于包目录）。图标源文件在 `src/assets/`：
-> 编辑 `src/assets/icon.svg` → 运行 `src/assets/gen-icon.ps1` 生成 `src/assets/icon.ico` →
-> 在 `src/` 目录执行 `windres assets/icon.rc -O coff -o rsrc_windows_amd64.syso`。
-
-macOS / Linux 同样命令各自编译一份（无平台特定代码）。
-
-## 运行
-
-- 双击 `claude-sidebar.exe`（GUI 模式，启动时立即隐藏自己的控制台）
-- 终端里手动恢复：`claude-sidebar.exe -run <会话ID>`
-- 终端里手动新建会话（指定目录）：`claude-sidebar.exe -new <目录>`
-- 干跑检查（只检查不执行 claude，调试用）：`claude-sidebar.exe -dry -run <会话ID>` / `-dry -new <目录>`
-- 诊断：exe 同目录 `gui.log` 记录每次点击与打开动作及结果
-
-## 发布
-
-- **dev 滚动版**：每次 push 到 `main`，产物自动覆盖更新到 [dev Release](https://github.com/gp-alex-chen/claude-session-manager/releases/tag/dev)，只保留最新一份
-- **版本化 Release**：打 `v*` tag（如 `v0.1` / `v0.1-beta`）→ 新建独立 Release，含 `-` 后缀的自动标 prerelease
-
-## 目录结构
-
-- `src/`：全部 Go 源码（main/runner/sessions/autostart_*）与 `rsrc_windows_amd64.syso`（Go 要求 .syso 在包目录）
-- `src/assets/`：图标源文件（svg/ico/rc）与生成脚本 `gen-icon.ps1`
-- `claude-sidebar.exe`、`favorites.json`、`gui.log`：本地产物/个人数据（已在 .gitignore 排除）
-
-## 已知说明
-
-- Windows 双击会话用 `wt new-tab`（若 exe 路径含空格则退回新控制台窗口）
-- macOS/Linux 的终端打开方式为简化实现（osascript / gnome-terminal 等），按需打磨
-- 中文字体自动探测系统字体（Fyne 默认字体无 CJK；不支持 TTC 集合）
+> 另有 Fyne 侧边栏版（无内嵌终端），源码在 `src/`。
