@@ -20,6 +20,9 @@ import {
   TermWrite,
   TermResize,
   TermKill,
+  GetVersion,
+  CheckForUpdate,
+  UpdateToLatest,
 } from '../../wailsjs/go/main/App';
 
 // —— 多会话终端管理 ——
@@ -424,6 +427,8 @@ function buildSettingsMenu() {
   }
   // 底层 Shell：启动 claude 用的终端外壳（只影响之后新启动/恢复的会话）
   appendShellGroup();
+  // 更新：手动"检查更新 / 更新到最新版"（GitHub Releases，v*-wails）
+  appendUpdateGroup();
 }
 
 // 底层 Shell 选项单独构建（每次打开菜单都重新拉一次当前值）
@@ -482,6 +487,130 @@ settingsBtn.addEventListener('click', (ev) => {
 });
 document.addEventListener('click', hideSettingsMenu);
 window.addEventListener('blur', hideSettingsMenu);
+
+// —— 更新：一键"更新到最新版"（GitHub Releases，v*-wails tag） ——
+// 后端提供 GetVersion / CheckForUpdate / UpdateToLatest；
+// 下载进度与阶段状态经 update:state / update:progress 事件推送。
+const upd = { busy: false, pct: 0, phase: '' };
+let updItem = null;
+
+// 启动时把版本挂到"设置"按钮标题上（仅展示，不影响功能）
+(async () => {
+  let ver = '';
+  try { ver = ' · v' + (await GetVersion()); } catch (e) { /* 忽略 */ }
+  settingsBtn.title = '设置' + ver;
+})();
+
+// 后端阶段事件：下载阶段/失败/重启
+window.runtime.EventsOn('update:state', (s) => {
+  upd.phase = s || '';
+  if (s === '下载失败' || s === '更新失败' || s === '检查失败') {
+    upd.busy = false;
+    setStatus('❌ ' + s, 'warn');
+  } else if (s === '重启中') {
+    showToast('✅ 更新完成，正在重启…');
+  }
+  renderUpdItem();
+});
+// 后端进度事件（0-100）
+window.runtime.EventsOn('update:progress', (pct) => {
+  upd.pct = Math.max(0, Math.min(100, pct | 0));
+  renderUpdItem();
+});
+
+// 渲染当前更新项里的进度/状态（菜单每次打开会重建 updItem）
+function renderUpdItem() {
+  if (!updItem) return;
+  updItem.querySelectorAll('.upd-col').forEach((c) => c.remove());
+  let text = '';
+  if (upd.busy && upd.phase === '下载中') {
+    const col = el('div', 'upd-col');
+    const bar = document.createElement('div');
+    bar.className = 'upd-progress';
+    const fill = document.createElement('div');
+    fill.className = 'upd-progress-fill';
+    fill.style.width = upd.pct + '%';
+    bar.appendChild(fill);
+    col.appendChild(bar);
+    col.appendChild(el('div', 'upd-hint', '下载中 ' + upd.pct + '%'));
+    updItem.appendChild(col);
+  } else if (upd.phase && !upd.phase.includes('失败')) {
+    const col = el('div', 'upd-col');
+    col.appendChild(el('div', 'upd-hint', upd.phase));
+    updItem.appendChild(col);
+  }
+}
+
+// 设置菜单里追加"更新"分组
+function appendUpdateGroup() {
+  settingsMenu.appendChild(el('div', 'settings-group-label', '更新'));
+  updItem = el('div', 'settings-item upd-run', '检查更新…');
+  settingsMenu.appendChild(updItem);
+  settingsMenu.appendChild(el('div', 'settings-note upd-note-ver', '点击检查 GitHub 上是否有新版（v*-wails）'));
+  renderUpdItem();
+  updItem.addEventListener('click', () => doCheckUpdate());
+}
+
+async function doCheckUpdate() {
+  if (upd.busy) return;
+  upd.busy = true;
+  updItem.textContent = '正在检查…';
+  let info = null;
+  try {
+    info = await CheckForUpdate();
+  } catch (e) {
+    upd.busy = false;
+    setStatus('❌ ' + String((e && e.message) || e), 'warn');
+    resetUpdMenu();
+    return;
+  }
+  if (info && info.hasUpdate) {
+    updItem.textContent = '发现新版本 ' + info.latest + ' → 点击更新并重启';
+    updItem.classList.add('has-update');
+    const note = settingsMenu.querySelector('.upd-note-ver');
+    if (note) note.textContent = '当前 v' + (info.current || 'dev') + '；将下载并自动重启，运行中的会话进程会结束';
+    setStatus('发现新版本 ' + info.latest + '（当前 v' + (info.current || 'dev') + '）', 'warn');
+    const newItem = updItem.cloneNode(true); // 换绑点击为新动作
+    updItem.replaceWith(newItem);
+    updItem = newItem;
+    updItem.addEventListener('click', () => doApplyUpdate(info));
+  } else {
+    upd.busy = false;
+    const v = (info && info.current) || 'dev';
+    setStatus('✅ 已是最新版本（v' + v + '）', 'ok');
+    resetUpdMenu();
+  }
+}
+
+function resetUpdMenu() {
+  if (updItem) {
+    updItem.textContent = '检查更新…';
+    updItem.classList.remove('has-update', 'disabled');
+  }
+  const note = settingsMenu.querySelector('.upd-note-ver');
+  if (note) note.textContent = '点击检查 GitHub 上是否有新版（v*-wails）';
+  upd.phase = '';
+  upd.pct = 0;
+}
+
+async function doApplyUpdate() {
+  if (upd.busy) return;
+  upd.busy = true;
+  upd.pct = 0;
+  upd.phase = '';
+  updItem.textContent = '更新中…';
+  updItem.classList.add('disabled');
+  try {
+    await UpdateToLatest();
+    // 正常不会走到这里：后端启动新版后进程退出
+    upd.busy = false;
+    resetUpdMenu();
+  } catch (e) {
+    upd.busy = false;
+    resetUpdMenu();
+    setStatus('❌ 更新失败: ' + String((e && e.message) || e), 'warn');
+  }
+}
 
 // —— 右键菜单（重命名 / 归档） ——
 const ctxMenu = document.createElement('div');

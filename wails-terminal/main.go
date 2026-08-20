@@ -15,7 +15,14 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// Version 当前版本。由 CI 构建注入（-ldflags -X main.Version=<tag>，
+// 见 .github/workflows/wails-build.yml）；本地手工 `go build` 为 "dev"。
+var Version = "dev"
+
 func main() {
+	// 更新器替换自身后，新版启动时清理上次残留的旧程序/临时下载文件
+	cleanupUpdateArtifacts()
+
 	app := NewApp()
 
 	err := wails.Run(&options.App{

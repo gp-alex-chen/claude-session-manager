@@ -36,11 +36,20 @@ jobs:
 
       - name: 交叉编译 Windows exe（Wails 纯 Go，无需 CGO）
         working-directory: wails-terminal
+        shell: bash
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: '0'
-        run: go build -tags "webview2 production" -ldflags "-s -w -H windowsgui" -o claude-terminal.exe .
+          REF: ${{ github.ref_name }}
+        run: |
+          # 版本号：打 tag（v*-wails）时 = tag 本身；手动 dispatch 时 = dev-<分支>
+          VER="${REF}"
+          [[ "${VER}" == v* ]] || VER="dev-${VER}"
+          echo "version=${VER}"
+          go build -tags "webview2 production" \
+            -ldflags "-s -w -H windowsgui -X main.Version=${VER}" \
+            -o claude-terminal.exe .
 
       - name: 上传产物
         uses: actions/upload-artifact@v4

@@ -16,9 +16,11 @@ main.go            Wails 入口（embed frontend/dist，窗口配置）
 app.go             App 绑定 + 多会话 ConPTY 管理：terms map[token]*ptyRef
 app_agents.go      App 方法：常驻状态监视器 / GetAgents / DebugLog
 app_favorites.go   App 方法：重命名 / 归档 / 恢复
+app_update.go      App 方法：GetVersion / CheckForUpdate / UpdateToLatest（一键更新）
 internal/session/  会话解析：~/.claude/projects/**/*.jsonl
 internal/agent/    claude agents --json 查询（CREATE_NO_WINDOW）+ 调试日志
 internal/favorites/ 本地状态：favorites.json（别名/软删除/收藏）
+internal/updater/  更新器：GitHub Releases 检查 / 下载 / 自替换 / 自动重启
 frontend/          xterm.js + esbuild 打包（src -> dist）
 wailsjs/           手写 Go 绑定（与 wails generate 输出同格式）
 assets/ + rsrc_windows_amd64.syso   图标（Go 构建自动链接）
@@ -49,9 +51,9 @@ npm run build          # esbuild -> dist/（index.html 一并复制）
 
 # 后端 —— 必须带 webview2 production 两个 tag！
 cd ..
-go build -tags "webview2 production" -ldflags "-s -w -H windowsgui" -o claude-terminal.exe .
+go build -tags "webview2 production" -ldflags "-s -w -H windowsgui -X main.Version=v0.2-wails" -o claude-terminal.exe .
 # 调试用控制台版（可捕获 stderr 日志）：
-go build -tags "webview2 production" -ldflags "-s -w" -o claude-terminal-console.exe .
+go build -tags "webview2 production" -ldflags "-s -w -X main.Version=dev" -o claude-terminal-console.exe .
 
 # 测试
 go test ./...          # 需要 claude 在 PATH（TestFetchAgents 会真调 agents --json）
@@ -130,6 +132,15 @@ go test ./...          # 需要 claude 在 PATH（TestFetchAgents 会真调 agen
 4. 需要后端主动通知 → `runtime.EventsEmit(a.ctx, "事件名", 参数...)`，前端 `window.runtime.EventsOn(...)`。
 5. 重新构建：前端 `npm run build` → 后端 `go build -tags "webview2 production" ...`。
 
+## 7.5 发布新版本（一键更新的发布侧）
+
+- 版本号 = git tag，形如 `v0.2-wails`（正式版）或 `v0.2-wails-rc`（预发布）。
+- `git tag v0.2-wails && git push origin v0.2-wails` → CI（wails-build.yml）构建并把
+  `claude-terminal.exe` 发布为 GitHub Release，`-X main.Version=v0.2-wails` 自动注入。
+- 更新器只认 `v*-wails` 正式版：多版本并存时取语义版本最高者；预发布（GitHub
+  `prerelease=true`，CI 按 `-pre/-rc` 后缀标）默认不提示，避免把测试版推给用户。
+- 想要更多人"收到更新"，发布新 tag 即可；无需改代码。
+
 ## 8. 已知限制
 
 - claude 内 `/theme auto` 识别不到本软件终端的亮色背景：ConPTY 的
@@ -152,6 +163,14 @@ go test ./...          # 需要 claude 在 PATH（TestFetchAgents 会真调 agen
   日后新增 UI 样式一律用 CSS 变量，禁止硬编码颜色。
 - 未读标记是内存态：重启应用后不保留（未持久化"已读/未读"）。
 - interactive 会话出现在 agents 列表的精确行为未在真机上长时间验证（设计上已兼容：busy→心跳、idle→静态绿）。
+- **一键更新（2026-08-20 新增，详见 7.5 / README「发布与更新」）**：
+  - 自更新只做**粗校验**（非空 + MZ 头），未做签名/哈希校验；仅从本仓库 Releases 下载，请勿把
+    更新源指向不可信位置。仓库公开时无需 token，GitHub API 未认证限额 60 次/小时（手动检查场景足够）。
+  - 更新会**结束当前所有 ConPTY 会话进程**（先持久化清单、新版启动自动恢复），"点完立刻重启生效"
+    是预期行为；若希望平滑，可后续改成"下载完成 → 提示下次启动生效"。
+  - 自替换利用 Windows「运行中的 exe 只许改名、不许删除」：当前 exe → `.old`，新版落地原名，
+    新版启动时删 `.old`/`.new`。若某环境连改名都失败（杀软锁文件），Apply 会回滚并报错，程序照常运行。
+  - 目录权限：exe 所在目录需可写（放 Program Files 等受保护目录会更新失败，宜用普通目录）。
 - 会话解析在 wails-terminal 与 fyne-sidebar 有重复实现，后续可抽共享包。
 - 图标：`.syso` 由 `assets/icon.rc` + `assets/icon.ico` 生成（图标设计同 fyne 版，
   不动设计；fyne 版 `.syso` 的组 ID 是 1，**Wails 窗口标题栏图标用

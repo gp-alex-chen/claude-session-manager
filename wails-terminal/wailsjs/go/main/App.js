@@ -69,3 +69,15 @@ export function TermResize(token, cols, rows) {
 export function TermWrite(token, b64) {
   return window['go']['main']['App']['TermWrite'](token, b64);
 }
+
+export function GetVersion() {
+  return window['go']['main']['App']['GetVersion']();
+}
+
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
+}
+
+export function UpdateToLatest() {
+  return window['go']['main']['App']['UpdateToLatest']();
+}

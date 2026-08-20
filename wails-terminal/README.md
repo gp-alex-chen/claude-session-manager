@@ -19,6 +19,7 @@
 - 自动恢复上次打开的会话：记住关闭时所有仍打开的会话，下次启动全部恢复（open-sessions.json）
 - 底层 Shell 可选：cmd.exe（默认）或 pwsh（PowerShell 7），左下角「⚙ 设置」变更；只影响之后新启动/恢复的会话（settings.json）
 - 会话列表自动同步：每 5s 自动比对刷新——新建会话（claude 稍后才落盘 jsonl）会自动出现、claude 会话内 `/rename` 的名字也会自动跟随
+- **一键更新到最新版**：左下角「⚙ 设置 → 更新 → 检查更新」，发现新版（GitHub Releases 里的 v*-wails 正式版）后可一键下载并**自动替换自身 + 重启进新版**（自动持久化当前打开的会话供新版恢复；下载进度实时显示）
 
 ## 目录
 
@@ -27,9 +28,11 @@ main.go             Wails 入口（embed frontend/dist）
 app.go              App 绑定 + 多会话 ConPTY 管理（token 路由 + 幂等关闭）
 app_agents.go       App 方法：常驻状态监视器 / GetAgents / DebugLog
 app_favorites.go    App 方法：重命名 / 归档 / 恢复
+app_update.go       App 方法：GetVersion / CheckForUpdate / UpdateToLatest（一键更新）
 internal/session/   会话解析（~/.claude/projects/**/*.jsonl）
 internal/agent/     claude agents --json 查询 + 调试日志
 internal/favorites/ 本地状态 favorites.json（别名/归档/收藏）
+internal/updater/   更新器：GitHub Releases 检查 / 下载 / 自替换 / 自动重启
 frontend/           xterm.js + esbuild 打包
 wailsjs/            Go 绑定（与 wails generate 同格式）
 assets/ + rsrc_windows_amd64.syso   图标
@@ -46,12 +49,32 @@ npm run build          # 产出 frontend/dist（含 index.html）
 cd ..
 go mod tidy
 # 注意：必须带 production tag！否则 Wails 会编译进"错误框占位实现"
-go build -tags "webview2 production" -ldflags "-s -w -H windowsgui" -o claude-terminal.exe .
+# -X main.Version=... 注入版本号（更新器"当前版本"比对的依据）
+go build -tags "webview2 production" -ldflags "-s -w -H windowsgui -X main.Version=v0.2-wails" -o claude-terminal.exe .
 ```
 
 > `-H windowsgui`：GUI 子系统，双击不闪黑窗。需要 WebView2 Runtime（Win10/11 一般已带）。
 > 调试用控制台版（可捕获日志）：去掉 `-H windowsgui` 另存一份。
 > 若遇 `0x800700AA`（资源被占用），多为受限运行环境问题，真机一般正常。
+
+## 发布与更新（一键更新到最新版）
+
+更新机制（本次新增）：
+- **源**：本仓库 GitHub Releases。CI（`.github/workflows/wails-build.yml`）在打 `v*-wails` tag 时构建
+  `claude-terminal.exe` 并发布为 GitHub Release（`-pre`/`-rc` 结尾标为预发布）。
+- **检查**：应用内「⚙ 设置 → 更新 → 检查更新」→ 后端查 GitHub API 列出 releases，只挑
+  `v*-wails` 的**正式版**（跳过预发布与 fyne 版 tag），语义版本号最高者为"最新版"。
+- **比较**：最新版 > 当前版本（`-X main.Version=...` 注入的值；未注入的 "dev" 一律提示可更新）才算有更新。
+- **更新**：点击后流式下载 exe（`update:progress` 事件实时百分比）→ 校验 PE 头 →
+  持久化当前打开的会话 → 关闭所有 ConPTY → 自替换（当前 exe 改名为 `.old`，新版落地到原名）
+  → 自动启动新版并退出本进程；新版启动时自动清理 `.old`/`.new` 残留。
+
+发布新版流程：
+```bash
+git tag v0.2-wails && git push origin v0.2-wails   # 触发 CI 构建并发布 Release
+```
+> 版本号 tag 必须形如 `v<数字>[.数字][.数字][-wails]`（如 `v0.2-wails`）；预发布用 `v0.2-wails-rc`。
+> 旧程序里的"检查更新"会提示这个新版，用户一键即可升级。
 
 ## 数据流
 
