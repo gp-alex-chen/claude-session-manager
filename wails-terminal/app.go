@@ -183,20 +183,39 @@ func (a *App) StartSession(id, dir string) (string, error) {
 	if ok && !r.isClosed() {
 		return id, nil // 已在运行，切回即可
 	}
-	if err := a.startPTY(id, "cmd /c claude -r "+id, dir); err != nil {
+	if err := a.startPTY(id, a.claudeCmd("-r "+id), dir); err != nil {
 		return "", err
 	}
-	favorites.SaveLast(id) // 记住：下次启动自动恢复此会话
 	return id, nil
 }
 
 // StartNew 在 dir 目录启动全新会话，返回新会话 token。
 func (a *App) StartNew(dir string) (string, error) {
 	token := "new-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	if err := a.startPTY(token, "cmd /c claude", dir); err != nil {
+	if err := a.startPTY(token, a.claudeCmd(""), dir); err != nil {
 		return "", err
 	}
 	return token, nil
+}
+
+// claudeCmd 按当前底层 Shell 组装启动 claude 的命令行。
+//   cmd:  cmd /c claude [-r <id>]        （claude 退出后终端随之结束，现状不变）
+//   pwsh: pwsh -NoLogo -NoExit -Command "claude [-r <id>]"
+//         （-NoExit：claude 退出后停留在 pwsh 提示符，可继续在终端里用 pwsh）
+// 兜底：曾选择 pwsh 但当前已不可用（如装完后又被卸载），自动退回 cmd
+// 启动，保证会话不至于全部打不开（选型时已校验，此处防环境变动）。
+func (a *App) claudeCmd(sessionArgs string) string {
+	args := strings.TrimSpace(sessionArgs)
+	if favorites.Shell() == "pwsh" {
+		if a.shellAvailable("pwsh") {
+			return `pwsh -NoLogo -NoExit -Command "claude ` + args + `"`
+		}
+		a.DebugLog("pwsh 当前不可用，会话回退 cmd 启动")
+	}
+	if args == "" {
+		return "cmd /c claude"
+	}
+	return "cmd /c claude " + args
 }
 
 // TermWrite 向指定会话终端写入输入（base64 编码的 UTF-8）
@@ -251,10 +270,26 @@ func (a *App) TermKill(token string) {
 		delete(a.terms, token)
 	}
 	a.mu.Unlock()
+	a.persistOpenSessions() // 关闭后从"待恢复集合"移除
 	if ok {
 		r.close()
 		runtime.EventsEmit(a.ctx, "term:exit", token)
 	}
+}
+
+// persistOpenSessions 把"当前仍有存活终端的会话 ID 集合"持久化
+// （排除 new- 临时 token：它们是进程内的临时终端，重启后无法恢复）。
+// 任何会话打开/关闭时调用，即使进程被强杀也能在下次启动时恢复。
+func (a *App) persistOpenSessions() {
+	a.mu.Lock()
+	ids := make([]string, 0, len(a.terms))
+	for token := range a.terms {
+		if !strings.HasPrefix(token, "new-") {
+			ids = append(ids, token)
+		}
+	}
+	a.mu.Unlock()
+	favorites.SaveOpen(ids)
 }
 
 // startPTY 以 token 为键启动一个 ConPTY 会话并挂上输出转发 goroutine。
@@ -289,6 +324,7 @@ func (a *App) startPTY(token, cmdLine, dir string) error {
 	a.mu.Lock()
 	a.terms[token] = ref
 	a.mu.Unlock()
+	a.persistOpenSessions() // 新会话打开后加入"待恢复集合"
 
 	go func(token string, r *ptyRef) {
 		buf := make([]byte, 8192)
@@ -313,6 +349,7 @@ func (a *App) startPTY(token, cmdLine, dir string) error {
 		}
 		a.mu.Unlock()
 		if current {
+			a.persistOpenSessions() // 进程自己退出后从"待恢复集合"移除
 			runtime.EventsEmit(a.ctx, "term:exit", token)
 		}
 	}(token, ref)

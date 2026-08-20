@@ -6,12 +6,20 @@ export function GetAgents() {
   return window['go']['main']['App']['GetAgents']();
 }
 
-export function GetLastSession() {
-  return window['go']['main']['App']['GetLastSession']();
+export function GetOpenSessions() {
+  return window['go']['main']['App']['GetOpenSessions']();
 }
 
-export function SetLastSession(id) {
-  return window['go']['main']['App']['SetLastSession'](id);
+export function GetShell() {
+  return window['go']['main']['App']['GetShell']();
+}
+
+export function ShellInstalled(name) {
+  return window['go']['main']['App']['ShellInstalled'](name);
+}
+
+export function SetShell(name) {
+  return window['go']['main']['App']['SetShell'](name);
 }
 
 export function NotifyBeep() {

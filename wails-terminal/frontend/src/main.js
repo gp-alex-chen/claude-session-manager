@@ -4,8 +4,10 @@ import '@xterm/xterm/css/xterm.css';
 import './style.css';
 import {
   GetAgents,
-  GetLastSession,
-  SetLastSession,
+  GetOpenSessions,
+  GetShell,
+  ShellInstalled,
+  SetShell,
   NotifyBeep,
   DebugLog,
   ListSessions,
@@ -36,11 +38,20 @@ const closedTokens = new Set();
 const sessionNames = new Map();
 // 项目折叠状态（本次运行内有效）：dir -> collapsed
 const collapsedDirs = new Set();
+// 首屏是否已执行"默认全折叠"：只启动时折叠一次，之后保留用户手动折叠/展开
+let collapseAllDone = false;
 // 全局眼睛开关（仅折叠时有效）：false=睁眼（折叠时各组露出运行中的会话），
 // true=闭眼（折叠即全隐藏）。展开时不影响显示。
 let eyeGlobalOff = false;
 let activeToken = null;
 let newCounter = 0;
+// 新建会话的"临时 token -> 真实会话 id"配对：
+// StartNew 返回 new-<时间戳> 这类进程内临时 token，而 claude 稍后落盘的
+// jsonl 对应真实会话 id。列表轮询刷新发现新 id 后在此配对，让行内
+// × 关闭 / 点击重开 / 高亮都指向真实运行中的那个终端。
+const realToNew = new Map(); // 真实 id -> new token（配对成功后才有）
+const newToReal = new Map(); // new token -> 真实 id
+let pendingNew = [];         // 等待配对的 { token, dir }
 
 // —— 现成终端配色主题（xterm theme 对象；含社区知名配色） ——
 const THEMES = {
@@ -298,7 +309,6 @@ function activate(token) {
   const s = sessions.get(token);
   if (!s) return;
   activeToken = token;
-  SetLastSession(token).catch(() => {}); // 记住当前会话：下次启动自动恢复
   for (const [t, e] of sessions) {
     const on = t === token;
     e.host.classList.toggle('active', on);
@@ -323,18 +333,16 @@ function disposeSession(token) {
 }
 
 // 左侧列表：高亮当前打开的终端对应的会话行
+// （配对后的新会话：行 id 是真实 id，但终端 token 是 new-，需经映射）
 function syncActiveHighlight() {
   for (const item of listEl.querySelectorAll('.session-item')) {
-    item.classList.toggle('active', item.dataset.id === activeToken);
+    const token = realToNew.get(item.dataset.id) || item.dataset.id;
+    item.classList.toggle('active', token === activeToken);
   }
 }
 
-function closeTab(token) {
-  const s = sessions.get(token);
-  if (!s) return;
-  closedTokens.add(token); // 先标记：迟到的数据/退出事件不再重建终端
-  TermKill(token).catch(() => {});
-  disposeSession(token);
+// 当前终端被 dispose 后：若无剩余终端则回到空态
+function pickNextAfter(token) {
   const rest = [...sessions.keys()];
   if (activeToken === token) {
     if (rest.length) activate(rest[rest.length - 1]);
@@ -343,6 +351,24 @@ function closeTab(token) {
       setStatus('未运行 — 点击左侧会话恢复，或点分组行 + 新建会话', '');
     }
   }
+}
+
+function closeTab(token) {
+  const s = sessions.get(token);
+  if (!s) {
+    // 终端已不存在但仍可能留在待配对队列（new 启动失败等）：只清队列
+    const i = pendingNew.findIndex(p => p.token === token);
+    if (i >= 0) pendingNew.splice(i, 1);
+    return;
+  }
+  closedTokens.add(token); // 先标记：迟到的数据/退出事件不再重建终端
+  TermKill(token).catch(() => {});
+  const real = newToReal.get(token); // 若曾配对到真实会话，解除映射
+  if (real) { newToReal.delete(token); realToNew.delete(real); }
+  const i2 = pendingNew.findIndex(p => p.token === token);
+  if (i2 >= 0) pendingNew.splice(i2, 1);
+  disposeSession(token);
+  pickNextAfter(token);
 }
 
 window.addEventListener('resize', () => {
@@ -395,6 +421,51 @@ function buildSettingsMenu() {
     it.style.setProperty('--dot', THEMES[key].background);
     it.addEventListener('click', () => { applyTheme(key); hideSettingsMenu(); });
     settingsMenu.appendChild(it);
+  }
+  // 底层 Shell：启动 claude 用的终端外壳（只影响之后新启动/恢复的会话）
+  appendShellGroup();
+}
+
+// 底层 Shell 选项单独构建（每次打开菜单都重新拉一次当前值）
+async function appendShellGroup() {
+  let shell = 'cmd';
+  try { shell = await GetShell(); } catch (e) { /* 保持默认 cmd */ }
+  const label3 = el('div', 'settings-group-label', '底层 Shell');
+  settingsMenu.appendChild(label3);
+  for (const [key, text] of [['cmd', 'cmd.exe（默认）'], ['pwsh', 'pwsh（PowerShell 7）']]) {
+    const it = el('div', 'settings-item' + (key === shell ? ' cur' : ''), text);
+    it.dataset.shell = key;
+    it.title = key === 'pwsh'
+      ? '需要已安装 PowerShell 7（pwsh 在 PATH 中）；claude 退出后停留在 pwsh 提示符'
+      : 'Windows 自带；claude 退出后终端随之结束';
+    it.addEventListener('click', async () => {
+      // 选型时校验：pwsh 未安装则拒绝切换，避免"选完打不开"
+      if (key === 'pwsh') {
+        let ok = false;
+        try { ok = await ShellInstalled('pwsh'); } catch (e) { /* 视为未安装 */ }
+        if (!ok) {
+          setStatus('未检测到 pwsh（PowerShell 7）：请先安装并确保 pwsh 在 PATH 中，或保持 cmd', 'warn');
+          return;
+        }
+      }
+      try {
+        await SetShell(key);
+      } catch (e) {
+        setStatus('切换 Shell 失败: ' + e, 'warn');
+        return;
+      }
+      hideSettingsMenu();
+      setStatus('底层 Shell 已切换: ' + (key === 'pwsh' ? 'pwsh' : 'cmd') + '（新启动/恢复的会话生效）', 'ok');
+    });
+    settingsMenu.appendChild(it);
+  }
+  // 若已选择 pwsh 但当前系统检测不到：提示当前会以 cmd 兜底启动
+  if (shell === 'pwsh') {
+    let ok = true;
+    try { ok = await ShellInstalled('pwsh'); } catch (e) { ok = false; }
+    if (!ok) {
+      settingsMenu.appendChild(el('div', 'settings-note', '⚠ 当前系统未检测到 pwsh，新启动的会话将以 cmd 兜底，装好后自动恢复 pwsh'));
+    }
   }
 }
 settingsBtn.addEventListener('click', (ev) => {
@@ -643,6 +714,24 @@ window.runtime.EventsOn('term:data', (token, b64) => {
 
 window.runtime.EventsOn('term:exit', (token) => {
   if (closedTokens.has(token)) return; // 已关闭的会话：忽略退出事件
+  const real = newToReal.get(token);
+  if (real) {
+    // 曾配对到真实会话的"新会话"终端退出：解除映射并清理临时终端，
+    // 真实会话行保留（agents 徽标回到未运行，可点击重新打开）
+    newToReal.delete(token);
+    realToNew.delete(real);
+    disposeSession(token);
+    pickNextAfter(token);
+    return;
+  }
+  if (token.startsWith('new-')) {
+    // 从未配对的新终端退出（如 claude 启动即失败）：移出待配队列并清理
+    const i = pendingNew.findIndex(p => p.token === token);
+    if (i >= 0) pendingNew.splice(i, 1);
+    disposeSession(token);
+    pickNextAfter(token);
+    return;
+  }
   const s = sessions.get(token);
   if (!s) return;
   s.exited = true;
@@ -770,7 +859,7 @@ function renderUnreadMarks() {
 }
 
 async function openFromList(s) {
-  const token = s.id;
+  const token = realToNew.get(s.id) || s.id; // 已配对的新会话：切到其运行中的终端
   const existing = sessions.get(token);
   if (existing && !existing.exited) {
     activate(token); // 已在运行：直接换过去
@@ -809,6 +898,14 @@ function refreshFoldState() {
   }
 }
 
+// 会话列表签名（id+目录+名字）：轮询比对用。不含时间列——
+// 运行中的会话持续写 transcript 会让 mtime 一直变，若把时间算进签名
+// 会导致每轮都重建整树；名字/新增/删失才值得重建。
+function listSig(list) {
+  return list.map(s => [s.id, s.dir, s.name].join('|')).join('\n');
+}
+
+// 全量刷新：拉取 + 重建左侧列表（启动 / 重命名 / 归档等调用）
 async function loadSessions() {
   let list;
   try {
@@ -817,7 +914,63 @@ async function loadSessions() {
     setStatus('加载会话失败: ' + e, 'warn');
     return;
   }
+  renderSessions(list);
+}
+
+// 尝试把列表中新出现的真实会话 id 配对给等待中的 new 终端。
+// 规则：同目录、FIFO（先启动的 new 先配对到先出现的真实 id）；
+// 只在真实 id 首次出现的那一轮执行（此后在 lastLoaded 里，不会再算作新出现）。
+function pairNewSessions(list) {
+  if (!pendingNew.length) return;
+  const prev = new Set(lastLoaded.map(x => x.id));
+  const newInDir = new Map(); // dir -> [id, ...]（出现顺序）
+  for (const s of list) {
+    if (prev.has(s.id) || realToNew.has(s.id)) continue;
+    if (!newInDir.has(s.dir)) newInDir.set(s.dir, []);
+    newInDir.get(s.dir).push(s.id);
+  }
+  const stillPending = [];
+  for (const p of pendingNew) {
+    const ids = newInDir.get(p.dir);
+    const id = ids && ids.length ? ids.shift() : null;
+    if (!id) { stillPending.push(p); continue; }
+    newToReal.set(p.token, id);
+    realToNew.set(id, p.token);
+    const s = sessions.get(p.token);
+    if (s) {
+      const info = list.find(x => x.id === id);
+      if (info) s.labelText = info.name; // 状态栏名字顺带更新为真实名
+    }
+    if (activeToken === p.token) syncActiveHighlight(); // 高亮跟着真实行走
+  }
+  pendingNew = stillPending;
+}
+
+// 后台轮询刷新：新建会话 claude 要稍后才落盘 jsonl，claude 内 /rename、
+// 删失等也都是异步的——每 5s 比对一次签名，有变化才重建列表。
+let lastListSig = null;
+async function autoRefreshSessions() {
+  let list;
+  try {
+    list = await ListSessions();
+  } catch (e) {
+    return;
+  }
+  const sig = listSig(list);
+  if (sig === lastListSig) return; // 无变化，跳过整树重建
+  pairNewSessions(list); // 先配对（配对基于"上一轮"的 lastLoaded 判定新 id）
+  renderSessions(list);
+}
+setInterval(autoRefreshSessions, 5000);
+
+function renderSessions(list) {
   lastLoaded = list;
+  lastListSig = listSig(list);
+  // 软件打开首屏：默认闭合所有目录树（只执行一次；此后用户手动折叠/展开）
+  if (!collapseAllDone && list.length) {
+    collapseAllDone = true;
+    for (const s of list) collapsedDirs.add(s.dir);
+  }
   const groups = new Map();
   for (const s of list) {
     sessionNames.set(s.id, s.name);
@@ -841,6 +994,8 @@ async function loadSessions() {
         const token = await StartNew(dir);
         const label = '新会话 ' + (++newCounter) + ' · ' + leafOf(dir);
         openTab(token, label);
+        sessions.get(token).dir = dir; // 记住所属目录，供轮询配对新会话 id
+        pendingNew.push({ token, dir });
         activate(token);
         setStatus('已启动新会话: ' + leafOf(dir), 'ok');
       } catch (e) {
@@ -877,12 +1032,13 @@ async function loadSessions() {
       badge.title = '未运行';
       nameRow.appendChild(badge);
       nameRow.appendChild(el('span', 's-name-text', s.name));
-      // 关闭按钮在会话行右侧（hover 显示）：结束进程并关闭终端
+      // 关闭按钮在会话行右侧（hover 显示）：结束进程并关闭终端。
+      // 配对的"新会话"需经映射关到真正的 new token 才会生效
       const closeBtn = el('span', 's-close', '×');
       closeBtn.title = '关闭此终端（结束进程）';
       closeBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        closeTab(s.id);
+        closeTab(realToNew.get(s.id) || s.id);
       });
       nameRow.appendChild(closeBtn);
       item.appendChild(nameRow);
@@ -925,13 +1081,16 @@ paintEye();
 (async () => {
   await refreshAgents(); // 先取一轮 agents：首屏折叠/徽标不依赖轮询迟到
   await loadSessions();
-  // 自动恢复上次打开/使用过的会话（已被归档或已从磁盘消失则自然跳过；
-  // 恢复过程走 openFromList，与手动点击行为完全一致）
+  // 恢复上次关闭时还打开着的所有会话（已被归档/已从磁盘消失的自动跳过；
+  // 逐个走 openFromList，行为与手动点击一致）
   try {
-    const last = await GetLastSession();
-    if (last) {
-      const s = lastLoaded.find(x => x.id === last);
-      if (s) await openFromList(s);
+    const open = await GetOpenSessions();
+    if (Array.isArray(open) && open.length) {
+      const byId = new Map(lastLoaded.map(s => [s.id, s]));
+      for (const id of open) {
+        const s = byId.get(id);
+        if (s) await openFromList(s);
+      }
     }
   } catch (e) { /* 恢复失败不影响主界面 */ }
 })();

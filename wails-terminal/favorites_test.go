@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 
@@ -116,23 +117,92 @@ func TestFavAliasAndDelete(t *testing.T) {
 	t.Log("favorites 数据链路 OK")
 }
 
-// TestLastSessionRoundtrip 上次会话记忆：new- 前缀不记录。
-func TestLastSessionRoundtrip(t *testing.T) {
-	os.Remove(favorites.LastPath())
+// TestOpenSessionsRoundtrip 打开的会话集合：new- 临时 token 不记录、按序稳定。
+func TestOpenSessionsRoundtrip(t *testing.T) {
+	os.Remove(favorites.OpenPath())
 	a := &App{}
 
-	if a.GetLastSession() != "" {
-		t.Fatal("初始应为空")
+	if got := a.GetOpenSessions(); len(got) != 0 {
+		t.Fatal("初始应为空集合")
 	}
-	a.SetLastSession("new-abc123") // 临时新建会话 token，重启无法恢复
-	if a.GetLastSession() != "" {
-		t.Fatal("new- 前缀的 token 不应被记录")
+	// 模拟三个"存活终端"：两个真实会话 + 一个 new- 临时会话
+	a.terms = map[string]*ptyRef{"session-b": {}, "new-xyz": {}, "session-a": {}}
+	a.persistOpenSessions()
+	got := a.GetOpenSessions()
+	want := []string{"session-a", "session-b"} // new- 排除，按序排列
+	if len(got) != len(want) {
+		t.Fatalf("应恢复 %v，实际 %v", want, got)
 	}
-	a.SetLastSession("real-session-id")
-	if a.GetLastSession() != "real-session-id" {
-		t.Fatalf("应记录真实会话 id，实际 %q", a.GetLastSession())
+	for i, id := range want {
+		if got[i] != id {
+			t.Fatalf("集合不对：期望 %v，实际 %v", want, got)
+		}
 	}
 
-	os.Remove(favorites.LastPath()) // 清理测试残留
-	t.Log("last-session 数据链路 OK")
+	os.Remove(favorites.OpenPath()) // 清理测试残留
+	t.Log("open-sessions 数据链路 OK")
+}
+
+// TestShellChoice 底层 Shell 选择：命令行组装 / 选型校验 / 启动兜底。
+// 用 lookPath 桩模拟 pwsh 可用与缺失，不依赖测试机是否装 pwsh。
+func TestShellChoice(t *testing.T) {
+	os.Remove(favorites.ShellPath())
+	defer os.Remove(favorites.ShellPath())
+	a := &App{}
+	old := lookPath
+	defer func() { lookPath = old }()
+	missing := func(name string) (string, error) { return "", errors.New("not found") }
+
+	// 默认 cmd；cmd 恒可用，命令行不受机器环境影响
+	if got := a.GetShell(); got != "cmd" {
+		t.Fatalf("默认应为 cmd，实际 %q", got)
+	}
+	if got := a.claudeCmd("-r abc"); got != "cmd /c claude -r abc" {
+		t.Fatalf("cmd 恢复命令行不对: %q", got)
+	}
+	if got := a.claudeCmd(""); got != "cmd /c claude" {
+		t.Fatalf("cmd 新建命令行不对: %q", got)
+	}
+
+	// 模拟 pwsh 可用：正常切换，命令行用 pwsh
+	lookPath = func(name string) (string, error) {
+		if name == "pwsh" {
+			return `C:\Program Files\PowerShell\7\pwsh.exe`, nil
+		}
+		return missing(name)
+	}
+	if !a.shellAvailable("pwsh") {
+		t.Fatal("模拟 pwsh 可用时应返回 true")
+	}
+	if err := a.SetShell("pwsh"); err != nil {
+		t.Fatalf("pwsh 可用时 SetShell 不应报错: %v", err)
+	}
+	if got := a.claudeCmd("-r abc"); got != `pwsh -NoLogo -NoExit -Command "claude -r abc"` {
+		t.Fatalf("pwsh 恢复命令行不对: %q", got)
+	}
+	if got := a.claudeCmd(""); got != `pwsh -NoLogo -NoExit -Command "claude "` {
+		t.Fatalf("pwsh 新建命令行不对: %q", got)
+	}
+
+	// 模拟 pwsh 缺失：SetShell 拒绝；claudeCmd 兜底回退 cmd（设置仍保留 pwsh）
+	lookPath = missing
+	if err := a.SetShell("pwsh"); err == nil {
+		t.Fatal("pwsh 缺失时 SetShell 应报错")
+	}
+	if got := a.GetShell(); got != "pwsh" {
+		t.Fatalf("用户偏好应保留 pwsh，实际 %q", got)
+	}
+	if got := a.claudeCmd("-r abc"); got != "cmd /c claude -r abc" {
+		t.Fatalf("pwsh 缺失应兜底回退 cmd，实际 %q", got)
+	}
+
+	// 非法值 SetShell 仍回退 cmd 语义
+	lookPath = missing
+	if err := a.SetShell("bash"); err != nil {
+		t.Fatalf("非法 Shell 不应报错: %v", err)
+	}
+	if got := a.GetShell(); got != "cmd" {
+		t.Fatalf("非法 Shell 应回退 cmd，实际 %q", got)
+	}
+	t.Log("shell 选择链路 OK")
 }

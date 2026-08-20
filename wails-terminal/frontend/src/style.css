@@ -405,6 +405,14 @@ body {
 }
 #settings-menu .settings-item[data-mode]::before { display: none; }
 
+/* 设置菜单内的小字提示（如 pwsh 缺失警示） */
+#settings-menu .settings-note {
+  padding: 6px 12px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--warn);
+}
+
 /* 设置菜单（与终端主题菜单共用的下拉样式） */
 #settings-menu {
   position: fixed;

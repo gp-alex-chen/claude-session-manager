@@ -14,3 +14,6 @@ wails-terminal/*.log
 # 本地数据 / 日志（个人数据不入库）
 gui.log
 favorites.json
+last-session.json
+open-sessions.json
+settings.json
