@@ -9,10 +9,10 @@ import {
   GetVersion, CheckForUpdate, UpdateToLatest,
 } from './api/backend.js';
 import { createAppState } from './state/app-state.js';
-import { leafOf } from './utils.js';
 import { createTermOptions, THEMES } from './themes/catalog.js';
 import { createTerminalController } from './terminal/controller.js';
 import { createAgentController } from './agents/controller.js';
+import { createSessionController } from './sessions/controller.js';
 
 // —— 多会话终端管理 ——
 // 每个会话一个独立 xterm 实例；切换/关闭都在左侧列表操作，
@@ -23,7 +23,6 @@ const statusEl = document.getElementById('status-bar');
 const listEl = document.getElementById('session-list');
 
 const state = createAppState();
-let newCounter = 0;
 const TERM_OPTS = createTermOptions();
 
 // —— 日间/夜间 UI 模式（默认日间） ——
@@ -51,15 +50,7 @@ function el(tag, cls, text) {
   if (text !== undefined) n.textContent = text;
   return n;
 }
-
-// 左侧列表：高亮当前打开的终端对应的会话行
-// （配对后的新会话：行 id 是真实 id，但终端 token 是 new-，需经映射）
-function syncActiveHighlight() {
-  for (const item of listEl.querySelectorAll('.session-item')) {
-    const token = state.realToNew.get(item.dataset.id) || item.dataset.id;
-    item.classList.toggle('active', token === state.activeToken);
-  }
-}
+let sessionController;
 
 const agentController = createAgentController({
   state,
@@ -69,7 +60,7 @@ const agentController = createAgentController({
   setStatus,
   listRoot: listEl,
   documentRef: document,
-  refreshFoldState,
+  refreshFoldState: () => sessionController?.refreshFoldState(),
 });
 
 const terminalController = createTerminalController({
@@ -84,12 +75,49 @@ const terminalController = createTerminalController({
   appendHost: (host) => termStack.appendChild(host),
   documentRef: document,
   onActivate: () => {
-    syncActiveHighlight();
+    sessionController?.syncActiveHighlight();
     agentController.renderUnreadMarks();
   },
 });
 
 window.addEventListener('resize', () => terminalController.resizeActive());
+
+const hiddenPanel = document.getElementById('hidden-panel');
+const hiddenCount = document.getElementById('hidden-count');
+const hiddenButton = document.getElementById('btn-hidden');
+const eyeButton = document.getElementById('btn-eye');
+sessionController = createSessionController({
+  state,
+  backend: {
+    ListSessions, ListHiddenSessions, RenameSession, DeleteSession, UnhideSession,
+    StartSession, StartNew, GetOpenSessions,
+  },
+  terminalController,
+  agentController,
+  listRoot: listEl,
+  hiddenPanel,
+  hiddenCount,
+  hiddenButton,
+  eyeButton,
+  documentRef: document,
+  windowRef: window,
+  el,
+  setStatus,
+});
+
+window.runtime.EventsOn('agents:update', (list) => agentController.applyAgents(list));
+agentController.start();
+
+window.runtime.EventsOn('term:data', (token, b64) => {
+  terminalController.handleData(token, b64);
+});
+
+window.runtime.EventsOn('term:exit', (token) => {
+  terminalController.handleExit(token);
+});
+
+sessionController.start();
+sessionController.initialize();
 
 try {
   const saved = localStorage.getItem('term-theme');
@@ -309,390 +337,3 @@ async function doApplyUpdate() {
     setStatus('❌ 更新失败: ' + String((e && e.message) || e), 'warn');
   }
 }
-
-// —— 右键菜单（重命名 / 归档） ——
-const ctxMenu = document.createElement('div');
-ctxMenu.id = 'ctx-menu';
-document.body.appendChild(ctxMenu);
-let ctxTarget = null;
-
-function addCtxItem(label, fn, danger) {
-  const d = el('div', 'ctx-item' + (danger ? ' danger' : ''), label);
-  d.addEventListener('click', () => { hideCtx(); fn(); });
-  ctxMenu.appendChild(d);
-}
-
-function showCtx(x, y, target) {
-  ctxTarget = target;
-  ctxMenu.innerHTML = '';
-  if (target.type === 'session') {
-    addCtxItem('重命名…', () => renameSession(target));
-    addCtxItem('归档（不再显示）', () => deleteSession(target), true);
-  }
-  ctxMenu.style.left = Math.min(x, window.innerWidth - 160) + 'px';
-  ctxMenu.style.top = Math.min(y, window.innerHeight - 140) + 'px';
-  ctxMenu.style.display = 'block';
-}
-
-function hideCtx() { ctxMenu.style.display = 'none'; ctxTarget = null; }
-document.addEventListener('click', hideCtx);
-window.addEventListener('blur', hideCtx);
-
-// 重命名：本地别名（不动 claude 数据；留空恢复原名；真正改名请用 claude 内 /rename）
-async function renameSession(target) {
-  const cur = state.sessionNames.get(target.id) || target.name;
-  const input = window.prompt('重命名会话（留空 = 恢复原名）\n提示：这里只改本软件的显示名，真正改名请在 claude 会话内使用 /rename', cur);
-  if (input === null) return;
-  const name = input.trim();
-  try {
-    await RenameSession(target.id, name);
-  } catch (e) {
-    setStatus('重命名失败: ' + e, 'warn');
-    return;
-  }
-  state.sessionNames.set(target.id, name || target.name);
-  // 同步更新已打开终端的状态栏名字
-  const ss = state.terminals.get(target.id);
-  if (ss) ss.labelText = name || target.name;
-  await loadSessions();
-  setStatus(name ? '已重命名: ' + name : '已恢复原名', 'ok');
-}
-
-// 归档：软隐藏（不物理删除会话文件，可随时在"归档"面板恢复）
-async function deleteSession(target) {
-  if (!window.confirm('归档会话（不再显示）？\n会话文件不会被删除，可随时在顶部「归档」中恢复。')) return;
-  try {
-    await DeleteSession(target.id);
-  } catch (e) {
-    setStatus('归档失败: ' + e, 'warn');
-    return;
-  }
-  state.closedTokens.add(target.id); // 关闭其终端并丢弃迟到事件
-  terminalController.closeTab(target.id);
-  state.sessionNames.delete(target.id);
-  await loadSessions();
-  setStatus('已归档（不再显示）: ' + target.name, 'warn');
-}
-
-// —— 归档（软隐藏）面板 ——
-const hiddenPanel = document.getElementById('hidden-panel');
-const hiddenCountEl = document.getElementById('hidden-count');
-let hiddenOpen = false;
-
-async function refreshHidden(silent) {
-  let list = [];
-  try {
-    list = await ListHiddenSessions();
-  } catch (e) {
-    if (!silent) setStatus('加载归档失败: ' + e, 'warn');
-    return;
-  }
-  hiddenCountEl.textContent = list.length;
-  if (!hiddenOpen) return;
-  hiddenPanel.innerHTML = '';
-  if (!list.length) {
-    hiddenPanel.appendChild(el('div', 'hidden-item', '（无归档会话）'));
-    return;
-  }
-  for (const s of list) {
-    const row = el('div', 'hidden-item');
-    const nm = el('span', 'h-name', s.name);
-    nm.title = s.dir;
-    const dir = el('span', 'h-dir', leafOf(s.dir));
-    const btn = el('button', '', '恢复');
-    btn.title = '在列表中重新显示此会话';
-    btn.addEventListener('click', async () => {
-      try {
-        await UnhideSession(s.id);
-      } catch (e) {
-        setStatus('恢复失败: ' + e, 'warn');
-        return;
-      }
-      await loadSessions();
-      setStatus('已恢复显示: ' + s.name, 'ok');
-    });
-    row.appendChild(nm);
-    row.appendChild(dir);
-    row.appendChild(btn);
-    hiddenPanel.appendChild(row);
-  }
-}
-
-document.getElementById('btn-hidden').addEventListener('click', () => {
-  hiddenOpen = !hiddenOpen;
-  hiddenPanel.classList.toggle('hidden', !hiddenOpen);
-  if (hiddenOpen) refreshHidden(true);
-});
-
-// —— 后端事件路由 ——
-window.runtime.EventsOn('agents:update', (list) => agentController.applyAgents(list));
-agentController.start();
-
-window.runtime.EventsOn('term:data', (token, b64) => {
-  terminalController.handleData(token, b64);
-});
-
-window.runtime.EventsOn('term:exit', (token) => {
-  terminalController.handleExit(token);
-});
-
-// 眼睛开关图标（SVG，随当前颜色渲染）
-const ICON_EYE_OPEN = [
-  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"',
-  ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"',
-  ' stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12',
-  ' 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"',
-  '/></svg>',
-].join('');
-const ICON_EYE_CLOSED = [
-  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"',
-  ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round">',
-  '<path d="M4 10.2C6 8.4 8.8 7.4 12 7.4s6 1 8 2.8"/>',
-  '<path d="M4 13.8c2 1.8 4.8 2.8 8 2.8s6-1 8-2.8"/>',
-  '<path d="M6.5 5.5l11 13"/></svg>',
-].join('');
-
-function setEyeIcon(eye, off) {
-  eye.innerHTML = off ? ICON_EYE_CLOSED : ICON_EYE_OPEN;
-}
-
-// —— 会话列表 ——
-// 最近一次全量列表 + 运行中信息（id -> kind），用于渲染状态徽标
-let lastLoaded = [];
-
-async function openFromList(s) {
-  const token = state.realToNew.get(s.id) || s.id; // 已配对的新会话：切到其运行中的终端
-  const existing = state.terminals.get(token);
-  if (existing && !existing.exited) {
-    terminalController.activate(token); // 已在运行：直接换过去
-    state.unreadSessions.delete(s.id); // 查看过 = 清除未读
-    agentController.renderUnreadMarks();
-    return;
-  }
-  if (existing) {
-    // 已退出：重建终端后重启
-    terminalController.disposeSession(token);
-  }
-  terminalController.openTab(token, s.name);
-  try {
-    await StartSession(s.id, s.dir);
-    setStatus('已恢复: ' + s.name, 'ok');
-    state.unreadSessions.delete(s.id); // 查看过 = 清除未读
-    agentController.renderUnreadMarks();
-    terminalController.activate(token);
-  } catch (e) {
-    setStatus('恢复失败: ' + e, 'warn');
-    terminalController.disposeSession(token);
-  }
-}
-
-// 折叠联动：
-//   展开的组        -> 全量显示（眼睛状态不影响）
-//   折叠 + 睁眼     -> 只显示"打开中"的会话（classifyAgent != idle）
-//   折叠 + 闭眼     -> 全部隐藏（纯折叠）
-function refreshFoldState() {
-  for (const item of listEl.querySelectorAll('.group .session-item')) {
-    const id = item.dataset.id;
-    const dir = item.dataset.dir;
-    const cls = agentController.classifyAgent(id);
-    const folded = state.collapsedDirs.has(dir) && (state.eyeGlobalOff || cls === 'idle');
-    item.classList.toggle('fold-hidden', folded);
-  }
-}
-
-// 会话列表签名（id+目录+名字）：轮询比对用。不含时间列——
-// 运行中的会话持续写 transcript 会让 mtime 一直变，若把时间算进签名
-// 会导致每轮都重建整树；名字/新增/删失才值得重建。
-function listSig(list) {
-  return list.map(s => [s.id, s.dir, s.name].join('|')).join('\n');
-}
-
-// 全量刷新：拉取 + 重建左侧列表（启动 / 重命名 / 归档等调用）
-async function loadSessions() {
-  let list;
-  try {
-    list = await ListSessions();
-  } catch (e) {
-    setStatus('加载会话失败: ' + e, 'warn');
-    return;
-  }
-  renderSessions(list);
-}
-
-// 尝试把列表中新出现的真实会话 id 配对给等待中的 new 终端。
-// 规则：同目录、FIFO（先启动的 new 先配对到先出现的真实 id）；
-// 只在真实 id 首次出现的那一轮执行（此后在 lastLoaded 里，不会再算作新出现）。
-function pairNewSessions(list) {
-  if (!state.pendingNew.length) return;
-  const prev = new Set(lastLoaded.map(x => x.id));
-  const newInDir = new Map(); // dir -> [id, ...]（出现顺序）
-  for (const s of list) {
-    if (prev.has(s.id) || state.realToNew.has(s.id)) continue;
-    if (!newInDir.has(s.dir)) newInDir.set(s.dir, []);
-    newInDir.get(s.dir).push(s.id);
-  }
-  const stillPending = [];
-  for (const p of state.pendingNew) {
-    const ids = newInDir.get(p.dir);
-    const id = ids && ids.length ? ids.shift() : null;
-    if (!id) { stillPending.push(p); continue; }
-    state.newToReal.set(p.token, id);
-    state.realToNew.set(id, p.token);
-    const s = state.terminals.get(p.token);
-    if (s) {
-      const info = list.find(x => x.id === id);
-      if (info) s.labelText = info.name; // 状态栏名字顺带更新为真实名
-    }
-    if (state.activeToken === p.token) syncActiveHighlight(); // 高亮跟着真实行走
-  }
-  state.pendingNew = stillPending;
-}
-
-// 后台轮询刷新：新建会话 claude 要稍后才落盘 jsonl，claude 内 /rename、
-// 删失等也都是异步的——每 5s 比对一次签名，有变化才重建列表。
-let lastListSig = null;
-async function autoRefreshSessions() {
-  let list;
-  try {
-    list = await ListSessions();
-  } catch (e) {
-    return;
-  }
-  const sig = listSig(list);
-  if (sig === lastListSig) return; // 无变化，跳过整树重建
-  pairNewSessions(list); // 先配对（配对基于"上一轮"的 lastLoaded 判定新 id）
-  renderSessions(list);
-}
-setInterval(autoRefreshSessions, 5000);
-
-function renderSessions(list) {
-  lastLoaded = list;
-  lastListSig = listSig(list);
-  // 软件打开首屏：默认闭合所有目录树（只执行一次；此后用户手动折叠/展开）
-  if (!state.collapseAllDone && list.length) {
-    state.collapseAllDone = true;
-    for (const s of list) state.collapsedDirs.add(s.dir);
-  }
-  const groups = new Map();
-  for (const s of list) {
-    state.sessionNames.set(s.id, s.name);
-    if (!groups.has(s.dir)) groups.set(s.dir, []);
-    groups.get(s.dir).push(s);
-  }
-  listEl.innerHTML = '';
-  for (const [dir, items] of groups) {
-    const g = el('div', 'group');
-    if (state.collapsedDirs.has(dir)) g.classList.add('collapsed');
-    const head = el('div', 'group-head');
-    const chev = el('span', 'chevron');
-    chev.title = '点击折叠/展开';
-    const name = el('span', 'group-name', leafOf(dir));
-    name.title = dir;
-    const plus = el('button', 'plus', '+');
-    plus.title = '在 ' + dir + ' 新建会话';
-    plus.addEventListener('click', async (ev) => {
-      ev.stopPropagation();
-      try {
-        const token = await StartNew(dir);
-        const label = '新会话 ' + (++newCounter) + ' · ' + leafOf(dir);
-        terminalController.openTab(token, label);
-        state.terminals.get(token).dir = dir; // 记住所属目录，供轮询配对新会话 id
-        state.pendingNew.push({ token, dir });
-        terminalController.activate(token);
-        setStatus('已启动新会话: ' + leafOf(dir), 'ok');
-      } catch (e) {
-        setStatus('新建失败: ' + e, 'warn');
-      }
-    });
-    // 点击组头 = 折叠/展开整个项目；立即重算可见性，不等下一轮轮询
-    head.addEventListener('click', () => {
-      const collapsed = g.classList.toggle('collapsed');
-      if (collapsed) state.collapsedDirs.add(dir);
-      else state.collapsedDirs.delete(dir);
-      chev.classList.toggle('collapsed', collapsed);
-      refreshFoldState();
-    });
-    head.appendChild(chev);
-    head.appendChild(name);
-    head.appendChild(plus);
-    g.appendChild(head);
-
-    const body = el('div', 'group-body');
-    for (const s of items) {
-      const item = el('div', 'session-item');
-      item.dataset.id = s.id;
-      item.dataset.dir = s.dir;
-      item.title = s.dir;
-      // 折叠的组：闭眼 -> 全隐藏；睁眼 -> 只隐藏未运行（灰点）的
-      if (state.collapsedDirs.has(dir) &&
-          (state.eyeGlobalOff || agentController.classifyAgent(s.id) === 'idle')) {
-        item.classList.add('fold-hidden');
-      }
-      const nameRow = el('div', 's-name');
-      const badge = el('span', 'badge idle', '●');
-      badge.dataset.id = s.id;
-      badge.title = '未运行';
-      nameRow.appendChild(badge);
-      nameRow.appendChild(el('span', 's-name-text', s.name));
-      // 关闭按钮在会话行右侧（hover 显示）：结束进程并关闭终端。
-      // 配对的"新会话"需经映射关到真正的 new token 才会生效
-      const closeBtn = el('span', 's-close', '×');
-      closeBtn.title = '关闭此终端（结束进程）';
-      closeBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        terminalController.closeTab(state.realToNew.get(s.id) || s.id);
-      });
-      nameRow.appendChild(closeBtn);
-      item.appendChild(nameRow);
-      const timeRow = el('div', 's-time', s.time);
-      item.appendChild(timeRow);
-      item.addEventListener('click', () => openFromList(s));
-      // 右键菜单：重命名 / 归档
-      item.addEventListener('contextmenu', (ev) => {
-        ev.preventDefault();
-        showCtx(ev.clientX, ev.clientY, { type: 'session', id: s.id, dir: s.dir, name: s.name });
-      });
-      body.appendChild(item);
-    }
-    g.appendChild(body);
-    listEl.appendChild(g);
-  }
-  refreshHidden(true); // 每次刷新后同步"归档"计数
-  agentController.refreshAgents();     // 列表重建后立即刷新状态徽标
-  refreshFoldState();
-  agentController.renderUnreadMarks();
-  syncActiveHighlight(); // 列表重建后恢复当前终端的高亮
-}
-
-// 全局眼睛开关按钮（仅折叠时有效；展开时显示不受影响）
-const btnEye = document.getElementById('btn-eye');
-function paintEye() {
-  btnEye.classList.toggle('off', state.eyeGlobalOff);
-  btnEye.title = state.eyeGlobalOff
-    ? '折叠时隐藏所有会话（点击开启：折叠时显示运行中的）'
-    : '折叠时显示运行中的会话（点击关闭：折叠即全部隐藏）';
-  setEyeIcon(btnEye, state.eyeGlobalOff);
-}
-btnEye.addEventListener('click', () => {
-  state.eyeGlobalOff = !state.eyeGlobalOff;
-  paintEye();
-  refreshFoldState();
-});
-paintEye();
-
-(async () => {
-  await agentController.refreshAgents(); // 先取一轮 agents：首屏折叠/徽标不依赖轮询迟到
-  await loadSessions();
-  // 恢复上次关闭时还打开着的所有会话（已被归档/已从磁盘消失的自动跳过；
-  // 逐个走 openFromList，行为与手动点击一致）
-  try {
-    const open = await GetOpenSessions();
-    if (Array.isArray(open) && open.length) {
-      const byId = new Map(lastLoaded.map(s => [s.id, s]));
-      for (const id of open) {
-        const s = byId.get(id);
-        if (s) await openFromList(s);
-      }
-    }
-  } catch (e) { /* 恢复失败不影响主界面 */ }
-})();
