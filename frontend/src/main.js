@@ -9,8 +9,9 @@ import {
   GetVersion, CheckForUpdate, UpdateToLatest,
 } from './api/backend.js';
 import { createAppState } from './state/app-state.js';
-import { b64ToBytes, bytesToB64, leafOf } from './utils.js';
+import { leafOf } from './utils.js';
 import { createTermOptions, THEMES } from './themes/catalog.js';
+import { createTerminalController } from './terminal/controller.js';
 
 // —— 多会话终端管理 ——
 // 每个会话一个独立 xterm 实例；切换/关闭都在左侧列表操作，
@@ -42,152 +43,11 @@ function setStatus(msg, cls) {
   statusEl.className = cls || '';
 }
 
-// 写原始数据到指定会话的 PTY
-function writeTerm(s, data) {
-  TermWrite(s.token, bytesToB64(new TextEncoder().encode(data)));
-}
-
-// —— 系统剪贴板粘贴 ——
-// 优先 navigator.clipboard（WebView2 的 http://wails.localhost 属安全上下文，
-// 用户手势下可读）；失败时退回隐藏 textarea + execCommand('paste')。
-function legacyReadClipboard() {
-  const ta = document.createElement('textarea');
-  ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:10px;height:10px;opacity:0;';
-  document.body.appendChild(ta);
-  ta.focus();
-  let text = '';
-  try {
-    if (document.execCommand('paste')) text = ta.value;
-  } catch (e) { /* 忽略 */ }
-  ta.remove();
-  return text;
-}
-
-async function pasteIntoTerm(s) {
-  let text = '';
-  try {
-    text = await navigator.clipboard.readText();
-  } catch (e) {
-    text = legacyReadClipboard();
-  }
-  // 走 term.paste()：自动做 \r\n -> \r 转换；若 claude 开启了 bracketed paste
-  // 模式则自动加 \x1b[200~..\x1b[201~ 包裹，多行内容不会立即触发提交
-  if (text && s.term) s.term.paste(text);
-}
-
 function el(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
   if (text !== undefined) n.textContent = text;
   return n;
-}
-
-// —— 会话终端（无标签栏：切换/关闭全在左侧列表操作） ——
-function openTab(token, name) {
-  state.closedTokens.delete(token); // 重新打开后此 token 的事件恢复有效
-  let s = state.terminals.get(token);
-  if (s) {
-    activate(token);
-    return s;
-  }
-  s = {
-    token,
-    name,
-    labelText: name,
-    exited: false,
-    visible: false,
-    term: null,
-    fit: null,
-  };
-
-  s.host = el('div', 'term-host');
-  termStack.appendChild(s.host);
-
-  state.terminals.set(token, s);
-  return s;
-}
-
-function makeTerminal(s) {
-  const term = new Terminal(TERM_OPTS);
-  const fit = new FitAddon();
-  term.loadAddon(fit);
-  // host 在后台时不可见，xterm 以默认尺寸工作，输出仍写入 buffer；
-  // 切换到该会话时再 fit 校正尺寸。
-  term.open(s.host);
-  s.term = term;
-  s.fit = fit;
-  // 后台终端处于隐藏状态无法测量尺寸：先给个合理默认，
-  // 激活时 fitAndSync 会校正并同步给后端
-  if (!s.visible) term.resize(120, 32);
-
-  // 前端输入：UTF-8 字节 -> base64 -> 后端写对应会话的 PTY
-  term.onData((data) => writeTerm(s, data));
-
-  // 显式接管组合键，避免被 WebView2 / xterm 默认行为吞掉：
-  //  Ctrl+V / Ctrl+Shift+V / Shift+Insert -> 粘贴系统剪贴板
-  //  Ctrl+Enter -> 发送换行(LF)，而不是当作回车提交
-  term.attachCustomKeyEventHandler((e) => {
-    if (e.type !== 'keydown') return true;
-    const k = e.key.toLowerCase();
-    if ((e.ctrlKey || e.metaKey) && k === 'v') {
-      e.preventDefault();
-      pasteIntoTerm(s);
-      return false;
-    }
-    if (e.shiftKey && e.key === 'Insert') {
-      e.preventDefault();
-      pasteIntoTerm(s);
-      return false;
-    }
-    if (e.ctrlKey && k === 'enter') {
-      e.preventDefault();
-      writeTerm(s, '\n');
-      return false;
-    }
-    return true;
-  });
-  term.onResize(() => {
-    if (s.visible) TermResize(s.token, term.cols, term.rows);
-  });
-  return term;
-}
-
-// 贴合尺寸并同步给后端。fit 后主动让出一列：xterm 的滚动条占据
-// 视口右侧一列的空间，不让的话最后一列会被滚动条盖住/溢出。
-function fitAndSync(s) {
-  try {
-    s.fit.fit();
-    const cols = Math.max(2, s.term.cols - 1);
-    if (cols !== s.term.cols) s.term.resize(cols, s.term.rows);
-    TermResize(s.token, s.term.cols, s.term.rows);
-  } catch (e) { /* 尺寸计算失败时忽略 */ }
-}
-
-function activate(token) {
-  const s = state.terminals.get(token);
-  if (!s) return;
-  state.activeToken = token;
-  for (const [t, e] of state.terminals) {
-    const on = t === token;
-    e.host.classList.toggle('active', on);
-    e.visible = on;
-  }
-  syncActiveHighlight(); // 左侧列表高亮当前终端
-  if (state.unreadSessions.delete(token)) renderUnreadMarks(); // 查看过 = 清除未读
-  if (!s.term) makeTerminal(s);
-  fitAndSync(s);
-  s.term.focus();
-  setStatus('当前会话: ' + s.labelText + (s.exited ? '（已退出）' : ''), s.exited ? 'warn' : 'ok');
-}
-
-function disposeSession(token) {
-  const s = state.terminals.get(token);
-  if (!s) return;
-  if (s.term) {
-    try { s.term.dispose(); } catch (e) { /* ignore */ }
-  }
-  s.host.remove();
-  state.terminals.delete(token);
 }
 
 // 左侧列表：高亮当前打开的终端对应的会话行
@@ -199,62 +59,30 @@ function syncActiveHighlight() {
   }
 }
 
-// 当前终端被 dispose 后：若无剩余终端则回到空态
-function pickNextAfter(token) {
-  const rest = [...state.terminals.keys()];
-  if (state.activeToken === token) {
-    if (rest.length) activate(rest[rest.length - 1]);
-    else {
-      state.activeToken = null;
-      setStatus('未运行 — 点击左侧会话恢复，或点分组行 + 新建会话', '');
-    }
-  }
-}
-
-function closeTab(token) {
-  const s = state.terminals.get(token);
-  if (!s) {
-    // 终端已不存在但仍可能留在待配对队列（new 启动失败等）：只清队列
-    const i = state.pendingNew.findIndex(p => p.token === token);
-    if (i >= 0) state.pendingNew.splice(i, 1);
-    return;
-  }
-  state.closedTokens.add(token); // 先标记：迟到的数据/退出事件不再重建终端
-  TermKill(token).catch(() => {});
-  const real = state.newToReal.get(token); // 若曾配对到真实会话，解除映射
-  if (real) { state.newToReal.delete(token); state.realToNew.delete(real); }
-  const i2 = state.pendingNew.findIndex(p => p.token === token);
-  if (i2 >= 0) state.pendingNew.splice(i2, 1);
-  disposeSession(token);
-  pickNextAfter(token);
-}
-
-window.addEventListener('resize', () => {
-  const s = state.terminals.get(state.activeToken);
-  if (s && s.term) fitAndSync(s);
+const terminalController = createTerminalController({
+  state,
+  backend: { TermWrite, TermResize, TermKill },
+  TerminalCtor: Terminal,
+  FitAddonCtor: FitAddon,
+  termOptions: TERM_OPTS,
+  themes: THEMES,
+  setStatus,
+  hostFactory: () => document.createElement('div'),
+  appendHost: (host) => termStack.appendChild(host),
+  documentRef: document,
+  onActivate: () => {
+    syncActiveHighlight();
+    renderUnreadMarks();
+  },
 });
 
-// —— 终端配色主题切换（暗色：Claude 暖黑/Dracula/One Dark/Solarized/Nord；
-//                       亮色：Solarized Light/One Light/GitHub Light） ——
+window.addEventListener('resize', () => terminalController.resizeActive());
+
 try {
   const saved = localStorage.getItem('term-theme');
   if (saved && THEMES[saved]) state.currentTheme = saved;
 } catch (e) { /* localStorage 不可用时保持默认 */ }
-TERM_OPTS.theme = THEMES[state.currentTheme] || THEMES.claude;
-// 同步终端宿主背景（CSS --term-bg），否则边框/滚动条缝隙处仍透出暗色
-document.documentElement.style.setProperty('--term-bg', TERM_OPTS.theme.background);
-
-function applyTheme(name) {
-  state.currentTheme = name;
-  try { localStorage.setItem('term-theme', name); } catch (e) {}
-  const t = THEMES[name] || THEMES.claude;
-  TERM_OPTS.theme = t;
-  document.documentElement.style.setProperty('--term-bg', t.background);
-  for (const [, s] of state.terminals) {
-    if (s.term) s.term.options.theme = t; // 已打开的所有终端即时换肤
-  }
-  setStatus('终端配色已切换: ' + t.name, 'ok');
-}
+terminalController.applyTheme(state.currentTheme, false);
 
 // —— 左下角设置菜单：界面外观（日间/夜间）+ 终端配色（8 套） ——
 const settingsBtn = document.getElementById('btn-settings');
@@ -276,7 +104,10 @@ function buildSettingsMenu() {
     const it = el('div', 'settings-item' + (key === state.currentTheme ? ' cur' : ''), THEMES[key].name);
     it.dataset.theme = key;
     it.style.setProperty('--dot', THEMES[key].background);
-    it.addEventListener('click', () => { applyTheme(key); hideSettingsMenu(); });
+    it.addEventListener('click', () => {
+      terminalController.applyTheme(key);
+      hideSettingsMenu();
+    });
     settingsMenu.appendChild(it);
   }
   // 底层 Shell：启动 claude 用的终端外壳（只影响之后新启动/恢复的会话）
@@ -524,7 +355,7 @@ async function deleteSession(target) {
     return;
   }
   state.closedTokens.add(target.id); // 关闭其终端并丢弃迟到事件
-  closeTab(target.id);
+  terminalController.closeTab(target.id);
   state.sessionNames.delete(target.id);
   await loadSessions();
   setStatus('已归档（不再显示）: ' + target.name, 'warn');
@@ -690,40 +521,11 @@ refreshAgents();
 
 // —— 后端事件路由 ——
 window.runtime.EventsOn('term:data', (token, b64) => {
-  if (state.closedTokens.has(token)) return; // 已关闭的会话：丢弃迟到输出
-  let s = state.terminals.get(token);
-  if (!s) {
-    // 兜底：数据先于终端到达时自动建档（名字尽量用列表里的真实会话名）
-    s = openTab(token, state.sessionNames.get(token) || '正在连接…');
-  }
-  if (!s.term) makeTerminal(s);
-  s.term.write(b64ToBytes(b64));
+  terminalController.handleData(token, b64);
 });
 
 window.runtime.EventsOn('term:exit', (token) => {
-  if (state.closedTokens.has(token)) return; // 已关闭的会话：忽略退出事件
-  const real = state.newToReal.get(token);
-  if (real) {
-    // 曾配对到真实会话的"新会话"终端退出：解除映射并清理临时终端，
-    // 真实会话行保留（agents 徽标回到未运行，可点击重新打开）
-    state.newToReal.delete(token);
-    state.realToNew.delete(real);
-    disposeSession(token);
-    pickNextAfter(token);
-    return;
-  }
-  if (token.startsWith('new-')) {
-    // 从未配对的新终端退出（如 claude 启动即失败）：移出待配队列并清理
-    const i = state.pendingNew.findIndex(p => p.token === token);
-    if (i >= 0) state.pendingNew.splice(i, 1);
-    disposeSession(token);
-    pickNextAfter(token);
-    return;
-  }
-  const s = state.terminals.get(token);
-  if (!s) return;
-  s.exited = true;
-  setStatus('会话已退出: ' + s.labelText, 'warn');
+  terminalController.handleExit(token);
 });
 
 // 眼睛开关图标（SVG，随当前颜色渲染）
@@ -858,25 +660,25 @@ async function openFromList(s) {
   const token = state.realToNew.get(s.id) || s.id; // 已配对的新会话：切到其运行中的终端
   const existing = state.terminals.get(token);
   if (existing && !existing.exited) {
-    activate(token); // 已在运行：直接换过去
+    terminalController.activate(token); // 已在运行：直接换过去
     state.unreadSessions.delete(s.id); // 查看过 = 清除未读
     renderUnreadMarks();
     return;
   }
   if (existing) {
     // 已退出：重建终端后重启
-    disposeSession(token);
+    terminalController.disposeSession(token);
   }
-  openTab(token, s.name);
+  terminalController.openTab(token, s.name);
   try {
     await StartSession(s.id, s.dir);
     setStatus('已恢复: ' + s.name, 'ok');
     state.unreadSessions.delete(s.id); // 查看过 = 清除未读
     renderUnreadMarks();
-    activate(token);
+    terminalController.activate(token);
   } catch (e) {
     setStatus('恢复失败: ' + e, 'warn');
-    disposeSession(token);
+    terminalController.disposeSession(token);
   }
 }
 
@@ -989,10 +791,10 @@ function renderSessions(list) {
       try {
         const token = await StartNew(dir);
         const label = '新会话 ' + (++newCounter) + ' · ' + leafOf(dir);
-        openTab(token, label);
+        terminalController.openTab(token, label);
         state.terminals.get(token).dir = dir; // 记住所属目录，供轮询配对新会话 id
         state.pendingNew.push({ token, dir });
-        activate(token);
+        terminalController.activate(token);
         setStatus('已启动新会话: ' + leafOf(dir), 'ok');
       } catch (e) {
         setStatus('新建失败: ' + e, 'warn');
@@ -1034,7 +836,7 @@ function renderSessions(list) {
       closeBtn.title = '关闭此终端（结束进程）';
       closeBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        closeTab(state.realToNew.get(s.id) || s.id);
+        terminalController.closeTab(state.realToNew.get(s.id) || s.id);
       });
       nameRow.appendChild(closeBtn);
       item.appendChild(nameRow);
