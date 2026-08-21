@@ -15,9 +15,16 @@ export function createUpdateController(deps) {
     pct: 0,
     phase: '',
     info: null,
+    currentVersion: 'vdev',
+    statusText: '',
   };
-  let updateItem = null;
-  let updateNote = null;
+  let card = null;
+  let actionButton = null;
+  let versionNode = null;
+  let statusNode = null;
+  let progressRegion = null;
+  let progressBar = null;
+  let warningNode = null;
 
   function messageFor(error) {
     return String((error && error.message) || error);
@@ -30,48 +37,55 @@ export function createUpdateController(deps) {
     };
   }
 
+  function setCurrentVersion(value) {
+    state.currentVersion = formatVersion(value);
+    render();
+  }
+
   function reset() {
     state.mode = 'idle';
     state.busy = false;
     state.pct = 0;
     state.phase = '';
     state.info = null;
+    state.statusText = '';
     render();
   }
 
   function render() {
-    if (!updateItem) return;
-    updateItem.textContent = state.mode === 'ready'
-      ? '发现新版本 ' + formatVersion(state.info.latest) + ' → 点击更新并重启'
+    if (!actionButton) return;
+    const isReady = state.mode === 'ready';
+    const isApplying = state.mode === 'applying';
+    const isDownloading = isApplying && state.phase === '下载中';
+
+    actionButton.textContent = isReady
+      ? '更新并重启'
       : state.mode === 'checking'
         ? '正在检查…'
-        : state.mode === 'applying'
-          ? '更新中…'
-          : '检查更新…';
-    updateItem.classList.toggle('has-update', state.mode === 'ready');
-    updateItem.classList.toggle('disabled', state.busy);
-    for (const child of updateItem.querySelectorAll('.upd-col')) child.remove();
+        : isApplying
+          ? '正在更新…'
+          : '检查更新';
+    actionButton.disabled = state.busy;
+    actionButton.setAttribute('aria-disabled', String(state.busy));
+    if (card) card.setAttribute('aria-busy', String(state.busy));
+    if (versionNode) versionNode.textContent = state.currentVersion;
 
-    if (state.mode === 'applying' && state.phase === '下载中') {
-      const column = el('div', 'upd-col');
-      const bar = el('div', 'upd-progress');
-      const fill = el('div', 'upd-progress-fill');
-      fill.style.width = state.pct + '%';
-      bar.appendChild(fill);
-      column.appendChild(bar);
-      column.appendChild(el('div', 'upd-hint', '下载中 ' + state.pct + '%'));
-      updateItem.appendChild(column);
-    } else if (state.phase && !state.phase.includes('失败')) {
-      const column = el('div', 'upd-col');
-      column.appendChild(el('div', 'upd-hint', state.phase));
-      updateItem.appendChild(column);
-    }
+    const defaultStatus = state.mode === 'checking'
+      ? '正在检查 GitHub 上是否有新版…'
+      : state.mode === 'ready'
+        ? '发现新版本 ' + formatVersion(state.info.latest)
+        : isApplying
+          ? (isDownloading ? '下载中 ' + state.pct + '%' : (state.phase || '正在准备更新…'))
+          : '点击检查 GitHub 上是否有新版（v*-wails）';
+    statusNode.textContent = state.statusText || defaultStatus;
 
-    if (updateNote) {
-      updateNote.textContent = state.mode === 'ready'
-        ? '当前 ' + formatVersion(state.info.current) + '；将下载并自动重启，运行中的会话进程会结束'
-        : '点击检查 GitHub 上是否有新版（v*-wails）';
-    }
+    warningNode.hidden = !isReady;
+    warningNode.setAttribute('aria-hidden', String(!isReady));
+    progressRegion.hidden = !isDownloading;
+    progressRegion.setAttribute('aria-hidden', String(!isDownloading));
+    progressBar.setAttribute('aria-valuenow', String(state.pct));
+    progressBar.style.width = state.pct + '%';
+    progressBar.textContent = isDownloading ? '下载中 ' + state.pct + '%' : '';
   }
 
   async function check() {
@@ -79,6 +93,7 @@ export function createUpdateController(deps) {
     state.mode = 'checking';
     state.busy = true;
     state.phase = '检查中';
+    state.statusText = '';
     render();
     try {
       const info = await backend.CheckForUpdate();
@@ -86,7 +101,9 @@ export function createUpdateController(deps) {
         state.mode = 'ready';
         state.busy = false;
         state.phase = '';
+        state.statusText = '';
         state.info = { ...info };
+        if (info.current) state.currentVersion = formatVersion(info.current);
         setStatus(
           '发现新版本 ' + formatVersion(info.latest) + '（当前 ' + formatVersion(info.current) + '）',
           'warn',
@@ -96,13 +113,16 @@ export function createUpdateController(deps) {
         state.busy = false;
         state.mode = 'idle';
         state.phase = '';
-        setStatus('✅ 已是最新版本（' + formatVersion(info && info.current) + '）', 'ok');
+        state.statusText = '当前已是最新版本（' + formatVersion(info && info.current || state.currentVersion) + '）';
+        if (info && info.current) state.currentVersion = formatVersion(info.current);
+        setStatus('✅ 已是最新版本（' + formatVersion(info && info.current || state.currentVersion) + '）', 'ok');
       }
     } catch (error) {
       state.info = null;
       state.busy = false;
       state.mode = 'idle';
       state.phase = '';
+      state.statusText = '检查失败：' + messageFor(error);
       setStatus('❌ ' + messageFor(error), 'warn');
     }
     render();
@@ -114,14 +134,20 @@ export function createUpdateController(deps) {
     state.busy = true;
     state.pct = 0;
     state.phase = '';
+    state.statusText = '';
     render();
     try {
       await backend.UpdateToLatest();
       setStatus('✅ 更新完成', 'ok');
+      reset();
     } catch (error) {
+      state.mode = 'idle';
+      state.busy = false;
+      state.phase = '';
+      state.statusText = '更新失败：' + messageFor(error);
       setStatus('❌ 更新失败: ' + messageFor(error), 'warn');
+      render();
     }
-    reset();
   }
 
   function handleState(phase) {
@@ -130,8 +156,12 @@ export function createUpdateController(deps) {
       state.mode = 'idle';
       state.busy = false;
       state.info = null;
+      state.statusText = phase;
       setStatus('❌ ' + phase, 'warn');
     } else if (phase === '重启中') {
+      state.mode = 'idle';
+      state.busy = false;
+      state.statusText = '更新完成，正在重启…';
       showToast('✅ 更新完成，正在重启…');
     }
     render();
@@ -142,18 +172,35 @@ export function createUpdateController(deps) {
     render();
   }
 
-  function mount(menu) {
-    const label = el('div', 'settings-group-label', '更新');
-    updateItem = el('div', 'settings-item upd-run', '检查更新…');
-    updateNote = el('div', 'settings-note upd-note-ver');
-    updateItem.addEventListener('click', () => {
-      if (state.mode === 'ready') return apply();
-      if (!state.busy) return check();
-      return undefined;
-    });
-    menu.appendChild(label);
-    menu.appendChild(updateItem);
-    menu.appendChild(updateNote);
+  function onActionClick() {
+    if (state.mode === 'ready') return apply();
+    if (!state.busy) return check();
+    return undefined;
+  }
+
+  function mount(panel) {
+    actionButton?.removeEventListener?.('click', onActionClick);
+    panel.innerHTML = '';
+    card = el('section', 'update-card');
+    card.setAttribute('aria-live', 'polite');
+    const title = el('h3', 'update-title', '应用更新');
+    const description = el('p', 'update-description', '保持应用处于最新版本。');
+    versionNode = el('div', 'update-current-version');
+    statusNode = el('p', 'update-status');
+    statusNode.setAttribute('aria-live', 'polite');
+    actionButton = el('button', 'update-action', '检查更新');
+    actionButton.type = 'button';
+    progressRegion = el('div', 'update-progress-region');
+    progressRegion.setAttribute('aria-label', '下载进度');
+    progressBar = el('div', 'update-progress-bar');
+    progressBar.setAttribute('role', 'progressbar');
+    progressBar.setAttribute('aria-valuemin', '0');
+    progressBar.setAttribute('aria-valuemax', '100');
+    progressRegion.appendChild(progressBar);
+    warningNode = el('p', 'update-warning', '运行中的会话进程会结束，更新后应用将自动重启。');
+    actionButton.addEventListener('click', onActionClick);
+    card.append(title, description, versionNode, statusNode, actionButton, progressRegion, warningNode);
+    panel.appendChild(card);
     render();
   }
 
@@ -165,5 +212,6 @@ export function createUpdateController(deps) {
     handleState,
     mount,
     reset,
+    setCurrentVersion,
   };
 }

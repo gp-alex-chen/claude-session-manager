@@ -216,9 +216,10 @@ export function createSettingsController(deps) {
     const generation = ++buildGeneration;
     for (const panel of Object.values(panels)) panel.innerHTML = '';
     addThemeGroups(panels.appearance);
-    await addShellGroup(generation, panels.terminal);
-    if (generation !== buildGeneration) return;
+    const shellBuild = addShellGroup(generation, panels.terminal);
     updateController.mount(panels.update);
+    await shellBuild;
+    if (generation !== buildGeneration) return;
   }
 
   function start() {
@@ -267,6 +268,7 @@ export function createSettingsController(deps) {
       const formatted = formatVersion(version);
       settingsButton.title = '设置 · ' + formatted;
       if (settingsVersion) settingsVersion.textContent = formatted;
+      updateController.setCurrentVersion?.(formatted);
     } catch (error) {
       settingsButton.title = '设置';
       if (settingsVersion) settingsVersion.textContent = '';

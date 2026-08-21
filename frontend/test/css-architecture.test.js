@@ -90,3 +90,10 @@ test('settings skeleton provides an overlay, dialog, navigation, and panel surfa
     assert.match(html, new RegExp(`id="settings-tab-${category}"[\\s\\S]*?aria-controls="settings-panel-${category}"`));
   }
 });
+
+test('update panel has dedicated card styles', () => {
+  const menus = read('menus.css');
+  for (const selector of ['.update-card', '.update-action', '.update-progress-region', '.update-warning']) {
+    assert.match(menus, new RegExp('\\' + selector));
+  }
+});

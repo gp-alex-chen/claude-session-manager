@@ -223,6 +223,20 @@ test('initialize validates stored UI and terminal themes', async () => {
   assert.equal(invalid.settingsButton.title, '设置');
 });
 
+test('initialize forwards one formatted version to the update card', async () => {
+  const versions = [];
+  const fixtureData = fixture({
+    GetVersion: async () => '0.3-wails-rc2-local',
+    updateController: {
+      mount() {},
+      setCurrentVersion(version) { versions.push(version); },
+    },
+  });
+  await fixtureData.controller.initialize();
+  assert.deepEqual(versions, ['v0.3-wails-rc2-local']);
+  assert.equal(fixtureData.settingsButton.title, '设置 · v0.3-wails-rc2-local');
+});
+
 test('shell selection validates pwsh and preserves menu on failure', async () => {
   let setCalls = 0;
   const fixtureData = fixture({
@@ -427,6 +441,7 @@ test('settings category persists across close and stale shell builds cannot writ
   fixtureData.categoryButtons[1].listeners.get('click')({ stopPropagation() {} });
   assert.equal(fixtureData.panels.terminal.hidden, false);
   assert.equal(fixtureData.panels.appearance.hidden, true);
+  assert.ok(fixtureData.panels.update.children.length > 0);
   fixtureData.settingsClose.listeners.get('click')({ stopPropagation() {} });
   assert.equal(fixtureData.settingsMenu.hidden, true);
 

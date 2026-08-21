@@ -173,6 +173,37 @@
 .settings-shell-name { font-size: 12.5px; font-weight: 600; }
 .settings-shell-description { font-size: 10.5px; line-height: 1.4; color: var(--text-faint); }
 .settings-shell-card:disabled { opacity: .55; cursor: not-allowed; }
+.update-card {
+  padding: 4px 2px;
+  color: var(--text);
+}
+.update-title { margin: 4px 0 2px; font-size: 14px; }
+.update-description,
+.update-current-version,
+.update-status,
+.update-warning { margin: 0 0 8px; font-size: 11px; line-height: 1.45; color: var(--text-faint); }
+.update-current-version { color: var(--text); font-weight: 600; }
+.update-status { min-height: 16px; }
+.update-action {
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.update-action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.update-action:disabled { opacity: .55; cursor: wait; }
+.update-progress-region { margin: 10px 0; }
+.update-progress-region[hidden] { display: none; }
+.update-progress-bar {
+  width: 0;
+  height: 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  transition: width .15s linear;
+}
+.update-warning { color: var(--warn); }
 #settings-menu .settings-item {
   padding: 8px 12px;
   font-size: 12.5px;
