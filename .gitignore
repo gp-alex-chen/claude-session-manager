@@ -4,7 +4,7 @@ frontend/dist/
 
 # Local Windows builds and test binaries
 .codex-build/
-claude-terminal*.exe
+*.exe
 *.exe.old
 *.exe.new
 *.test

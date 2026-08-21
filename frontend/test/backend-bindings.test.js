@@ -15,14 +15,29 @@ const expected = [
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
-const backendNames = [...backend.matchAll(/\b(\w+),?/g)]
-  .map((match) => match[1])
-  .filter((name) => expected.includes(name));
+
+function extractBackendExports(source) {
+  const block = source.match(/export\s*\{([\s\S]*?)\}\s*from/);
+  assert.ok(block, 'backend export block must exist');
+  return block[1]
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => entry.split(/\s+as\s+/).at(-1));
+}
+
+const backendNames = extractBackendExports(backend);
 
 test('Wails wrapper and backend boundary expose the same 20 methods', () => {
+  assert.equal(new Set(backendNames).size, backendNames.length);
   assert.deepEqual(new Set(wrapperNames), new Set(expected));
   assert.deepEqual(new Set(backendNames), new Set(expected));
   assert.equal(wrapperNames.length, expected.length);
+});
+
+test('binding export parser does not discard unexpected names', () => {
+  const fake = backend.replace('GetAgents,', 'GetAgents, Unexpected,');
+  assert.ok(extractBackendExports(fake).includes('Unexpected'));
 });
 
 test('every wrapper forwards to the matching Wails App method', () => {
