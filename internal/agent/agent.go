@@ -1,7 +1,4 @@
-// Package agent 运行状态查询：claude agents --json（与 fyne-sidebar 同源）
-// 徽标语义：kind=interactive -> 已打开（绿）；kind=background -> 后台运行中（橙）；
-//
-//	未出现 -> 未运行（灰）。
+// Package agent runs the claude agents --json status watcher.
 package agent
 
 import (
@@ -18,9 +15,6 @@ import (
 	"time"
 )
 
-// —— 调试日志：写 exe 目录下 agents-debug.log ——
-// 轮询的原始 JSON + 前端完成检测的每个决策都记录在这里，
-// 排查"为什么没提示/没变化"时直接看文件即可，无需开 DevTools。
 var debugMu sync.Mutex
 
 func DebugLog(msg string) {
@@ -30,22 +24,17 @@ func DebugLog(msg string) {
 	if err != nil {
 		return
 	}
-	dir := filepath.Dir(exe)
-	f, err := os.OpenFile(filepath.Join(dir, "agents-debug.log"),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(filepath.Join(filepath.Dir(exe), "agents-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
 	if st, _ := f.Stat(); st != nil && st.Size() > 600*1024 {
-		_ = f.Truncate(0) // 防膨胀：超过 600KB 清空重写
+		_ = f.Truncate(0)
 	}
 	_, _ = fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05.000"), msg)
 }
 
-// AgentInfo claude agents --json 的条目（实测字段：
-//
-//	state: working|done|blocked|queued?；status: busy|idle|waiting）
 type AgentInfo struct {
 	SessionID  string `json:"sessionId"`
 	Kind       string `json:"kind"`
@@ -59,15 +48,17 @@ type AgentInfo struct {
 	StartedAt  int64  `json:"startedAt"`
 }
 
-func FetchFull() ([]AgentInfo, string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+type Fetcher func(context.Context) ([]AgentInfo, string)
+
+func FetchFull(parent context.Context) ([]AgentInfo, string) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "cmd", "/c", "claude", "agents", "--json")
-	// GUI 是 windowsgui 子系统（无控制台），子进程 cmd 默认会新开控制台窗口
-	// 一闪而过（每次轮询闪一次）。CREATE_NO_WINDOW 让它在后台静默运行。
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
-	// 去掉 NO_COLOR，避免 claude 关闭颜色输出影响解析
-	env := make([]string, 0, len(os.Environ()))
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
+	env := make([]string, 0, len(os.Environ())+1)
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(e, "NO_COLOR=") {
 			env = append(env, e)
@@ -79,14 +70,12 @@ func FetchFull() ([]AgentInfo, string) {
 		return nil, "ERR: " + err.Error()
 	}
 	var list []AgentInfo
-	if json.Unmarshal(out, &list) != nil {
+	if err := json.Unmarshal(out, &list); err != nil {
 		return nil, "ERR unmarshal: " + string(out)
 	}
 	return list, string(out)
 }
 
-// Signature 活跃集合签名：sessionId+state+status+kind 排序拼接，
-// 避免 JSON 字段顺序/时间戳噪声触发误判变化。
 func Signature(list []AgentInfo) string {
 	parts := make([]string, 0, len(list))
 	for _, a := range list {
@@ -96,87 +85,129 @@ func Signature(list []AgentInfo) string {
 	return strings.Join(parts, ";")
 }
 
-// Watcher owns polling state and its cancellation lifecycle. Callers receive
-// snapshots through Emit; no Wails/runtime dependency leaks into this package.
+func cloneAgents(in []AgentInfo) []AgentInfo { return append([]AgentInfo(nil), in...) }
+
 type Watcher struct {
-	mu     sync.RWMutex
-	cache  []AgentInfo
-	sig    string
-	active bool
-	fetch  func() ([]AgentInfo, string)
-	emit   func([]AgentInfo)
-	cancel context.CancelFunc
-	done   chan struct{}
+	lifecycleMu sync.Mutex
+	running     bool
+	cancel      context.CancelFunc
+	done        chan struct{}
+	cacheMu     sync.RWMutex
+	cache       []AgentInfo
+	sig         string
+	fetch       Fetcher
+	emit        func([]AgentInfo)
 }
 
-func NewWatcher(emit func([]AgentInfo)) *Watcher {
-	return &Watcher{fetch: FetchFull, emit: emit, done: make(chan struct{})}
+func NewWatcher(emit func([]AgentInfo)) *Watcher { return NewWatcherWithFetcher(FetchFull, emit) }
+func NewWatcherWithFetcher(fetch Fetcher, emit func([]AgentInfo)) *Watcher {
+	if fetch == nil {
+		fetch = FetchFull
+	}
+	return &Watcher{fetch: fetch, emit: emit}
 }
 
-func (w *Watcher) Start(ctx context.Context) {
-	if w.cancel != nil {
+func (w *Watcher) Start(parent context.Context) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	w.lifecycleMu.Lock()
+	if w.running {
+		w.lifecycleMu.Unlock()
 		return
 	}
-	ctx, w.cancel = context.WithCancel(ctx)
-	go func() {
-		defer close(w.done)
-		fail := 0
-		for {
-			list, raw := w.fetch()
-			interval := 2 * time.Second
-			if list == nil {
-				fail++
-				if fail >= 3 {
-					interval = 5 * time.Second
-				}
-			} else {
-				fail = 0
-				sig := Signature(list)
-				w.mu.Lock()
-				changed := sig != w.sig
-				w.cache, w.sig, w.active = list, sig, len(list) > 0
-				active := w.active
-				w.mu.Unlock()
-				if len(list) > 0 {
-					DebugLog("watch raw=" + raw)
-				}
-				if changed && w.emit != nil {
-					DebugLog("状态变化，push agents:update n=" + fmt.Sprint(len(list)))
-					w.emit(list)
-				}
-				if active {
-					interval = time.Second
-				}
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(interval):
-			}
-		}
-	}()
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	w.running, w.cancel, w.done = true, cancel, done
+	w.lifecycleMu.Unlock()
+	go w.run(ctx, done)
 }
 
 func (w *Watcher) Stop() {
-	if w.cancel == nil {
+	w.lifecycleMu.Lock()
+	if !w.running {
+		w.lifecycleMu.Unlock()
 		return
 	}
-	w.cancel()
-	<-w.done
-	w.cancel = nil
+	cancel, done := w.cancel, w.done
+	w.lifecycleMu.Unlock()
+	cancel()
+	<-done
+	w.lifecycleMu.Lock()
+	if w.done == done {
+		w.running, w.cancel, w.done = false, nil, nil
+	}
+	w.lifecycleMu.Unlock()
 }
 
-func (w *Watcher) Get() []AgentInfo {
-	w.mu.RLock()
-	c, sig := append([]AgentInfo(nil), w.cache...), w.sig
-	w.mu.RUnlock()
-	if sig != "" {
-		return c
+func (w *Watcher) run(ctx context.Context, done chan struct{}) {
+	defer close(done)
+	fail := 0
+	for {
+		interval := w.pollOnce(ctx, &fail)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		case <-timer.C:
+		}
 	}
-	list, raw := w.fetch()
-	w.mu.Lock()
-	w.cache, w.sig, w.active = list, Signature(list), len(list) > 0
-	w.mu.Unlock()
+}
+
+func (w *Watcher) pollOnce(ctx context.Context, fail *int) time.Duration {
+	list, raw := w.fetch(ctx)
+	if list == nil {
+		(*fail)++
+		if *fail >= 3 {
+			return 5 * time.Second
+		}
+		return 2 * time.Second
+	}
+	*fail = 0
+	list = cloneAgents(list)
+	sig := Signature(list)
+	w.cacheMu.Lock()
+	changed := sig != w.sig
+	w.cache, w.sig = cloneAgents(list), sig
+	w.cacheMu.Unlock()
+	if len(list) > 0 {
+		DebugLog("watch raw=" + raw)
+	}
+	if changed && w.emit != nil {
+		DebugLog("状态变化，push agents:update n=" + fmt.Sprint(len(list)))
+		w.emit(cloneAgents(list))
+	}
+	if len(list) > 0 {
+		return time.Second
+	}
+	return 2 * time.Second
+}
+
+func (w *Watcher) Snapshot() []AgentInfo {
+	w.cacheMu.RLock()
+	defer w.cacheMu.RUnlock()
+	return cloneAgents(w.cache)
+}
+
+func (w *Watcher) Get() []AgentInfo { return w.GetContext(context.Background()) }
+func (w *Watcher) GetContext(ctx context.Context) []AgentInfo {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if got := w.Snapshot(); len(got) > 0 {
+		return got
+	}
+	list, raw := w.fetch(ctx)
+	list = cloneAgents(list)
+	w.cacheMu.Lock()
+	w.cache, w.sig = cloneAgents(list), Signature(list)
+	w.cacheMu.Unlock()
 	DebugLog("GetAgents 首次拉取 len=" + fmt.Sprint(len(list)) + " raw=" + raw)
-	return list
+	return cloneAgents(list)
 }

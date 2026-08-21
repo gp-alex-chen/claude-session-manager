@@ -144,6 +144,10 @@ func (a *App) GetAgents() []agent.AgentInfo {
 	if a.watcher == nil {
 		a.watcher = agent.NewWatcher(nil)
 	}
-	return a.watcher.Get()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.watcher.GetContext(ctx)
 }
 func (a *App) GetVersion() string { return Version }
