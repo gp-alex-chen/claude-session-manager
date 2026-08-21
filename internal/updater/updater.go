@@ -44,7 +44,7 @@ type Release struct {
 
 // Info 检查结果，直接序列化给前端展示/决策。
 type Info struct {
-	// Current 本机版本（由 main.Version 经 -ldflags 注入；未注入为 "dev"）
+	// Current 本机版本（由 internal/app.Version 经 -ldflags 注入；未注入为 "dev"）
 	Current string `json:"current"`
 	// Latest 最新可用版本号（无则为空串）
 	Latest string `json:"latest"`
@@ -62,7 +62,7 @@ type ProgressFunc func(percent int, downloaded, total int64)
 // Updater 面向具体仓库/资产的更新器。
 type Updater struct {
 	Owner, Repo, Asset string // 仓库与资产名
-	Current            string // 本机版本（main.Version）
+	Current            string // 本机版本（internal/app.Version）
 	IncludePrerelease  bool   // 是否把 GitHub 预发布（v*-pre / v*-rc）也当作可更新目标
 	Client             *http.Client
 }

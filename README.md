@@ -3,7 +3,7 @@
 真·终端内嵌 GUI：**Go (Wails v2) + xterm.js + ConPTY**。
 左侧会话列表，右侧多会话标签式真终端——每个会话的 claude 进程常驻后台，随时切换互不关闭。
 
-> **维护/踩坑/扩展经验见 [`EXPERIENCE.md`](EXPERIENCE.md)**（含完整问题-修复时间线）。
+> **维护/踩坑/扩展经验见 [`docs/maintenance.md`](docs/maintenance.md)**（含完整问题-修复时间线）。
 
 ## 功能
 
@@ -25,18 +25,17 @@
 
 ```
 main.go             Wails 入口（embed frontend/dist）
-app.go              App 绑定 + 多会话 ConPTY 管理（token 路由 + 幂等关闭）
-app_agents.go       App 方法：常驻状态监视器 / GetAgents / DebugLog
-app_favorites.go    App 方法：重命名 / 归档 / 恢复
-app_update.go       App 方法：GetVersion / CheckForUpdate / UpdateToLatest（一键更新）
+internal/app/       Wails 绑定与业务编排
+internal/terminal/  ConPTY 生命周期、输入输出与 token 管理
 internal/session/   会话解析（~/.claude/projects/**/*.jsonl）
 internal/agent/     claude agents --json 查询 + 调试日志
-internal/favorites/ 本地状态 favorites.json（别名/归档/收藏）
+internal/state/     本地状态 favorites.json/open-sessions.json/settings.json
+internal/notify/    Windows 提示音
 internal/updater/   更新器：GitHub Releases 检查 / 下载 / 自替换 / 自动重启
 frontend/           xterm.js + esbuild 打包
-wailsjs/            Go 绑定（与 wails generate 同格式）
+frontend/wailsjs/   Wails 生成绑定
 assets/ + rsrc_windows_amd64.syso   图标
-EXPERIENCE.md       项目经验与维护手册（务必先读）
+docs/maintenance.md 项目经验与维护手册（务必先读）
 ```
 
 ## 本地构建
@@ -47,8 +46,8 @@ npm install
 npm run build          # 产出 frontend/dist（含 index.html）
 go mod tidy
 # 注意：必须带 production tag！否则 Wails 会编译进"错误框占位实现"
-# -X main.Version=... 注入版本号（更新器"当前版本"比对的依据）
-go build -tags "webview2 production" -ldflags "-s -w -H windowsgui -X main.Version=v0.2-wails" -o claude-terminal.exe .
+# -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=... 注入版本号（更新器"当前版本"比对的依据）
+go build -tags "webview2 production" -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=v0.2-wails" -o claude-terminal.exe .
 ```
 
 > `-H windowsgui`：GUI 子系统，双击不闪黑窗。需要 WebView2 Runtime（Win10/11 一般已带）。
@@ -62,7 +61,7 @@ go build -tags "webview2 production" -ldflags "-s -w -H windowsgui -X main.Versi
   `claude-terminal.exe` 并发布为 GitHub Release（`-pre`/`-rc` 结尾标为预发布）。
 - **检查**：应用内「⚙ 设置 → 更新 → 检查更新」→ 后端查 GitHub API 列出 releases，只挑
   `v*-wails` 的**正式版**（跳过预发布与 fyne 版 tag），语义版本号最高者为"最新版"。
-- **比较**：最新版 > 当前版本（`-X main.Version=...` 注入的值；未注入的 "dev" 一律提示可更新）才算有更新。
+- **比较**：最新版 > 当前版本（`-X .../internal/app.Version=...` 注入的值；未注入的 "dev" 一律提示可更新）才算有更新。
 - **更新**：点击后流式下载 exe（`update:progress` 事件实时百分比）→ 校验 PE 头 →
   持久化当前打开的会话 → 关闭所有 ConPTY → 自替换（当前 exe 改名为 `.old`，新版落地到原名）
   → 自动启动新版并退出本进程；新版启动时自动清理 `.old`/`.new` 残留。

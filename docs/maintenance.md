@@ -19,7 +19,7 @@ app_favorites.go   App 方法：重命名 / 归档 / 恢复
 app_update.go      App 方法：GetVersion / CheckForUpdate / UpdateToLatest（一键更新）
 internal/session/  会话解析：~/.claude/projects/**/*.jsonl
 internal/agent/    claude agents --json 查询（CREATE_NO_WINDOW）+ 调试日志
-internal/favorites/ 本地状态：favorites.json（别名/软删除/收藏）
+internal/state/     本地状态：favorites.json/open-sessions.json/settings.json
 internal/updater/  更新器：GitHub Releases 检查 / 下载 / 自替换 / 自动重启
 frontend/          xterm.js + esbuild 打包（src -> dist）
 wailsjs/           手写 Go 绑定（与 wails generate 输出同格式）
@@ -51,9 +51,9 @@ npm run build          # esbuild -> dist/（index.html 一并复制）
 
 # 后端 —— 必须带 webview2 production 两个 tag！
 cd ..
-go build -tags "webview2 production" -ldflags "-s -w -H windowsgui -X main.Version=v0.2-wails" -o claude-terminal.exe .
+go build -tags "webview2 production" -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=v0.2-wails" -o claude-terminal.exe .
 # 调试用控制台版（可捕获 stderr 日志）：
-go build -tags "webview2 production" -ldflags "-s -w -X main.Version=dev" -o claude-terminal-console.exe .
+go build -tags "webview2 production" -ldflags "-s -w -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=dev" -o claude-terminal-console.exe .
 
 # 测试
 go test ./...          # 需要 claude 在 PATH（TestFetchAgents 会真调 agents --json）
@@ -127,7 +127,7 @@ go test ./...          # 需要 claude 在 PATH（TestFetchAgents 会真调 agen
 
 1. **后端**：`app.go` 或新文件加 `func (a *App) Xxx(...) (T, error)`。
    - 多会话操作记得按 token 从 `a.terms` 取，涉及关闭走 `ptyRef.close()`（幂等）。
-2. **绑定**：`wailsjs/go/main/App.js` 加对应 `export function Xxx(...) { return window['go']['main']['App']['Xxx'](...); }`。
+2. **绑定**：`frontend/wailsjs/go/app/App.js` 加对应 `export function Xxx(...) { return window['go']['app']['App']['Xxx'](...); }`。
 3. **前端**：`frontend/src/main.js` 顶部 import；调用即可（返回值是 Promise）。
 4. 需要后端主动通知 → `runtime.EventsEmit(a.ctx, "事件名", 参数...)`，前端 `window.runtime.EventsOn(...)`。
 5. 重新构建：前端 `npm run build` → 后端 `go build -tags "webview2 production" ...`。
@@ -136,7 +136,7 @@ go test ./...          # 需要 claude 在 PATH（TestFetchAgents 会真调 agen
 
 - 版本号 = git tag，形如 `v0.2-wails`（正式版）或 `v0.2-wails-rc`（预发布）。
 - `git tag v0.2-wails && git push origin v0.2-wails` → CI（wails-build.yml）构建并把
-  `claude-terminal.exe` 发布为 GitHub Release，`-X main.Version=v0.2-wails` 自动注入。
+  `claude-terminal.exe` 发布为 GitHub Release，`-X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=v0.2-wails` 自动注入。
 - 更新器只认 `v*-wails` 正式版：多版本并存时取语义版本最高者；预发布（GitHub
   `prerelease=true`，CI 按 `-pre/-rc` 后缀标）默认不提示，避免把测试版推给用户。
 - 想要更多人"收到更新"，发布新 tag 即可；无需改代码。

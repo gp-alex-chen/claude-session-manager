@@ -16,14 +16,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25.0' # 与 go.mod 一致
           cache-dependency-path: go.sum
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -47,11 +47,11 @@ jobs:
           [[ "${VER}" == v* ]] || VER="dev-${VER}"
           echo "version=${VER}"
           go build -tags "webview2 production" \
-            -ldflags "-s -w -H windowsgui -X main.Version=${VER}" \
+            -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=${VER}" \
             -o claude-terminal.exe .
 
       - name: 上传产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: claude-terminal-windows
           path: claude-terminal.exe
