@@ -135,9 +135,9 @@ export function createSettingsController(deps) {
   }
 
   function open() {
-    const willOpen = settingsMenu.style.display === 'none';
+    const isOpen = settingsMenu.style.display === 'block';
     hide();
-    if (!willOpen) return;
+    if (isOpen) return;
     const rect = settingsButton.getBoundingClientRect();
     settingsMenu.style.left = rect.left + 'px';
     settingsMenu.style.bottom = (windowRef.innerHeight - rect.top + 4) + 'px';

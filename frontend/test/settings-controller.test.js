@@ -152,6 +152,35 @@ test('shell selection validates pwsh and preserves menu on failure', async () =>
   await childWith(fixtureData.settingsMenu, 'shell', 'pwsh').listeners.get('click')();
   assert.equal(fixtureData.settingsMenu.style.display, 'block');
   assert.match(fixtureData.statuses.at(-1).message, /切换 Shell 失败/);
+
+  const success = fixture({
+    ShellInstalled: async () => true,
+    SetShell: async () => {},
+  });
+  await success.controller.build();
+  success.settingsMenu.style.display = 'block';
+  await childWith(success.settingsMenu, 'shell', 'pwsh').listeners.get('click')();
+  assert.equal(success.settingsMenu.style.display, 'none');
+  assert.match(success.statuses.at(-1).message, /底层 Shell 已切换: pwsh/);
+});
+
+test('first settings click opens CSS-hidden menu and second click closes it', async () => {
+  const fixtureData = fixture({ GetShell: async () => { throw new Error('offline'); } });
+  fixtureData.settingsMenu.style.display = '';
+  fixtureData.controller.start();
+  let stopped = false;
+  await fixtureData.settingsButton.listeners.get('click')({
+    stopPropagation: () => { stopped = true; },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(stopped, true);
+  assert.equal(fixtureData.settingsMenu.style.display, 'block');
+  assert.equal(fixtureData.settingsMenu.style.left, '10px');
+  assert.ok(fixtureData.settingsMenu.children.length > 0);
+
+  fixtureData.settingsButton.listeners.get('click')({ stopPropagation() {} });
+  assert.equal(fixtureData.settingsMenu.style.display, 'none');
 });
 
 test('pwsh fallback note is shown when configured shell is unavailable', async () => {
@@ -161,6 +190,12 @@ test('pwsh fallback note is shown when configured shell is unavailable', async (
   });
   await fixtureData.controller.build();
   assert.ok(fixtureData.settingsMenu.children.some((child) => child.textContent.includes('cmd 兜底')));
+});
+
+test('shell read failure safely selects cmd', async () => {
+  const fixtureData = fixture({ GetShell: async () => { throw new Error('offline'); } });
+  await fixtureData.controller.build();
+  assert.match(childWith(fixtureData.settingsMenu, 'shell', 'cmd').className, /cur/);
 });
 
 test('stale shell builds cannot append after a newer menu build', async () => {
