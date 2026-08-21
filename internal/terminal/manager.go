@@ -5,29 +5,56 @@ import (
 	"encoding/base64"
 	"errors"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/UserExistsError/conpty"
 )
 
+// Pty is the small process surface needed by Manager. Tests inject a fake;
+// production uses the adapter around conpty.ConPty below.
+type Pty interface {
+	Read([]byte) (int, error)
+	Write([]byte) (int, error)
+	Resize(int, int) error
+	Close() error
+}
+
+// StartFunc creates one PTY. The manager holds lifecycleMu while invoking it,
+// so starts, kills, and shutdown cannot race each other.
+type StartFunc func(cmdLine, dir string, cols, rows int, env []string) (Pty, error)
+
 type ptyRef struct {
 	mu     sync.Mutex
-	pty    *conpty.ConPty
+	opMu   sync.Mutex // Write/Resize/Close are mutually exclusive at the call site.
+	pty    Pty
 	closed bool
 }
 
 func (r *ptyRef) Close() {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed || r.pty == nil {
+		r.mu.Unlock()
 		return
 	}
 	r.closed = true
-	_ = r.pty.Close()
+	p := r.pty
+	r.mu.Unlock()
+	_ = p.Close()
 }
-func (r *ptyRef) Closed() bool { r.mu.Lock(); defer r.mu.Unlock(); return r.closed }
+
+func (r *ptyRef) Closed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
+}
+
 func (r *ptyRef) Write(p []byte) (int, error) {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
 	r.mu.Lock()
 	pty, closed := r.pty, r.closed
 	r.mu.Unlock()
@@ -36,38 +63,104 @@ func (r *ptyRef) Write(p []byte) (int, error) {
 	}
 	return pty.Write(p)
 }
-func (r *ptyRef) Resize(c, rows int) error {
+
+func (r *ptyRef) Resize(cols, rows int) error {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
 	r.mu.Lock()
 	pty, closed := r.pty, r.closed
 	r.mu.Unlock()
 	if pty == nil || closed {
 		return nil
 	}
-	return pty.Resize(c, rows)
+	return pty.Resize(cols, rows)
+}
+
+// Read intentionally does not take opMu. It is the one long-lived reader and
+// must remain interruptible by Close; only short Write/Resize calls are kept
+// mutually exclusive with Close.
+func (r *ptyRef) Read(buf []byte) (int, error) {
+	r.mu.Lock()
+	pty, closed := r.pty, r.closed
+	r.mu.Unlock()
+	if pty == nil || closed {
+		return 0, errors.New("pty closed")
+	}
+	return pty.Read(buf)
 }
 
 type Callbacks struct {
 	Data func(string, string)
 	Exit func(string)
 }
+
 type Manager struct {
-	mu         sync.Mutex
-	terms      map[string]*ptyRef
-	cols, rows int
-	cb         Callbacks
-	persist    func()
+	lifecycleMu sync.Mutex // Start/Kill/CloseAll are serialized by this lock.
+	mu          sync.Mutex // protects terms, dimensions, callbacks, and hooks.
+	terms       map[string]*ptyRef
+	cols, rows  int
+	cb          Callbacks
+	start       StartFunc
+	persist     func() error
+	persistErr  func(error)
 }
 
-func (m *Manager) persistOpen() {
-	if m.persist != nil {
-		m.persist()
+func NewManager(cb Callbacks, persist func() error) *Manager {
+	return NewManagerWithStart(cb, persist, productionStart)
+}
+
+func NewManagerWithStart(cb Callbacks, persist func() error, start StartFunc) *Manager {
+	if start == nil {
+		start = productionStart
+	}
+	return &Manager{terms: make(map[string]*ptyRef), cols: 120, rows: 32, cb: cb, start: start, persist: persist}
+}
+
+func productionStart(cmdLine, dir string, cols, rows int, env []string) (Pty, error) {
+	return conpty.Start(cmdLine,
+		conpty.ConPtyDimensions(cols, rows),
+		conpty.ConPtyWorkDir(dir),
+		conpty.ConPtyEnv(env),
+	)
+}
+
+func (m *Manager) SetPersistErrorHandler(fn func(error)) {
+	m.mu.Lock()
+	m.persistErr = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) reportPersist(err error) {
+	if err == nil {
+		return
+	}
+	m.mu.Lock()
+	hook := m.persistErr
+	m.mu.Unlock()
+	if hook != nil {
+		hook(err)
 	}
 }
 
-func NewManager(cb Callbacks, persist func()) *Manager {
-	return &Manager{terms: map[string]*ptyRef{}, cols: 120, rows: 32, cb: cb, persist: persist}
+func (m *Manager) persistOpen() error {
+	if m.persist == nil {
+		return nil
+	}
+	return m.persist()
 }
-func (m *Manager) SetCallbacks(cb Callbacks) { m.mu.Lock(); m.cb = cb; m.mu.Unlock() }
+
+func (m *Manager) SetCallbacks(cb Callbacks) {
+	m.mu.Lock()
+	m.cb = cb
+	m.mu.Unlock()
+}
+
+func (m *Manager) callbacks() Callbacks {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cb
+}
+
 func (m *Manager) SetDimensions(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
@@ -83,17 +176,20 @@ func (m *Manager) IsRunning(token string) bool {
 	m.mu.Unlock()
 	return r != nil && !r.Closed()
 }
+
 func (m *Manager) OpenIDs() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]string, 0, len(m.terms))
+	ids := make([]string, 0, len(m.terms))
 	for token, r := range m.terms {
-		if !strings.HasPrefix(token, "new-") && !r.Closed() {
-			out = append(out, token)
+		if token != "" && !strings.HasPrefix(token, "new-") && r != nil && !r.Closed() {
+			ids = append(ids, token)
 		}
 	}
-	return out
+	sort.Strings(ids)
+	return ids
 }
+
 func (m *Manager) Write(token string, raw []byte) {
 	m.mu.Lock()
 	r := m.terms[token]
@@ -102,6 +198,7 @@ func (m *Manager) Write(token string, raw []byte) {
 		_, _ = r.Write(raw)
 	}
 }
+
 func (m *Manager) Resize(token string, cols, rows int) {
 	m.SetDimensions(cols, rows)
 	m.mu.Lock()
@@ -111,41 +208,49 @@ func (m *Manager) Resize(token string, cols, rows int) {
 		_ = r.Resize(cols, rows)
 	}
 }
+
 func (m *Manager) Kill(token string) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
 	r, ok := m.terms[token]
 	if ok {
 		delete(m.terms, token)
 	}
-	cb := m.cb
 	m.mu.Unlock()
-	if !ok {
+	if !ok || r == nil {
 		return
 	}
 	r.Close()
-	m.persistOpen()
-	if cb.Exit != nil {
+	m.reportPersist(m.persistOpen())
+	if cb := m.callbacks(); cb.Exit != nil {
 		cb.Exit(token)
 	}
 }
+
 func (m *Manager) CloseAll() {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
 	terms := m.terms
-	m.terms = map[string]*ptyRef{}
+	m.terms = make(map[string]*ptyRef)
 	m.mu.Unlock()
 	for _, r := range terms {
-		r.Close()
+		if r != nil {
+			r.Close()
+		}
 	}
-	m.persistOpen()
+	m.reportPersist(m.persistOpen())
 }
 
 func (m *Manager) Start(token, cmdLine, dir string) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+
 	m.mu.Lock()
-	if old := m.terms[token]; old != nil {
-		old.Close()
-		delete(m.terms, token)
-	}
 	cols, rows := m.cols, m.rows
+	old := m.terms[token]
+	start := m.start
 	m.mu.Unlock()
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, e := range os.Environ() {
@@ -154,22 +259,41 @@ func (m *Manager) Start(token, cmdLine, dir string) error {
 		}
 	}
 	env = append(env, "TERM=xterm-256color")
-	pty, err := conpty.Start(cmdLine, conpty.ConPtyDimensions(cols, rows), conpty.ConPtyWorkDir(dir), conpty.ConPtyEnv(env))
+	// Create first: if startup fails, old remains the current live instance.
+	pty, err := start(cmdLine, dir, cols, rows, env)
 	if err != nil {
 		return err
 	}
 	r := &ptyRef{pty: pty}
 	m.mu.Lock()
 	m.terms[token] = r
-	cb := m.cb
 	m.mu.Unlock()
-	m.persistOpen()
+	if old != nil {
+		old.Close()
+	}
+	if err := m.persistOpen(); err != nil {
+		m.mu.Lock()
+		if m.terms[token] == r {
+			delete(m.terms, token)
+		}
+		m.mu.Unlock()
+		r.Close()
+		m.reportPersist(err)
+		return err
+	}
+	m.readLoop(token, r)
+	return nil
+}
+
+func (m *Manager) readLoop(token string, r *ptyRef) {
 	go func() {
 		buf := make([]byte, 8192)
 		for {
-			n, err := r.pty.Read(buf)
-			if n > 0 && cb.Data != nil {
-				cb.Data(token, base64.StdEncoding.EncodeToString(buf[:n]))
+			n, err := r.Read(buf)
+			if n > 0 {
+				if cb := m.callbacks(); cb.Data != nil {
+					cb.Data(token, base64.StdEncoding.EncodeToString(buf[:n]))
+				}
 			}
 			if err != nil {
 				break
@@ -181,16 +305,15 @@ func (m *Manager) Start(token, cmdLine, dir string) error {
 		if current {
 			delete(m.terms, token)
 		}
-		cb = m.cb
 		m.mu.Unlock()
-		if current {
-			m.persistOpen()
-			if cb.Exit != nil {
-				cb.Exit(token)
-			}
+		if !current {
+			return
+		}
+		m.reportPersist(m.persistOpen())
+		if cb := m.callbacks(); cb.Exit != nil {
+			cb.Exit(token)
 		}
 	}()
-	return nil
 }
 
 func DecodeInput(b64 string) ([]byte, error) {

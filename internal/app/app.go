@@ -29,17 +29,17 @@ type App struct {
 	terms    *terminal.Manager
 	store    *state.Store
 	watcher  *agent.Watcher
-	assets   fs.FS
 	lookPath func(string) (string, error)
 }
 
-func NewApp(assets fs.FS) *App {
-	return NewAppWithStore(assets, state.Default())
+func NewApp(_ fs.FS) *App {
+	return NewAppWithStore(nil, state.Default())
 }
 
-func NewAppWithStore(assets fs.FS, store *state.Store) *App {
-	a := &App{store: store, assets: assets, lookPath: exec.LookPath}
+func NewAppWithStore(_ fs.FS, store *state.Store) *App {
+	a := &App{store: store, lookPath: exec.LookPath}
 	a.terms = terminal.NewManager(terminal.Callbacks{}, a.persistOpenSessions)
+	a.terms.SetPersistErrorHandler(func(err error) { a.DebugLog("持久化打开会话失败: " + err.Error()) })
 	return a
 }
 func (a *App) startup(ctx context.Context) {
@@ -114,10 +114,11 @@ func (a *App) TermWrite(token, b64 string) {
 func (a *App) TermResize(token string, cols, rows int) { a.terms.Resize(token, cols, rows) }
 func (a *App) TermKill(token string)                   { a.terms.Kill(token) }
 func (a *App) NotifyBeep()                             { notify.Beep() }
-func (a *App) persistOpenSessions() {
-	if a.store != nil && a.terms != nil {
-		_ = a.store.SaveOpen(a.terms.OpenIDs())
+func (a *App) persistOpenSessions() error {
+	if a.store == nil || a.terms == nil {
+		return nil
 	}
+	return a.store.SaveOpen(a.terms.OpenIDs())
 }
 func (a *App) claudeCmd(sessionArgs string) string {
 	args := strings.TrimSpace(sessionArgs)
