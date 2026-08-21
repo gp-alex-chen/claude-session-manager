@@ -57,7 +57,10 @@ func (a *App) shutdown(context.Context) {
 func (a *App) Startup(ctx context.Context)  { a.startup(ctx) }
 func (a *App) Shutdown(ctx context.Context) { a.shutdown(ctx) }
 func (a *App) ListSessions() []SessionInfo {
-	st := a.store.Load()
+	st, err := a.store.Load()
+	if err != nil {
+		a.DebugLog("读取 favorites.json 失败: " + err.Error())
+	}
 	hidden, aliases := st.HiddenSet(), st.Aliases
 	out := []SessionInfo{}
 	for _, s := range session.ScanAll() {
@@ -73,7 +76,10 @@ func (a *App) ListSessions() []SessionInfo {
 	return out
 }
 func (a *App) ListHiddenSessions() []SessionInfo {
-	st := a.store.Load()
+	st, err := a.store.Load()
+	if err != nil {
+		a.DebugLog("读取 favorites.json 失败: " + err.Error())
+	}
 	hidden := st.HiddenSet()
 	out := []SessionInfo{}
 	for _, s := range session.ScanAll() {

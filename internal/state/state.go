@@ -1,11 +1,11 @@
-// Package state persists the small amount of application-owned state.
-// The JSON shapes and default location intentionally remain compatible with
-// the original fyne-sidebar implementation.
+// Package state persists application-owned JSON while retaining the original
+// favorites.json/open-sessions.json/settings.json formats.
 package state
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,21 +44,6 @@ func (s *Store) favPath() string   { return filepath.Join(s.dir, "favorites.json
 func (s *Store) openPath() string  { return filepath.Join(s.dir, "open-sessions.json") }
 func (s *Store) shellPath() string { return filepath.Join(s.dir, "settings.json") }
 
-func (s *Store) Load() *FavState {
-	st := &FavState{Aliases: map[string]string{}}
-	b, err := os.ReadFile(s.favPath())
-	if err != nil {
-		return st
-	}
-	if json.Unmarshal(b, st) != nil {
-		return &FavState{Aliases: map[string]string{}}
-	}
-	if st.Aliases == nil {
-		st.Aliases = map[string]string{}
-	}
-	return st
-}
-
 func atomicWrite(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -82,64 +67,147 @@ func atomicWrite(path string, data []byte) error {
 	return atomicReplace(tmp, path)
 }
 
-func (s *Store) Save(st *FavState) error {
+func emptyState() *FavState { return &FavState{Aliases: map[string]string{}} }
+
+func normalizeState(st *FavState) *FavState {
 	if st == nil {
-		return errors.New("nil state")
+		return emptyState()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if st.Aliases == nil {
 		st.Aliases = map[string]string{}
 	}
-	b, err := json.Marshal(map[string]any{"ids": st.Ids, "aliases": st.Aliases, "hidden": st.Hidden})
+	return st
+}
+
+func loadJSON(path string, dst any) error {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, dst); err != nil {
+		return fmt.Errorf("decode %s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
+
+func (s *Store) loadLocked() (*FavState, error) {
+	st := emptyState()
+	if err := loadJSON(s.favPath(), st); err != nil {
+		return st, err
+	}
+	return normalizeState(st), nil
+}
+
+func encodeFavorites(st *FavState) ([]byte, error) {
+	st = normalizeState(st)
+	return json.Marshal(map[string]any{"ids": st.Ids, "aliases": st.Aliases, "hidden": st.Hidden})
+}
+
+func (s *Store) saveLocked(st *FavState) error {
+	b, err := encodeFavorites(st)
 	if err != nil {
 		return err
 	}
 	return atomicWrite(s.favPath(), b)
 }
 
-func (st *FavState) HiddenSet() map[string]bool {
-	m := make(map[string]bool, len(st.Hidden))
-	for _, h := range st.Hidden {
-		m[h] = true
-	}
-	return m
+// Load returns a safe default for absent, corrupt, or unreadable data and the
+// diagnostic error separately so callers can log it without crashing startup.
+func (s *Store) Load() (*FavState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadLocked()
 }
-func (st *FavState) RemoveHidden(id string) {
-	out := st.Hidden[:0]
-	for _, h := range st.Hidden {
-		if h != id {
-			out = append(out, h)
-		}
+
+// Save remains available for callers that replace the whole compatible state.
+func (s *Store) Save(st *FavState) error {
+	if st == nil {
+		return errors.New("nil state")
 	}
-	st.Hidden = out
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked(st)
+}
+
+func (s *Store) SetAlias(id, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.loadLocked()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Preserve the safe state but do not overwrite a corrupt file silently.
+		return err
+	}
+	if name == "" {
+		delete(st.Aliases, id)
+	} else {
+		st.Aliases[id] = name
+	}
+	return s.saveLocked(st)
+}
+
+func (s *Store) SetHidden(id string, hidden bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.loadLocked()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if hidden {
+		seen := false
+		out := st.Hidden[:0]
+		for _, item := range st.Hidden {
+			if item == id {
+				if seen {
+					continue
+				}
+				seen = true
+			}
+			out = append(out, item)
+		}
+		if !seen {
+			out = append(out, id)
+		}
+		st.Hidden = out
+	} else {
+		out := st.Hidden[:0]
+		for _, item := range st.Hidden {
+			if item != id {
+				out = append(out, item)
+			}
+		}
+		st.Hidden = out
+	}
+	return s.saveLocked(st)
 }
 
 func (s *Store) SaveOpen(ids []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ids = append([]string(nil), ids...)
-	sort.Strings(ids)
-	b, err := json.Marshal(map[string][]string{"ids": ids})
+	copyIDs := append([]string(nil), ids...)
+	sort.Strings(copyIDs)
+	b, err := json.Marshal(map[string][]string{"ids": copyIDs})
 	if err != nil {
 		return err
 	}
 	return atomicWrite(s.openPath(), b)
 }
-func (s *Store) LoadOpen() []string {
-	b, err := os.ReadFile(s.openPath())
-	if err != nil {
-		return nil
-	}
-	var j struct {
+
+func (s *Store) LoadOpen() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var doc struct {
 		Ids []string `json:"ids"`
 	}
-	if json.Unmarshal(b, &j) != nil {
-		return nil
+	if err := loadJSON(s.openPath(), &doc); err != nil {
+		return nil, err
 	}
-	return j.Ids
+	return doc.Ids, nil
 }
-func (s *Store) SaveShell(name string) error {
+
+func (s *Store) SetShell(name string) error {
 	if name != "cmd" && name != "pwsh" {
 		name = "cmd"
 	}
@@ -151,23 +219,36 @@ func (s *Store) SaveShell(name string) error {
 	}
 	return atomicWrite(s.shellPath(), b)
 }
-func (s *Store) Shell() string {
-	b, err := os.ReadFile(s.shellPath())
-	if err != nil {
-		return "cmd"
-	}
-	var j struct {
+
+func (s *Store) Shell() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var doc struct {
 		Shell string `json:"shell"`
 	}
-	if json.Unmarshal(b, &j) != nil || (j.Shell != "cmd" && j.Shell != "pwsh") {
-		return "cmd"
+	if err := loadJSON(s.shellPath(), &doc); err != nil {
+		return "cmd", err
 	}
-	return j.Shell
+	if doc.Shell != "cmd" && doc.Shell != "pwsh" {
+		return "cmd", fmt.Errorf("invalid shell %q", doc.Shell)
+	}
+	return doc.Shell, nil
 }
 
-func Load() *FavState             { return defaultStore.Load() }
-func Save(st *FavState) error     { return defaultStore.Save(st) }
-func LoadOpen() []string          { return defaultStore.LoadOpen() }
-func SaveOpen(ids []string) error { return defaultStore.SaveOpen(ids) }
-func Shell() string               { return defaultStore.Shell() }
-func SaveShell(name string) error { return defaultStore.SaveShell(name) }
+func (st *FavState) HiddenSet() map[string]bool {
+	m := make(map[string]bool, len(st.Hidden))
+	for _, h := range st.Hidden {
+		m[h] = true
+	}
+	return m
+}
+
+func (st *FavState) RemoveHidden(id string) {
+	out := st.Hidden[:0]
+	for _, h := range st.Hidden {
+		if h != id {
+			out = append(out, h)
+		}
+	}
+	st.Hidden = out
+}
