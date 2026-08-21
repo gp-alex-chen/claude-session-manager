@@ -104,6 +104,8 @@ test('settings dialog has stable sizing, hierarchy, and focused controls', () =>
   assert.match(menus, /height:\s*min\(500px/);
   assert.match(menus, /max-height:\s*min\(500px/);
   assert.match(menus, /settings-version[\s\S]*background:/);
+  assert.match(menus, /#settings-close[\s\S]*width:\s*38px/);
+  assert.match(menus, /#settings-close[\s\S]*height:\s*38px/);
   assert.match(menus, /settings-nav button:focus-visible/);
   assert.match(menus, /settings-theme-card:focus-visible/);
   assert.match(menus, /settings-shell-card:focus-visible/);
@@ -117,8 +119,20 @@ test('settings motion uses corporate timing and reduced-motion fallback', () => 
   assert.match(menus, /180ms/);
   assert.match(menus, /90ms/);
   assert.match(menus, /#settings-menu\.settings-overlay:not\(\[hidden\]\)/);
+  assert.match(menus, /@keyframes\s+settings-overlay-in/);
+  assert.match(menus, /@keyframes\s+settings-dialog-in/);
+  assert.match(menus, /@keyframes\s+settings-panel-in/);
+  assert.match(menus, /settings-overlay-in[\s\S]*280ms/);
+  assert.match(menus, /settings-dialog-in[\s\S]*280ms/);
+  assert.match(menus, /settings-panel-in[\s\S]*180ms/);
+  assert.match(menus, /settings-segment:active/);
+  assert.match(menus, /settings-theme-card:active/);
+  assert.match(menus, /settings-shell-card:active/);
+  assert.match(menus, /update-action:active/);
+  assert.match(menus, /settings-nav button:active/);
   assert.match(menus, /prefers-reduced-motion:\s*reduce/);
   assert.match(menus, /transition:\s*none/);
+  assert.match(menus, /animation:\s*none/);
 });
 
 test('settings layout adapts and update progress includes a track', () => {
