@@ -2,7 +2,7 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "claude-terminal",
   "outputfilename": "claude-terminal.exe",
-  "frontend:install": "npm install",
+  "frontend:install": "npm ci",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run watch",
   "wailsjsdir": "frontend/wailsjs",

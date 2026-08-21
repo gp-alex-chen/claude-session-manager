@@ -1,40 +1,68 @@
 name: wails-build
 
-# Wails + xterm.js + ConPTY 的 Windows exe
-# 每次 push 分支不再自动构建（2026-08-19 起）：只在打 v*-wails tag
-# 发布或手动触发时构建
-# Wails 版本使用 v*-wails tag 发布；tag 是仓库级，不按分支过滤。
 on:
+  pull_request:
+    branches: [main]
   push:
+    branches: [main]
     tags: ['v*-wails']
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
-
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.0' # 与 go.mod 一致
+          go-version: '1.25.0'
+          cache: true
           cache-dependency-path: go.sum
-
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test and build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Test Go packages
+        run: go test ./...
+      - name: Vet Go packages
+        run: go vet ./...
 
-      - name: 构建前端（xterm.js + esbuild）
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-wails')) }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.0'
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
         working-directory: frontend
         run: |
           npm ci
           npm run build
-
-      - name: 交叉编译 Windows exe（Wails 纯 Go，无需 CGO）
-        working-directory: .
+      - name: Cross-compile Windows executable
         shell: bash
         env:
           GOOS: windows
@@ -42,25 +70,19 @@ jobs:
           CGO_ENABLED: '0'
           REF: ${{ github.ref_name }}
         run: |
-          # 版本号：打 tag（v*-wails）时 = tag 本身；手动 dispatch 时 = dev-<分支>
           VER="${REF}"
           [[ "${VER}" == v* ]] || VER="dev-${VER}"
-          echo "version=${VER}"
           go build -tags "webview2 production" \
             -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=${VER}" \
             -o claude-terminal.exe .
-
-      - name: 上传产物
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v5
         with:
           name: claude-terminal-windows
           path: claude-terminal.exe
-
-      - name: 发布 GitHub Release（仅打 v*-wails tag 时）
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish GitHub Release for wails tag
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref_name, '-wails') }}
         uses: softprops/action-gh-release@v2
         with:
           files: claude-terminal.exe
           generate_release_notes: true
-          # 仅以 -pre / -rc 结尾的 tag 标为预发布（v0.1-wails 为正式版）
-          prerelease: ${{ endsWith(github.ref_name, '-pre') || endsWith(github.ref_name, '-rc') }}

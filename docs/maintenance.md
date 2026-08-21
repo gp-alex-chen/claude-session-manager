@@ -1,187 +1,126 @@
-# Claude 会话管理（Wails）· 项目经验与维护手册
+# 维护与扩展手册
 
-> 记录本项目的架构、构建、测试、踩坑与扩展方法，供任何环境后续接手。
-> 时间线内的问题均有原因 + 修复，可快速定位同类问题。
+本项目是 Windows-only 的 Wails v2 应用：`main.go` 是 embed/Wails composition root，业务绑定和编排位于 `internal/app`，前端入口只负责创建 `app/bootstrap.js` 并启动应用。
 
----
-
-## 1. 项目一句话
-
-**Go (Wails v2) + xterm.js + ConPTY** 的 Claude 会话管理终端：左侧会话列表（按项目分组、折叠、重命名、软删除、运行状态徽标），右侧多会话标签式真终端（每个会话独立 ConPTY 常驻，随时切换互不关闭）。
-
-## 2. 技术栈与目录
+## 架构与数据流
 
 ```
-main.go            Wails 入口（embed frontend/dist，窗口配置）
-app.go             App 绑定 + 多会话 ConPTY 管理：terms map[token]*ptyRef
-app_agents.go      App 方法：常驻状态监视器 / GetAgents / DebugLog
-app_favorites.go   App 方法：重命名 / 归档 / 恢复
-app_update.go      App 方法：GetVersion / CheckForUpdate / UpdateToLatest（一键更新）
-internal/session/  会话解析：~/.claude/projects/**/*.jsonl
-internal/agent/    claude agents --json 查询（CREATE_NO_WINDOW）+ 调试日志
-internal/state/     本地状态：favorites.json/open-sessions.json/settings.json
-internal/updater/  更新器：GitHub Releases 检查 / 下载 / 自替换 / 自动重启
-frontend/          xterm.js + esbuild 打包（src -> dist）
-wailsjs/           手写 Go 绑定（与 wails generate 输出同格式）
-assets/ + rsrc_windows_amd64.syso   图标（Go 构建自动链接）
-favorites_test.go / repro_diagnostic_test.go / internal/agent/agents_test.go
-run.log            完整问题-修复时间线（本手册的精炼版）
+main.go
+  └─ frontend/src/main.js
+       └─ app/bootstrap.js
+            ├─ terminal controller
+            ├─ agent controller
+            ├─ session controller
+            ├─ settings controller
+            └─ update controller
 ```
 
-> 目录整理约定（2026-08-18）：Wails 工程位于仓库根目录，绑定方法必须留在根目录 main 包
-> （wailsjs 绑定 main.App；且 `//go:embed all:frontend/dist` 不支持 `../`，
-> 入口必须留在根），纯逻辑按领域拆入 `internal/` 子包。
+后端职责按领域划分：
 
-数据流：
+- `internal/app`：Wails 公开方法、生命周期、业务编排和更新绑定。
+- `internal/terminal`：ConPTY 启停、读写、resize、close、token 和命令外的进程边界；不依赖 Wails runtime，通过 callbacks 发事件。
+- `internal/state`：兼容 `favorites.json`、`open-sessions.json`、`settings.json` 的 Store。所有读写共用互斥锁，更新在同一锁内完成，写入采用临时文件和原子替换。
+- `internal/agent`：可启动/取消的 Watcher。后端通常约 1~2 秒拉取 `claude agents --json` 并推送 `agents:update`；前端每 30 秒调用 GetAgents 作为 watcher 缓存兜底，不是每 10 秒直接轮询。
+- `internal/session`：扫描和解析 `~/.claude/projects/**/*.jsonl`。
+- `internal/notify`：Windows 提示音。
+- `internal/updater`：`v*-wails` Release 检查、下载和自替换。
+
+前端目录：
+
+- `app/bootstrap.js` 统一创建 controller、DOM、事件路由和生命周期。
+- `terminal/` 处理 xterm、输入、粘贴、resize、主题和 terminal token。
+- `agents/` 处理状态分类、完成边沿、未读徽标和提示动画。
+- `sessions/` 处理列表、分组、折叠、归档、恢复、新会话 FIFO 配对；`pairing.js` 和 `view.js` 保持纯逻辑/DOM 边界。
+- `settings/` 管理 UI theme、terminal theme、Shell 和设置菜单异步构建。
+- `updates/` 管理检查/可用/应用状态机、进度和更新菜单。
+- `state/` 是共享业务 state 的唯一来源；controller 不复制 active token、pending 或各类 Map/Set。
+- `styles/` 按 tokens、base、sidebar、menus、terminal 分层；`style.css` 仅负责导入。
+- `frontend/wailsjs/` 是提交到仓库的 Wails-compatible wrapper，`frontend/src/api/backend.js` 是前端唯一绑定边界。
+
+事件路径：
 
 ```
-ConPTY 输出 -> base64 -> EventsEmit(term:data, token, b64) -> 对应 xterm 实例
-键盘输入 -> term.onData -> base64 -> TermWrite(token, b64) -> 对应 ConPTY
-窗口缩放 -> fit addon(让出1列) -> TermResize(token, cols, rows)
-状态轮询 -> GetAgents() 每10s -> 徽标/置顶区/未读逻辑
+ConPTY -> runtime term:data/term:exit -> terminal controller -> xterm/session UI
+agent watcher -> agents:update -> agent controller -> badge/unread/toast
+window resize -> terminal controller.resizeActive -> TermResize
+update state/progress -> update controller -> settings menu
 ```
 
-## 3. 构建与测试（Windows）
+## 关键维护边界
+
+### Terminal 并发与 token
+
+`ptyRef.Close` 是幂等的；Write 和 Resize 在底层调用期间与 Close 互斥，唯一读协程允许 Close 并发中断阻塞 Read。Manager 用独立 lifecycle mutex 串行 Start/Kill/CloseAll，map/dimension/callback 由自身锁保护。
+
+Start 采用“新 PTY 成功后再替换旧 PTY”；同 token 并发启动不会泄漏。旧 reader 退出时必须做 identity check，不能删除替换后的新实例或误发旧 Exit。`OpenIDs` 排序并过滤 `new-*`、nil 和 closed 实例。
+
+前端新建会话先使用 `new-*` token。真实 JSONL ID 出现后，session controller 按目录 FIFO 建立 `realToNew/newToReal` 映射，并更新临时终端标签。关闭或归档映射会话时先把真实 ID 加入 `closedTokens`，再关闭临时 token；重新打开真实 ID 时由 openTab 清除该抑制，避免永久屏蔽 agents 完成事件。
+
+### Agent watcher
+
+Watcher 的 Start/Stop 可以安全重复；每次启动创建新的 child context、cancel 和 done channel。FetchFull 使用传入 context 和 10 秒超时，Stop 可以取消正在执行的命令。缓存有 ready 语义，成功的空列表也是已就绪；Get/Snapshot 和 emit 都返回副本，避免调用方修改缓存。
+
+前端首个 agent 快照只建立基线。`working/queued -> done/消失` 和 interactive `busy -> idle` 产生一次完成提示；interactive 非忙消失产生会话结束提示。重新忙碌会清除结束闩锁。当前会话不标未读，后台会话标未读；手动关闭的真实 ID 由 `closedTokens` 抑制陈旧事件。
+
+### State 事务
+
+使用 `Store.SetAlias`、`SetHidden`、`SaveOpen`、`SetShell`，不要在 App 中写成 Load→修改→Save 两段事务。不存在的文件返回安全默认且无错误；损坏 JSON 或真实 I/O 错误同时返回安全默认和诊断错误。App 记录诊断后继续使用安全默认；用户触发的保存错误向 Wails 返回。
+
+JSON 格式必须保持：
+
+```json
+// favorites.json
+{"ids": [], "aliases": {}, "hidden": []}
+// open-sessions.json
+{"ids": []}
+// settings.json
+{"shell": "cmd"}
+```
+
+默认目录是 exe 同目录；测试通过 TempDir/注入目录隔离用户数据。临时文件替换失败也必须向上返回并清理残留。
+
+### Update 状态机
+
+前端更新 controller 的模式是 `idle -> checking -> ready -> applying -> idle`。检查失败、下载失败、应用失败都解除 busy/disabled 并允许重试；ready 信息跨菜单关闭/重开保留。进度经过 clamp，`重启中` 显示 toast。后端更新前持久化打开清单并关闭 ConPTY，更新成功后新进程恢复会话。
+
+更新源只认 `v*-wails` 正式 Release；`.old`/`.new` 是 Windows 自替换的临时残留，启动时清理。更新只做非空和 MZ 头等粗校验，不做签名或哈希验证；exe 目录需要可写。
+
+## 构建、测试与环境
+
+前置条件：Windows 10/11、WebView2 Runtime、Go 1.25、Node 22/npm，以及需要运行真实集成测试时在 PATH 中的 Claude CLI。普通 Go/Node 测试不依赖真实 Claude 或 ConPTY。
 
 ```powershell
-# 前端
 cd frontend
-npm install
-npm run build          # esbuild -> dist/（index.html 一并复制）
-
-# 后端 —— 必须带 webview2 production 两个 tag！
+npm ci
+npm test
+npm run build
 cd ..
-go build -tags "webview2 production" -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=v0.2-wails" -o claude-terminal.exe .
-# 调试用控制台版（可捕获 stderr 日志）：
-go build -tags "webview2 production" -ldflags "-s -w -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=dev" -o claude-terminal-console.exe .
-
-# 测试
-go test ./...          # 需要 claude 在 PATH（TestFetchAgents 会真调 agents --json）
+go test ./...
+go vet ./...
+go build -tags "webview2 production" `
+  -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=dev" `
+  -o claude-terminal.exe .
 ```
 
-开发环境备注：
-- go.mod 要求 go 1.25.0；本机 go1.23.4 + GOTOOLCHAIN=auto 会自动用本地缓存的 toolchain（`$USERPROFILE\go\pkg\mod\golang.org\toolchain*`）。
-- 建议缓存指向项目内：`GOPATH=D:\plug\.gopath GOCACHE=D:\plug\.gocache GOTMPDIR=D:\plug\.gotmp`。
-- Windows 构建纯 Go 无 CGO；需要 WebView2 Runtime（Win10/11 自带）。
+真实环境测试使用明确的 integration tag：
 
-## 4. 运行依赖
-
-- `claude` CLI 在 PATH（npm 全局或 WinGet），版本实测 2.1.234。
-- `~/.claude/projects/**/*.jsonl` 会话数据源。
-- `favorites.json` 在 **exe 同目录**（与 fyne-sidebar 版同格式，可共用）。
-
-## 5. 关键设计决策
-
-### 5.1 多会话：token 体系
-- 每个会话一个 `ptyRef`（ConPTY 包装），存于 `App.terms map[token]*ptyRef`。
-- token：恢复的会话 = 会话 ID（UUID）；新建会话 = `new-<时间戳>`。
-- 事件携带 token 路由到正确前端终端：`term:data(token, b64)` / `term:exit(token)`。
-- 切换会话不关闭旧 ConPTY，进程后台常驻。
-
-### 5.2 ptyRef：Close 幂等（防堆损坏闪退）
-- 背景：恢复第二个会话时 killLocked 强关第一个 ConPTY，其读协程退出时还会再 Close 一次 → 句柄值被新会话复用 → 第二次 CloseHandle 关掉新会话活句柄 → **0xc0000374 堆损坏闪退**。
-- 修复：`ptyRef.close()` 内置 closed 标记 + 锁，**Close 只真正执行一次**；写/缩放走后端检查，不再碰已关闭句柄。
-
-### 5.3 状态监控语义（2026-08-18 实测）
-`claude agents --json` 真实 schema：
-
-```json
-{ "id","cwd","kind","startedAt","sessionId","name",
-  "state":"working|done|blocked", "status":"busy|idle|waiting",
-  "waitingFor","pid" }
+```powershell
+go test -tags integration ./internal/terminal  # Windows ConPTY
+go test -tags integration ./internal/agent     # claude agents --json
 ```
 
-| 前端状态 | 判定 | 显示 |
-|---|---|---|
-| 正在执行任务 | state=working / status=busy | 绿色心电图跳动 |
-| 交互会话打开但空闲 | kind=interactive 非 busy | 绿色静态 ◉ |
-| 等待权限批准 | state=blocked / status=waiting | 橙色 ⚠ 闪烁 |
-| 后台待命/排队 | kind=background 非 busy | 橙色 ● |
-| 已完成 | state=done（留在 active 列表一段时间！） | 灰点 + 未读 |
-| 未运行 | 不在列表 | 灰点 |
+普通测试重点覆盖：state TempDir/事务、terminal fake PTY 与锁边界、agent fake Fetcher 取消、App 命令/存储编排、前端 Node 内置测试和 fake DOM。修改前端后必须先 `npm run build`，因为 `frontend/dist` 会被 Go embed。
 
-关键：**"完成"判定靠 state 从 working → done 的转变，不是"列表消失"**（done 任务会滞留 active 列表）。
+## 扩展流程
 
-### 5.4 favorites.json（与 fyne 版共用格式）
+1. 在 `internal/app` 增加导出 Wails 方法或对应领域编排；纯逻辑优先放入 `internal/*` 并补 Go 单元测试。
+2. 更新或用 Wails CLI 重新生成 `frontend/wailsjs` wrapper；生成后审查方法集和路径，不要提交无关 model 文件。
+3. 在 `frontend/src/api/backend.js` 保持唯一绑定边界，并同步 Node binding test。
+4. 把 UI 行为放入对应领域 controller，通过 bootstrap 注入依赖和事件；不要再把业务逻辑堆进 `main.js`。
+5. 补 Node fake/controller 测试，必要时补 Windows integration test；运行 `npm test`、`npm run build`、`go test ./...`、`go vet ./...`。
 
-```json
-{"ids":[收藏], "aliases":{会话ID:别名}, "hidden":[软删除ID]}
-```
-- 重命名 = 本地别名，不碰 claude 数据；真正改名用 claude 内 `/rename`。
-- 删除 = 软隐藏（不物理删文件），UI 提供「已删」面板恢复。
+## 发布与限制
 
-## 6. 踩坑与修复（按时间线）
+CI 对 PR/main 只做 validate；`v*-wails` tag 或手动触发才运行 Windows 交叉构建。tag 构建上传 `claude-terminal.exe`，只有 tag 发布 GitHub Release；手动触发只保留 artifact。
 
-| # | 问题 | 根因 | 修复 |
-|---|---|---|---|
-| 1 | 启动弹 "wails applications will not build..." | `-tags webview2` 缺 `production`，wails 编译进错误框占位实现 | 构建加 `production` tag |
-| 2 | WebView2 0x800700AA 起不来 | 沙箱/受限环境（浏览器子进程拉不起来） | 确认只是测试环境问题，真机正常 |
-| 3 | 恢复第二个会话闪退 | ConPTY 双重关闭 → 句柄复用冲突 → 堆损坏 0xc0000374 | ptyRef 幂等 Close |
-| 4 | 滚动条挡内容、内容溢出 | `.term-host` padding 计入 fit 测量（clientWidth 含 padding）→ 列数偏大 | 留白改透明 border + fit 后让出 1 列 |
-| 5 | 关标签要点两次、出现 UUID 幽灵标签 | 关闭瞬间迟到的 term:data 触发兜底 openTab(token) | closedTokens 集合拦截迟到事件 |
-| 6 | 打开闪终端、每 10s 闪一次 | 监控子进程 cmd 在 windowsgui 下新开控制台窗口 | exec 加 `CREATE_NO_WINDOW` |
-| 7 | 状态监控误判（打开=心跳） | 只看了 kind，没看 state | 实测 schema，state/status 细分语义 |
-| 8 | 任务完成无提示（心跳直接变灰） | 完成检测只认 `state=done/消失`；交互会话完成信号是 `status: busy->idle`（无 state 字段），被当成"没变化"忽略；动画收尾还强制标灰 | 检测改为"上一轮忙碌 && 本轮不再忙碌"即结束（覆盖 background working→done 与 interactive busy→idle 两种语义）；动画后按真实状态重绘；提示链 = 心跳停止动画 + 顶部 toast + 状态栏 + 提示音（MessageBeep 系统音 + Beep 三连音，双保险）+ 未读（盯着看不打扰）；agents-debug.log 诊断日志（每次轮询原始 JSON + 前端检测决策） |
-
-## 7. 扩展指南（加一个新功能的标准步骤）
-
-1. **后端**：`app.go` 或新文件加 `func (a *App) Xxx(...) (T, error)`。
-   - 多会话操作记得按 token 从 `a.terms` 取，涉及关闭走 `ptyRef.close()`（幂等）。
-2. **绑定**：`frontend/wailsjs/go/app/App.js` 加对应 `export function Xxx(...) { return window['go']['app']['App']['Xxx'](...); }`。
-3. **前端**：`frontend/src/main.js` 顶部 import；调用即可（返回值是 Promise）。
-4. 需要后端主动通知 → `runtime.EventsEmit(a.ctx, "事件名", 参数...)`，前端 `window.runtime.EventsOn(...)`。
-5. 重新构建：前端 `npm run build` → 后端 `go build -tags "webview2 production" ...`。
-
-## 7.5 发布新版本（一键更新的发布侧）
-
-- 版本号 = git tag，形如 `v0.2-wails`（正式版）或 `v0.2-wails-rc`（预发布）。
-- `git tag v0.2-wails && git push origin v0.2-wails` → CI（wails-build.yml）构建并把
-  `claude-terminal.exe` 发布为 GitHub Release，`-X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=v0.2-wails` 自动注入。
-- 更新器只认 `v*-wails` 正式版：多版本并存时取语义版本最高者；预发布（GitHub
-  `prerelease=true`，CI 按 `-pre/-rc` 后缀标）默认不提示，避免把测试版推给用户。
-- 想要更多人"收到更新"，发布新 tag 即可；无需改代码。
-
-## 8. 已知限制
-
-- claude 内 `/theme auto` 识别不到本软件终端的亮色背景：ConPTY 的
-  conhost 会拦截 claude 的 OSC 11 背景色查询并回复黑色（查询到不了
-  xterm），换亮色主题后 auto 仍判深色。曾试过 OSC 注入与自动下发
-  `/theme light`，用户要求不干预 claude 主题，已撤销并记录（run.log
-  [34][35][36]）。目前需手动在 claude 内 `/theme light` 或改
-  settings.json。
-- 终端快捷键：xterm 默认 Ctrl+V 依赖隐藏 textarea 的原生 paste 事件，
-  WebView2 下不可靠；Ctrl+Enter 会被 xterm 剥掉修饰符当普通回车。
-  已在 attachCustomKeyEventHandler 显式接管（run.log [37]）：
-  Ctrl+V/Ctrl+Shift+V/Shift+Insert=粘贴（clipboard API + execCommand
-  双保险，走 term.paste() 自动处理 \r\n 与 bracketed paste），
-  Ctrl+Enter=发送 LF。wails v2.14.0 已禁用浏览器加速键，Ctrl+R/F 不会抢键。
-- UI 日间/夜间模式（run.log [38]）：CSS 全量变量化，:root=夜间、
-  html[data-theme="light"]=日间，main.js 的 applyUiTheme() 写
-  data-theme + localStorage('ui-theme')，默认日间。设置按钮在侧边栏
-  底部左下角，菜单向上展开（按钮贴近视口底部）。终端 8 色配色
-  （--term-bg / 🎨 菜单）与 UI 模式完全独立，互不影响。
-  日后新增 UI 样式一律用 CSS 变量，禁止硬编码颜色。
-- 未读标记是内存态：重启应用后不保留（未持久化"已读/未读"）。
-- interactive 会话出现在 agents 列表的精确行为未在真机上长时间验证（设计上已兼容：busy→心跳、idle→静态绿）。
-- **一键更新（2026-08-20 新增，详见 7.5 / README「发布与更新」）**：
-  - 自更新只做**粗校验**（非空 + MZ 头），未做签名/哈希校验；仅从本仓库 Releases 下载，请勿把
-    更新源指向不可信位置。仓库公开时无需 token，GitHub API 未认证限额 60 次/小时（手动检查场景足够）。
-  - 更新会**结束当前所有 ConPTY 会话进程**（先持久化清单、新版启动自动恢复），"点完立刻重启生效"
-    是预期行为；若希望平滑，可后续改成"下载完成 → 提示下次启动生效"。
-  - 自替换利用 Windows「运行中的 exe 只许改名、不许删除」：当前 exe → `.old`，新版落地原名，
-    新版启动时删 `.old`/`.new`。若某环境连改名都失败（杀软锁文件），Apply 会回滚并报错，程序照常运行。
-  - 目录权限：exe 所在目录需可写（放 Program Files 等受保护目录会更新失败，宜用普通目录）。
-- 会话解析曾在 Wails 版与旧 Fyne 版有重复实现；当前仓库只保留 Wails 版。
-- 图标：`.syso` 由 `assets/icon.rc` + `assets/icon.ico` 生成（图标设计同 fyne 版，
-  不动设计；fyne 版 `.syso` 的组 ID 是 1，**Wails 窗口标题栏图标用
-  `winc.AppIconID=3`（internal/frontend/desktop/windows/winc/app.go）按 ID 3 从
-  exe 加载**，ID 1 只对资源管理器/任务栏有效，标题栏会回退 Wails 默认图标。
-  所以 `icon.rc` 必须是 `3 ICON "assets/icon.ico"`；重新生成：
-  在项目根执行 `windres assets/icon.rc -O coff -o rsrc_windows_amd64.syso`。
-  改图标后可用 `assets/verify-icon.ps1` 验证：ID 3 资源存在 + 提取像素为设计图。
-
-## 9. 提效提示
-
-- 任何疑似并发/句柄问题：先跑 `go test -run TestPtyRefNoDoubleClose -count=5`。
-- favorites 数据链路：`go test -run TestFavAliasAndDelete`。
-- 修改前端后必须 `npm run build` 再构建 exe（dist 是嵌入的）。
+ConPTY 会结束更新前的会话进程，但 open-sessions 清单会供新版恢复。Claude 的 `/theme auto` 可能因 conhost 背景查询误判亮色，需要在 Claude 内手动 `/theme light`。未读状态是内存态。pwsh 必须是 PowerShell 7 的 `pwsh`，不可用时回退 cmd。

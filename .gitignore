@@ -1,19 +1,22 @@
-# 构建产物
-claude-sidebar.exe
-*.exe~
-*.test
-
-# Wails 构建产物
+# Frontend dependencies and generated bundle
 frontend/node_modules/
 frontend/dist/
-claude-terminal.exe
-claude-terminal-console.exe
-*.log
-# 注意：rsrc_windows_amd64.syso 必须提交（图标资源，构建自动链接）
 
-# 本地数据 / 日志（个人数据不入库）
-gui.log
+# Local Windows builds and test binaries
+.codex-build/
+claude-terminal*.exe
+*.exe.old
+*.exe.new
+*.test
+*.exe~
+
+# Logs and diagnostics
+*.log
+
+# Per-user state (stored beside the executable)
 favorites.json
-last-session.json
 open-sessions.json
 settings.json
+last-session.json
+# Legacy state name retained for old installations.
+*.json.tmp-*

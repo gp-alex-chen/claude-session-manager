@@ -1,5 +1,6 @@
-// Wails binding for internal/app.App. Generated shape retained manually because
-// the Wails CLI is not installed in this build environment.
+// Wails-compatible wrapper for internal/app.App. It is committed so ordinary
+// builds do not require the Wails CLI. If the CLI regenerates this file,
+// review the method set and keep it aligned with src/api/backend.js.
 export function GetAgents() { return window['go']['app']['App']['GetAgents'](); }
 export function GetOpenSessions() { return window['go']['app']['App']['GetOpenSessions'](); }
 export function GetShell() { return window['go']['app']['App']['GetShell'](); }
