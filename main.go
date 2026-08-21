@@ -1,6 +1,6 @@
 package main
 
-// Claude 会话管理 - Wails 内嵌终端版（路线 3 demo）
+// Claude 会话管理 - Wails 内嵌终端版
 // 后端：Go + ConPTY；前端：xterm.js；单 exe（WebView2 运行时）
 
 import (

@@ -1,4 +1,4 @@
-# Claude 会话管理（wails-terminal）· 项目经验与维护手册
+# Claude 会话管理（Wails）· 项目经验与维护手册
 
 > 记录本项目的架构、构建、测试、踩坑与扩展方法，供任何环境后续接手。
 > 时间线内的问题均有原因 + 修复，可快速定位同类问题。
@@ -28,7 +28,7 @@ favorites_test.go / repro_diagnostic_test.go / internal/agent/agents_test.go
 run.log            完整问题-修复时间线（本手册的精炼版）
 ```
 
-> 目录整理约定（2026-08-18）：Wails 绑定方法必须留在根目录 main 包
+> 目录整理约定（2026-08-18）：Wails 工程位于仓库根目录，绑定方法必须留在根目录 main 包
 > （wailsjs 绑定 main.App；且 `//go:embed all:frontend/dist` 不支持 `../`，
 > 入口必须留在根），纯逻辑按领域拆入 `internal/` 子包。
 
@@ -171,7 +171,7 @@ go test ./...          # 需要 claude 在 PATH（TestFetchAgents 会真调 agen
   - 自替换利用 Windows「运行中的 exe 只许改名、不许删除」：当前 exe → `.old`，新版落地原名，
     新版启动时删 `.old`/`.new`。若某环境连改名都失败（杀软锁文件），Apply 会回滚并报错，程序照常运行。
   - 目录权限：exe 所在目录需可写（放 Program Files 等受保护目录会更新失败，宜用普通目录）。
-- 会话解析在 wails-terminal 与 fyne-sidebar 有重复实现，后续可抽共享包。
+- 会话解析曾在 Wails 版与旧 Fyne 版有重复实现；当前仓库只保留 Wails 版。
 - 图标：`.syso` 由 `assets/icon.rc` + `assets/icon.ico` 生成（图标设计同 fyne 版，
   不动设计；fyne 版 `.syso` 的组 ID 是 1，**Wails 窗口标题栏图标用
   `winc.AppIconID=3`（internal/frontend/desktop/windows/winc/app.go）按 ID 3 从
