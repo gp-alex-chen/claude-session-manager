@@ -37,7 +37,6 @@ frontend/           xterm.js + esbuild 打包
 wailsjs/            Go 绑定（与 wails generate 同格式）
 assets/ + rsrc_windows_amd64.syso   图标
 EXPERIENCE.md       项目经验与维护手册（务必先读）
-run.log             问题-修复时间线
 ```
 
 ## 本地构建
@@ -82,6 +81,7 @@ ConPTY 输出 -> base64 -> EventsEmit(term:data, token, b64) -> 对应 xterm
 键盘输入 -> term.onData -> base64(UTF-8) -> TermWrite(token, b64) -> ConPTY
 窗口 resize -> fit addon(让出1列) -> TermResize(token, cols, rows) -> ResizePseudoConsole
 状态监听 -> 后端常驻监视器(1~2s) -> 变化即推 agents:update 事件 -> 徽标/未读/完成提示
+```
 
 ## 已知限制
 
@@ -99,4 +99,3 @@ ConPTY 输出 -> base64 -> EventsEmit(term:data, token, b64) -> 对应 xterm
   Windows 自带的是 5.1，命令名 `powershell.exe` 而非 `pwsh`）。缺 pwsh 时
   选 pwsh 启动会话会失败，请装 [PowerShell 7](https://aka.ms/powershell-release)
   或切回 cmd。pwsh 模式下 claude 退出后会停留在 pwsh 提示符（`-NoExit`）。
-```
