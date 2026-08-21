@@ -79,7 +79,7 @@ func atomicWrite(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return atomicReplace(tmp, path)
 }
 
 func (s *Store) Save(st *FavState) error {
