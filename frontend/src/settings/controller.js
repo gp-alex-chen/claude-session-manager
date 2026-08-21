@@ -14,7 +14,6 @@ export function createSettingsController(deps) {
     categoryButtons = [],
     panels = {},
     documentRef,
-    windowRef,
     storage,
     el,
     setStatus,
@@ -97,10 +96,6 @@ export function createSettingsController(deps) {
 
   function onEscape(event) {
     if (event.key === 'Escape' && isOpen()) close(event);
-  }
-
-  function onWindowBlur() {
-    if (isOpen()) hide();
   }
 
   function setPressed(button, selected) {
@@ -238,7 +233,6 @@ export function createSettingsController(deps) {
       button.addEventListener('click', handler);
     }
     documentRef.addEventListener('keydown', onEscape);
-    windowRef.addEventListener('blur', onWindowBlur);
     setCategory(activeCategory);
   }
 
@@ -254,7 +248,6 @@ export function createSettingsController(deps) {
     }
     categoryHandlers.clear();
     documentRef.removeEventListener?.('keydown', onEscape);
-    windowRef.removeEventListener?.('blur', onWindowBlur);
     hide();
   }
 

@@ -82,7 +82,12 @@ function fixture(options = {}) {
     addEventListener(name, callback) { this.listeners.set(name, callback); },
     removeEventListener(name) { this.listeners.delete(name); },
   };
-  const windowRef = { innerHeight: 800, addEventListener() {}, removeEventListener() {} };
+  const windowRef = {
+    innerHeight: 800,
+    listeners: new Map(),
+    addEventListener(name, callback) { this.listeners.set(name, callback); },
+    removeEventListener(name) { this.listeners.delete(name); },
+  };
   const storageValues = new Map(Object.entries(options.storage || {}));
   const storage = {
     getItem: (key) => storageValues.get(key) || null,
@@ -132,6 +137,7 @@ function fixture(options = {}) {
     settingsButton,
     settingsMenu,
     documentRef,
+    windowRef,
     storage,
     statuses,
     applied,
@@ -428,6 +434,24 @@ test('settings uses a modal dialog with semantic categories and close paths', as
   fixtureData.documentRef.listeners.get('keydown')({ key: 'Escape' });
   assert.equal(fixtureData.settingsMenu.hidden, true);
   assert.equal(fixtureData.settingsButton.focused, true);
+});
+
+test('window blur does not close the modal or change its category', async () => {
+  const fixtureData = fixture();
+  fixtureData.controller.start();
+  fixtureData.settingsButton.listeners.get('click')({ stopPropagation() {} });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(fixtureData.windowRef.listeners.has('blur'), false);
+
+  fixtureData.categoryButtons[1].listeners.get('click')({ stopPropagation() {} });
+  fixtureData.settingsButton.focused = false;
+  fixtureData.windowRef.listeners.get('blur')?.();
+
+  assert.equal(fixtureData.settingsMenu.hidden, false);
+  assert.equal(fixtureData.panels.terminal.hidden, false);
+  assert.equal(fixtureData.panels.appearance.hidden, true);
+  assert.equal(fixtureData.settingsButton.focused, false);
 });
 
 test('settings category persists across close and stale shell builds cannot write after close', async () => {
