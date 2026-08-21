@@ -29,7 +29,11 @@ class FakeHost {
   constructor() {
     this.classList = new FakeClassList();
     this.removed = false;
+    this.listeners = new Map();
   }
+
+  addEventListener(name, callback) { this.listeners.set(name, callback); }
+  emit(name, event) { return this.listeners.get(name)?.(event); }
 
   remove() {
     this.removed = true;
@@ -48,6 +52,8 @@ class FakeTerm {
     this.writes = [];
     this.pastes = [];
     this.disposed = false;
+    this.selection = '';
+    this.clearSelectionCalls = 0;
   }
 
   loadAddon(addon) { this.addon = addon; }
@@ -58,18 +64,22 @@ class FakeTerm {
   attachCustomKeyEventHandler(handler) { this.keyHandler = handler; }
   write(bytes) { this.writes.push(bytes); }
   paste(text) { this.pastes.push(text); }
+  getSelection() { return this.selection; }
+  clearSelection() { this.selection = ''; this.clearSelectionCalls += 1; }
   focus() { this.focused = true; }
   dispose() { this.disposed = true; }
   emitData(data) { this.dataHandler(data); }
   emitKey(event) { return this.keyHandler(event); }
 }
 
-function createFixture() {
+function createFixture(options = {}) {
   const state = createAppState();
   const hosts = [];
   const writes = [];
   const killed = [];
   const statuses = [];
+  const clipboardReads = [];
+  const clipboardWrites = [];
   const documentRef = {
     documentElement: { style: { setProperty() {} } },
   };
@@ -98,8 +108,17 @@ function createFixture() {
     documentRef,
     navigatorRef,
     storageRef: { setItem() {} },
+    readClipboard: options.readClipboard || (async () => {
+      clipboardReads.push(true);
+      return options.clipboardText ?? '粘贴内容';
+    }),
+    writeClipboard: options.writeClipboard || (async (text) => {
+      clipboardWrites.push(text);
+    }),
   });
-  return { state, controller, hosts, writes, killed, statuses };
+  return {
+    state, controller, hosts, writes, killed, statuses, clipboardReads, clipboardWrites,
+  };
 }
 
 function openAndActivate(fixture, token = 'session-1') {
@@ -194,4 +213,91 @@ test('terminal input preserves UTF-8 and shortcut semantics', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(session.term.pastes, ['粘贴内容', '粘贴内容', '粘贴内容']);
   assert.equal(new TextDecoder().decode(b64ToBytes(fixture.writes.at(-1).b64)), '\n');
+});
+
+const contextEvent = () => ({
+  preventDefault() { this.prevented = (this.prevented || 0) + 1; },
+  stopPropagation() { this.stopped = (this.stopped || 0) + 1; },
+});
+
+test('right click copies one UTF-8 multiline selection and clears it after success', async () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture, 'session-1');
+  session.term.selection = '第一行🙂\nsecond line\n第三行';
+  const event = contextEvent();
+
+  session.host.emit('contextmenu', event);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(event.prevented, 1);
+  assert.equal(event.stopped, 1);
+  assert.deepEqual(fixture.clipboardWrites, ['第一行🙂\nsecond line\n第三行']);
+  assert.equal(fixture.clipboardReads.length, 0);
+  assert.deepEqual(session.term.pastes, []);
+  assert.equal(session.term.clearSelectionCalls, 1);
+  assert.equal(session.term.selection, '');
+});
+
+test('right click without a selection reads once and pastes without writing', async () => {
+  const fixture = createFixture({ clipboardText: '剪贴板🙂\n下一行' });
+  const session = openAndActivate(fixture, 'session-1');
+  const event = contextEvent();
+
+  session.host.emit('contextmenu', event);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(event.prevented, 1);
+  assert.equal(event.stopped, 1);
+  assert.equal(fixture.clipboardReads.length, 1);
+  assert.deepEqual(fixture.clipboardWrites, []);
+  assert.deepEqual(session.term.pastes, ['剪贴板🙂\n下一行']);
+});
+
+test('right click with an empty clipboard does not paste', async () => {
+  const fixture = createFixture({ clipboardText: '' });
+  const session = openAndActivate(fixture, 'session-1');
+  const event = contextEvent();
+
+  session.host.emit('contextmenu', event);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(event.prevented, 1);
+  assert.equal(event.stopped, 1);
+  assert.equal(fixture.clipboardReads.length, 1);
+  assert.deepEqual(session.term.pastes, []);
+});
+
+test('right click contains clipboard failures and preserves selection on copy failure', async () => {
+  const copyFixture = createFixture({
+    writeClipboard: async () => { throw new Error('copy denied'); },
+  });
+  const copySession = openAndActivate(copyFixture, 'copy');
+  copySession.term.selection = 'keep selected';
+  const copyEvent = contextEvent();
+
+  const pasteFixture = createFixture({
+    readClipboard: async () => { throw new Error('paste denied'); },
+  });
+  const pasteSession = openAndActivate(pasteFixture, 'paste');
+  const pasteEvent = contextEvent();
+
+  await assert.doesNotReject(async () => {
+    copySession.host.emit('contextmenu', copyEvent);
+    pasteSession.host.emit('contextmenu', pasteEvent);
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+
+  assert.equal(copyEvent.prevented, 1);
+  assert.equal(copyEvent.stopped, 1);
+  assert.equal(copySession.term.selection, 'keep selected');
+  assert.equal(copySession.term.clearSelectionCalls, 0);
+  assert.deepEqual(copyFixture.statuses.at(-1), {
+    message: '复制失败: Error: copy denied', kind: 'warn',
+  });
+  assert.equal(pasteEvent.prevented, 1);
+  assert.equal(pasteEvent.stopped, 1);
+  assert.deepEqual(pasteSession.term.pastes, []);
+  assert.deepEqual(pasteFixture.statuses.at(-1), {
+    message: '粘贴失败: Error: paste denied', kind: 'warn',
+  });
 });

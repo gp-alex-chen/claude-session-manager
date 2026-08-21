@@ -16,35 +16,42 @@ export function createTerminalController(deps) {
     onActivate,
   } = deps;
 
+  const clipboardReader = deps.readClipboard || (() => {
+    if (!navigatorRef?.clipboard?.readText) return Promise.reject(new Error('剪贴板不可用'));
+    return navigatorRef.clipboard.readText();
+  });
+  const clipboardWriter = deps.writeClipboard || ((text) => {
+    if (!navigatorRef?.clipboard?.writeText) return Promise.reject(new Error('剪贴板不可用'));
+    return navigatorRef.clipboard.writeText(text);
+  });
+
   function writeTerm(session, data) {
     backend.TermWrite(session.token, bytesToB64(new TextEncoder().encode(data)));
   }
 
-  function legacyReadClipboard() {
-    if (!documentRef) return '';
-    const textarea = documentRef.createElement('textarea');
-    textarea.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:10px;height:10px;opacity:0;';
-    documentRef.body.appendChild(textarea);
-    textarea.focus();
-    let text = '';
+  async function pasteIntoTerm(session) {
     try {
-      if (documentRef.execCommand('paste')) text = textarea.value;
+      const text = await clipboardReader();
+      if (text && session.term) session.term.paste(text);
     } catch (error) {
-      // Clipboard access is optional in WebView2.
+      setStatus?.('粘贴失败: ' + error, 'warn');
     }
-    textarea.remove();
-    return text;
   }
 
-  async function pasteIntoTerm(session) {
-    let text = '';
-    try {
-      text = navigatorRef?.clipboard ? await navigatorRef.clipboard.readText() : '';
-    } catch (error) {
-      text = legacyReadClipboard();
+  async function handleContextMenu(session, event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const selection = session.term?.getSelection?.() || '';
+    if (selection) {
+      try {
+        await clipboardWriter(selection);
+        session.term.clearSelection();
+      } catch (error) {
+        setStatus?.('复制失败: ' + error, 'warn');
+      }
+      return;
     }
-    if (!text) text = legacyReadClipboard();
-    if (text && session.term) session.term.paste(text);
+    await pasteIntoTerm(session);
   }
 
   function openTab(token, name) {
@@ -65,6 +72,9 @@ export function createTerminalController(deps) {
       host: hostFactory(),
     };
     session.host.classList.add('term-host');
+    session.host.addEventListener('contextmenu', (event) => {
+      void handleContextMenu(session, event);
+    });
     appendHost(session.host);
     state.terminals.set(token, session);
     return session;

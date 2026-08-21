@@ -82,6 +82,8 @@ export function createApplication(deps) {
     hostFactory: () => documentRef.createElement('div'),
     appendHost: (host) => nodes.terminal.appendChild(host),
     documentRef,
+    readClipboard: () => runtime.ClipboardGetText(),
+    writeClipboard: (text) => runtime.ClipboardSetText(text),
     storageRef: safeStorage(windowRef),
     onActivate: () => {
       sessionController?.syncActiveHighlight();

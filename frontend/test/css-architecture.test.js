@@ -152,13 +152,3 @@ test('obsolete settings menu selectors are gone from production sources', () => 
     .join('\n');
   assert.doesNotMatch(production, /settings-item|settings-group-label|upd-(run|col|progress|hint|note-ver)/);
 });
-
-test('terminal hosts explicitly allow the Wails default context menu', () => {
-  const terminal = read('terminal.css');
-  const sidebar = read('sidebar.css');
-  assert.match(
-    terminal,
-    /\.term-host\s*,\s*\.term-host\s+\.xterm\s*\{[\s\S]*?--default-contextmenu:\s*show\s*;/,
-  );
-  assert.doesNotMatch(sidebar, /--default-contextmenu/);
-});
