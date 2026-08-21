@@ -137,7 +137,7 @@ export function createSettingsController(deps) {
     addHeading(panel, '终端配色', '为新建和已有终端选择配色方案。');
     const themeGrid = el('div', 'settings-theme-grid');
     for (const [key, theme] of Object.entries(themes)) {
-      const item = makeButton('settings-theme-card', theme.name);
+      const item = makeButton('settings-theme-card');
       item.dataset.theme = key;
       item.style.setProperty('--theme-bg', theme.background);
       item.style.setProperty('--theme-fg', theme.foreground);
@@ -177,7 +177,7 @@ export function createSettingsController(deps) {
         ['cmd', 'cmd.exe', 'Windows 自带，claude 退出后终端随之结束。'],
         ['pwsh', 'PowerShell 7', '需要 pwsh 在 PATH 中，claude 退出后停留在提示符。'],
       ]) {
-        const item = makeButton('settings-shell-card', text);
+        const item = makeButton('settings-shell-card');
         item.dataset.shell = key;
         item.appendChild(el('span', 'settings-shell-name', text));
         item.appendChild(el('span', 'settings-shell-description', description));

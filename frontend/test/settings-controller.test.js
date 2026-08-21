@@ -193,6 +193,14 @@ function allNodes(root) {
   return nodes;
 }
 
+function visibleText(node) {
+  return (node.textContent || '') + (node.children || []).map((child) => visibleText(child)).join('');
+}
+
+function countOccurrences(value, needle) {
+  return value.split(needle).length - 1;
+}
+
 test('initialize validates stored UI and terminal themes', async () => {
   const valid = fixture({ storage: { 'ui-theme': 'dark', 'term-theme': 'dracula' } });
   await valid.controller.initialize();
@@ -262,6 +270,9 @@ test('appearance uses semantic mode buttons and theme cards without closing', as
   assert.ok(cards.every((card) => card.tagName === 'BUTTON'));
   assert.ok(cards.every((card) => card.style.getPropertyValue('--theme-bg')));
   assert.ok(cards.every((card) => card.style.getPropertyValue('--theme-fg')));
+  for (const [key, theme] of Object.entries(THEMES)) {
+    assert.equal(countOccurrences(visibleText(childWith(fixtureData.panels.appearance, 'theme', key)), theme.name), 1);
+  }
   assert.equal(cards[0].getAttribute('aria-pressed'), 'true');
 
   modes[1].listeners.get('click')();
@@ -289,6 +300,7 @@ test('pwsh is checked during build and disabled when unavailable', async () => {
   assert.equal(installedChecks, 1);
   const pwsh = childWith(fixtureData.panels.terminal, 'shell', 'pwsh');
   assert.equal(pwsh.tagName, 'BUTTON');
+  assert.equal(countOccurrences(visibleText(pwsh), 'PowerShell 7'), 1);
   assert.equal(pwsh.disabled, true);
   assert.equal(pwsh.getAttribute('aria-disabled'), 'true');
   await pwsh.listeners.get('click')();
