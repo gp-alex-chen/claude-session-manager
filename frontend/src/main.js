@@ -1,29 +1,16 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import './style.css';
+import './styles/style.css';
 import {
-  GetAgents,
-  GetOpenSessions,
-  GetShell,
-  ShellInstalled,
-  SetShell,
-  NotifyBeep,
-  DebugLog,
-  ListSessions,
-  ListHiddenSessions,
-  RenameSession,
-  DeleteSession,
-  UnhideSession,
-  StartSession,
-  StartNew,
-  TermWrite,
-  TermResize,
-  TermKill,
-  GetVersion,
-  CheckForUpdate,
-  UpdateToLatest,
-} from '../../wailsjs/go/main/App';
+  GetAgents, GetOpenSessions, GetShell, ShellInstalled, SetShell, NotifyBeep,
+  DebugLog, ListSessions, ListHiddenSessions, RenameSession, DeleteSession,
+  UnhideSession, StartSession, StartNew, TermWrite, TermResize, TermKill,
+  GetVersion, CheckForUpdate, UpdateToLatest,
+} from './api/backend.js';
+import { createAppState } from './state/app-state.js';
+import { b64ToBytes, bytesToB64 } from './terminal/manager.js';
+import { leafOf } from './sessions/list.js';
 
 // —— 多会话终端管理 ——
 // 每个会话一个独立 xterm 实例；切换/关闭都在左侧列表操作，
@@ -33,28 +20,29 @@ const termStack = document.getElementById('terminal');
 const statusEl = document.getElementById('status-bar');
 
 // token -> { name, host, term, fit, exited, visible }
-const sessions = new Map();
+const uiState = createAppState();
+const sessions = uiState.sessions;
 // 用户已关闭的 token：其后的迟到事件（最后帧输出/退出）一律丢弃，
 // 避免关闭后又被 term:data 兜底逻辑重建出"幽灵标签"
-const closedTokens = new Set();
+const closedTokens = uiState.closedTokens;
 // 会话 id -> 显示名（来自列表加载，兜底建档时查真实名字）
-const sessionNames = new Map();
+const sessionNames = uiState.sessionNames;
 // 项目折叠状态（本次运行内有效）：dir -> collapsed
-const collapsedDirs = new Set();
+const collapsedDirs = uiState.collapsedDirs;
 // 首屏是否已执行"默认全折叠"：只启动时折叠一次，之后保留用户手动折叠/展开
-let collapseAllDone = false;
+let collapseAllDone = uiState.collapseAllDone;
 // 全局眼睛开关（仅折叠时有效）：false=睁眼（折叠时各组露出运行中的会话），
 // true=闭眼（折叠即全隐藏）。展开时不影响显示。
-let eyeGlobalOff = false;
-let activeToken = null;
+let eyeGlobalOff = uiState.eyeGlobalOff;
+let activeToken = uiState.activeToken;
 let newCounter = 0;
 // 新建会话的"临时 token -> 真实会话 id"配对：
 // StartNew 返回 new-<时间戳> 这类进程内临时 token，而 claude 稍后落盘的
 // jsonl 对应真实会话 id。列表轮询刷新发现新 id 后在此配对，让行内
 // × 关闭 / 点击重开 / 高亮都指向真实运行中的那个终端。
-const realToNew = new Map(); // 真实 id -> new token（配对成功后才有）
-const newToReal = new Map(); // new token -> 真实 id
-let pendingNew = [];         // 等待配对的 { token, dir }
+const realToNew = uiState.realToNew; // 真实 id -> new token（配对成功后才有）
+const newToReal = uiState.newToReal; // new token -> 真实 id
+let pendingNew = uiState.pendingNew; // 等待配对的 { token, dir }
 
 // —— 现成终端配色主题（xterm theme 对象；含社区知名配色） ——
 const THEMES = {
@@ -169,19 +157,6 @@ function setStatus(msg, cls) {
   statusEl.className = cls || '';
 }
 
-function b64ToBytes(b64) {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
-function bytesToB64(bytes) {
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin);
-}
-
 // 写原始数据到指定会话的 PTY
 function writeTerm(s, data) {
   TermWrite(s.token, bytesToB64(new TextEncoder().encode(data)));
@@ -213,11 +188,6 @@ async function pasteIntoTerm(s) {
   // 走 term.paste()：自动做 \r\n -> \r 转换；若 claude 开启了 bracketed paste
   // 模式则自动加 \x1b[200~..\x1b[201~ 包裹，多行内容不会立即触发提交
   if (text && s.term) s.term.paste(text);
-}
-
-function leafOf(dir) {
-  const parts = dir.split(/[\\/]/).filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : dir;
 }
 
 function el(tag, cls, text) {

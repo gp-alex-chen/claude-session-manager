@@ -1,3 +1,5 @@
+@import './themes.css';
+
 /* Claude 官网风格皮肤：暖黑底 + 陶土橙强调 + 大圆角 + 细边框。
    日间/夜间双模式：:root 为夜间值，html[data-theme="light"] 覆盖为日间值。 */
 * { box-sizing: border-box; margin: 0; padding: 0; }
