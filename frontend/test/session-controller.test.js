@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { createAppState } from '../src/state/app-state.js';
 import { createSessionController } from '../src/sessions/controller.js';
 import { listSig, pairPendingSessions } from '../src/sessions/pairing.js';
+import { renderSessionList } from '../src/sessions/view.js';
 
 class FakeClassList {
   constructor() { this.values = new Set(); }
@@ -150,6 +151,43 @@ test('listSig ignores time but tracks id, directory, and name', () => {
   assert.notEqual(listSig(first), listSig([session('b', 'work', 'A')]));
   assert.notEqual(listSig(first), listSig([session('a', 'other', 'A')]));
   assert.notEqual(listSig(first), listSig([session('a', 'work', 'B')]));
+});
+
+test('session rows keep their custom context menu and prevent the native menu', () => {
+  const listRoot = new FakeNode();
+  let opened = null;
+  renderSessionList({
+    listRoot,
+    list: [session('session-1')],
+    state: createAppState(),
+    agentController: { classifyAgent: () => 'idle' },
+    el: (tag, className, text) => {
+      const node = new FakeNode();
+      node.className = className;
+      node.textContent = text || '';
+      return node;
+    },
+    onStartNew() {},
+    onToggleGroup() {},
+    onOpen() {},
+    onClose() {},
+    onContextMenu: (x, y, target) => { opened = { x, y, target }; },
+  });
+
+  const row = listRoot.children[0].children[1].children[0];
+  const event = {
+    clientX: 12,
+    clientY: 34,
+    preventDefault() { this.prevented = true; },
+  };
+  row.listeners.get('contextmenu')(event);
+
+  assert.equal(event.prevented, true);
+  assert.deepEqual(opened, {
+    x: 12,
+    y: 34,
+    target: { type: 'session', id: 'session-1', dir: 'work', name: 'session-1' },
+  });
 });
 
 test('pairPendingSessions maps same-directory pending entries FIFO', () => {

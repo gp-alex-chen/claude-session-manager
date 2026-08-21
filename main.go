@@ -15,19 +15,23 @@ var assets embed.FS
 
 func main() {
 	app.CleanupUpdateArtifacts()
-	a := app.NewApp()
-	if err := wails.Run(&options.App{
-		Title:            "Claude 会话管理（内嵌终端）",
-		Width:            1180,
-		Height:           800,
-		MinWidth:         800,
-		MinHeight:        560,
-		AssetServer:      &assetserver.Options{Assets: assets},
-		BackgroundColour: &options.RGBA{R: 15, G: 15, B: 15, A: 255},
-		OnStartup:        a.Startup,
-		OnShutdown:       a.Shutdown,
-		Bind:             []interface{}{a},
-	}); err != nil {
+	if err := wails.Run(newWailsOptions(app.NewApp())); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func newWailsOptions(a *app.App) *options.App {
+	return &options.App{
+		Title:                    "Claude 会话管理（内嵌终端）",
+		Width:                    1180,
+		Height:                   800,
+		MinWidth:                 800,
+		MinHeight:                560,
+		AssetServer:              &assetserver.Options{Assets: assets},
+		BackgroundColour:         &options.RGBA{R: 15, G: 15, B: 15, A: 255},
+		EnableDefaultContextMenu: true,
+		OnStartup:                a.Startup,
+		OnShutdown:               a.Shutdown,
+		Bind:                     []interface{}{a},
 	}
 }
