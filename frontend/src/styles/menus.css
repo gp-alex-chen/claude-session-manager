@@ -101,6 +101,7 @@
 .settings-segment:focus-visible,
 .settings-theme-card:focus-visible,
 .settings-shell-card:focus-visible,
+.settings-font-size-button:focus-visible,
 .update-action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -137,6 +138,7 @@
 .settings-segment:active,
 .settings-theme-card:active,
 .settings-shell-card:active,
+.settings-font-size-button:active,
 .update-action:active,
 #settings-close:active {
   transform: translateY(1px) scale(.99);
@@ -213,6 +215,41 @@
 .settings-theme-swatch-bg { background: var(--theme-bg); }
 .settings-theme-swatch-fg { background: var(--theme-fg); }
 .settings-theme-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-font-size-control {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 18px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+}
+.settings-font-size-button {
+  min-width: 34px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--menu-bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 90ms cubic-bezier(.2, 0, 0, 1),
+    background 90ms cubic-bezier(.2, 0, 0, 1), color 90ms cubic-bezier(.2, 0, 0, 1);
+}
+.settings-font-size-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.settings-font-size-button:disabled { opacity: .45; cursor: not-allowed; }
+.settings-font-size-value {
+  min-width: 54px;
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.settings-font-size-reset { margin-left: auto; }
 .settings-shell-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .settings-shell-card { flex-direction: column; align-items: flex-start; gap: 3px; }
 .settings-shell-name { font-size: 12.5px; font-weight: 600; }
@@ -326,6 +363,8 @@
   .settings-shell-grid { grid-template-columns: 1fr; }
   .settings-mode-group { display: flex; width: 100%; }
   .settings-segment { flex: 1; }
+  .settings-font-size-control { flex-wrap: wrap; }
+  .settings-font-size-reset { flex: 1 0 100%; margin-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -338,6 +377,7 @@
   .settings-segment,
   .settings-theme-card,
   .settings-shell-card,
+  .settings-font-size-button,
   .update-action,
   .update-progress-bar {
     transition: none;
@@ -354,6 +394,7 @@
   .settings-segment:active,
   .settings-theme-card:active,
   .settings-shell-card:active,
+  .settings-font-size-button:active,
   .update-action:active {
     transform: none;
   }

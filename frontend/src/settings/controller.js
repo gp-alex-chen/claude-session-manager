@@ -1,4 +1,10 @@
 import { formatVersion } from '../utils.js';
+import {
+  DEFAULT_TERMINAL_FONT_SIZE,
+  MAX_TERMINAL_FONT_SIZE,
+  MIN_TERMINAL_FONT_SIZE,
+  TERMINAL_FONT_SIZE_STEP,
+} from '../terminal/options.js';
 
 export function createSettingsController(deps) {
   const {
@@ -155,6 +161,51 @@ export function createSettingsController(deps) {
     panel.appendChild(themeGrid);
   }
 
+  function addFontSizeGroup(panel) {
+    addHeading(panel, '终端字号', '调整新建和已有终端的文字大小。');
+    const controls = el('div', 'settings-font-size-control');
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', '终端字号调整');
+
+    const decrease = makeButton('settings-font-size-button', '−');
+    decrease.dataset.fontAction = 'decrease';
+    decrease.setAttribute('aria-label', '缩小终端字号');
+    const output = el('output', 'settings-font-size-value');
+    output.dataset.fontSize = 'current';
+    output.setAttribute('aria-live', 'polite');
+    output.setAttribute('aria-label', '当前终端字号');
+    const increase = makeButton('settings-font-size-button', '+');
+    increase.dataset.fontAction = 'increase';
+    increase.setAttribute('aria-label', '放大终端字号');
+    const reset = makeButton('settings-font-size-button settings-font-size-reset', '恢复默认');
+    reset.dataset.fontAction = 'reset';
+    reset.setAttribute('aria-label', '恢复默认终端字号');
+
+    const paint = (value) => {
+      output.value = String(value);
+      output.textContent = value + ' px';
+      decrease.disabled = value <= MIN_TERMINAL_FONT_SIZE;
+      increase.disabled = value >= MAX_TERMINAL_FONT_SIZE;
+      reset.disabled = value === DEFAULT_TERMINAL_FONT_SIZE;
+      decrease.setAttribute('aria-disabled', String(decrease.disabled));
+      increase.setAttribute('aria-disabled', String(increase.disabled));
+      reset.setAttribute('aria-disabled', String(reset.disabled));
+    };
+    const applyDelta = (delta) => {
+      const value = terminalController.applyFontSize(terminalController.getFontSize() + delta);
+      paint(value);
+    };
+    decrease.addEventListener('click', () => applyDelta(-TERMINAL_FONT_SIZE_STEP));
+    increase.addEventListener('click', () => applyDelta(TERMINAL_FONT_SIZE_STEP));
+    reset.addEventListener('click', () => {
+      paint(terminalController.applyFontSize(DEFAULT_TERMINAL_FONT_SIZE));
+    });
+
+    controls.append(decrease, output, increase, reset);
+    paint(terminalController.getFontSize());
+    panel.appendChild(controls);
+  }
+
   function addShellGroup(generation, panel) {
     return Promise.all([
       Promise.resolve().then(() => backend.GetShell()).catch(() => 'cmd'),
@@ -211,6 +262,7 @@ export function createSettingsController(deps) {
     const generation = ++buildGeneration;
     for (const panel of Object.values(panels)) panel.innerHTML = '';
     addThemeGroups(panels.appearance);
+    addFontSizeGroup(panels.terminal);
     const shellBuild = addShellGroup(generation, panels.terminal);
     updateController.mount(panels.update);
     await shellBuild;

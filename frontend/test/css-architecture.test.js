@@ -109,6 +109,7 @@ test('settings dialog has stable sizing, hierarchy, and focused controls', () =>
   assert.match(menus, /settings-nav button:focus-visible/);
   assert.match(menus, /settings-theme-card:focus-visible/);
   assert.match(menus, /settings-shell-card:focus-visible/);
+  assert.match(menus, /settings-font-size-button:focus-visible/);
   assert.match(menus, /update-action:focus-visible/);
 });
 
@@ -128,6 +129,7 @@ test('settings motion uses corporate timing and reduced-motion fallback', () => 
   assert.match(menus, /settings-segment:active/);
   assert.match(menus, /settings-theme-card:active/);
   assert.match(menus, /settings-shell-card:active/);
+  assert.match(menus, /settings-font-size-button:active/);
   assert.match(menus, /update-action:active/);
   assert.match(menus, /settings-nav button:active/);
   assert.match(menus, /prefers-reduced-motion:\s*reduce/);
@@ -142,6 +144,10 @@ test('settings layout adapts and update progress includes a track', () => {
   assert.match(menus, /\.settings-nav[\s\S]*flex-direction:\s*row/);
   assert.match(menus, /\.settings-progress-region|\.update-progress-region[\s\S]*background:\s*var\(--panel-3\)/);
   assert.match(menus, /\.update-progress-bar[\s\S]*background:\s*var\(--accent\)/);
+  assert.match(menus, /\.settings-font-size-control[\s\S]*display:\s*flex/);
+  assert.match(menus, /\.settings-font-size-value/);
+  assert.match(menus, /\.settings-font-size-button:disabled/);
+  assert.match(menus, /@media\s*\(max-width:\s*480px\)[\s\S]*settings-font-size-control/);
 });
 
 test('obsolete settings menu selectors are gone from production sources', () => {

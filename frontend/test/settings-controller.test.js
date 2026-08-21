@@ -100,6 +100,7 @@ function fixture(options = {}) {
   const statuses = [];
   const applied = [];
   const appliedFontSizes = [];
+  const getFontSize = options.GetFontSize || (() => state.terminalFontSize);
   const backend = {
     GetShell: options.GetShell || (async () => 'cmd'),
     ShellInstalled: options.ShellInstalled || (async () => true),
@@ -125,6 +126,7 @@ function fixture(options = {}) {
         state.terminalFontSize = normalizeTerminalFontSize(value);
         return state.terminalFontSize;
       },
+      getFontSize,
     },
     themes: THEMES,
     settingsButton,
@@ -379,6 +381,78 @@ test('configured unavailable pwsh stays selected and explains fallback', async (
   assert.ok(allNodes(fixtureData.panels.terminal).some((node) => node.textContent.includes('cmd 兜底')));
 });
 
+test('terminal font-size controls render before shell and update without closing', async () => {
+  let resolveShell;
+  const shellResult = new Promise((resolve) => { resolveShell = resolve; });
+  const fixtureData = fixture({ GetShell: () => shellResult });
+  fixtureData.settingsMenu.hidden = false;
+  const build = fixtureData.controller.build();
+  const panel = fixtureData.panels.terminal;
+
+  const titlesBeforeShell = allNodes(panel)
+    .filter((node) => node.className === 'settings-section-title')
+    .map((node) => node.textContent);
+  assert.deepEqual(titlesBeforeShell, ['终端字号']);
+
+  const group = allNodes(panel).find((node) => node.className === 'settings-font-size-control');
+  const decrease = childWith(panel, 'fontAction', 'decrease');
+  const increase = childWith(panel, 'fontAction', 'increase');
+  const reset = childWith(panel, 'fontAction', 'reset');
+  const output = childWith(panel, 'fontSize', 'current');
+  assert.equal(group.getAttribute('role'), 'group');
+  assert.match(group.getAttribute('aria-label'), /终端字号/);
+  assert.equal(output.tagName, 'OUTPUT');
+  assert.equal(output.getAttribute('aria-live'), 'polite');
+  assert.equal(output.textContent, '14 px');
+  assert.equal(decrease.type, 'button');
+  assert.equal(increase.type, 'button');
+  assert.equal(reset.type, 'button');
+  assert.match(decrease.getAttribute('aria-label'), /缩小/);
+  assert.match(increase.getAttribute('aria-label'), /放大/);
+  assert.equal(reset.disabled, true);
+
+  decrease.listeners.get('click')();
+  assert.equal(output.textContent, '13 px');
+  assert.equal(reset.disabled, false);
+  assert.equal(fixtureData.settingsMenu.hidden, false);
+  increase.listeners.get('click')();
+  increase.listeners.get('click')();
+  assert.equal(output.textContent, '15 px');
+  reset.listeners.get('click')();
+  assert.equal(output.textContent, '14 px');
+  assert.equal(reset.disabled, true);
+  assert.equal(fixtureData.settingsMenu.hidden, false);
+
+  resolveShell('cmd');
+  await build;
+  const titles = allNodes(panel)
+    .filter((node) => node.className === 'settings-section-title')
+    .map((node) => node.textContent);
+  assert.deepEqual(titles, ['终端字号', '底层 Shell']);
+});
+
+test('font-size controls respect bounds and rebuild from controller state', async () => {
+  const lower = fixture();
+  lower.state.terminalFontSize = 10;
+  await lower.controller.build();
+  assert.equal(childWith(lower.panels.terminal, 'fontAction', 'decrease').disabled, true);
+  assert.equal(childWith(lower.panels.terminal, 'fontAction', 'increase').disabled, false);
+
+  const upper = fixture();
+  upper.state.terminalFontSize = 24;
+  await upper.controller.build();
+  assert.equal(childWith(upper.panels.terminal, 'fontAction', 'increase').disabled, true);
+  assert.equal(childWith(upper.panels.terminal, 'fontAction', 'decrease').disabled, false);
+
+  let controllerSize = 21;
+  const rebuilt = fixture({ GetFontSize: () => controllerSize });
+  await rebuilt.controller.build();
+  assert.equal(childWith(rebuilt.panels.terminal, 'fontSize', 'current').textContent, '21 px');
+  controllerSize = 17;
+  await rebuilt.controller.build();
+  assert.equal(childWith(rebuilt.panels.terminal, 'fontSize', 'current').textContent, '17 px');
+});
+
 test('first settings click opens CSS-hidden menu and second click closes it', async () => {
   const fixtureData = fixture({ GetShell: async () => { throw new Error('offline'); } });
   fixtureData.controller.start();
@@ -426,7 +500,12 @@ test('stale shell builds cannot append after a newer menu build', async () => {
   const labels = allNodes(fixtureData.settingsMenu)
     .filter((child) => child.className === 'settings-section-title' || child.className === 'settings-group-label')
     .map((child) => child.textContent);
-  assert.deepEqual(labels, ['界面模式', '终端配色', '底层 Shell', '更新']);
+  assert.deepEqual(labels, ['界面模式', '终端配色', '终端字号', '底层 Shell', '更新']);
+  assert.equal(
+    allNodes(fixtureData.panels.terminal)
+      .filter((node) => node.className === 'settings-font-size-control').length,
+    1,
+  );
   assert.equal(childWith(fixtureData.settingsMenu, 'shell', 'cmd').getAttribute('aria-pressed'), 'true');
   assert.equal(childWith(fixtureData.settingsMenu, 'shell', 'pwsh').getAttribute('aria-pressed'), 'false');
 });
@@ -511,7 +590,13 @@ test('settings category persists across close and stale shell builds cannot writ
   resolvers[0]('pwsh');
   await Promise.resolve();
   await Promise.resolve();
-  assert.equal(fixtureData.panels.terminal.children.length, 0);
+  assert.deepEqual(
+    allNodes(fixtureData.panels.terminal)
+      .filter((node) => node.className === 'settings-section-title')
+      .map((node) => node.textContent),
+    ['终端字号'],
+  );
+  assert.equal(childWith(fixtureData.panels.terminal, 'shell', 'pwsh'), undefined);
 
   fixtureData.settingsButton.listeners.get('click')({ stopPropagation() {} });
   assert.equal(fixtureData.panels.terminal.hidden, false);
