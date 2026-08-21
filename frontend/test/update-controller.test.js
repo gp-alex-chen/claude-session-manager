@@ -210,6 +210,39 @@ test('failure unlocks retry and restart reports a toast', async () => {
   assert.deepEqual(fixtureData.toasts, ['✅ 更新完成，正在重启…']);
 });
 
+test('restart phase stays applying and disabled until the process exits', async () => {
+  let resolveApply;
+  const fixtureData = fixture({
+    check: async () => ({ hasUpdate: true, latest: '2.0.0', current: '1.0.0' }),
+    apply: () => new Promise((resolve) => { resolveApply = resolve; }),
+  });
+  await fixtureData.controller.check();
+  const applying = fixtureData.actionButton.listeners.get('click')();
+  fixtureData.controller.handleState('重启中');
+  assert.equal(fixtureData.controller.getSnapshot().mode, 'applying');
+  assert.equal(fixtureData.controller.getSnapshot().busy, true);
+  assert.equal(fixtureData.actionButton.disabled, true);
+  assert.equal(fixtureData.actionButton.textContent, '正在重启…');
+  assert.equal(fixtureData.statusNode.textContent, '更新完成，正在重启…');
+  assert.deepEqual(fixtureData.toasts, ['✅ 更新完成，正在重启…']);
+  resolveApply();
+  await applying;
+});
+
+test('UpdateToLatest rejection clears ready info and restores retry', async () => {
+  const fixtureData = fixture({
+    check: async () => ({ hasUpdate: true, latest: '2.0.0', current: '1.0.0' }),
+    apply: async () => { throw new Error('download failed'); },
+  });
+  await fixtureData.controller.check();
+  await fixtureData.actionButton.listeners.get('click')();
+  assert.equal(fixtureData.controller.getSnapshot().mode, 'idle');
+  assert.equal(fixtureData.controller.getSnapshot().busy, false);
+  assert.equal(fixtureData.controller.getSnapshot().info, null);
+  assert.equal(fixtureData.actionButton.disabled, false);
+  assert.match(fixtureData.statusNode.textContent, /download failed/);
+});
+
 test('checking and applying suppress duplicate requests', async () => {
   let resolveCheck;
   const checking = fixture({

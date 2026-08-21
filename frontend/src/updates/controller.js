@@ -63,7 +63,7 @@ export function createUpdateController(deps) {
       : state.mode === 'checking'
         ? '正在检查…'
         : isApplying
-          ? '正在更新…'
+          ? state.phase === '重启中' ? '正在重启…' : '正在更新…'
           : '检查更新';
     actionButton.disabled = state.busy;
     actionButton.setAttribute('aria-disabled', String(state.busy));
@@ -144,6 +144,7 @@ export function createUpdateController(deps) {
       state.mode = 'idle';
       state.busy = false;
       state.phase = '';
+      state.info = null;
       state.statusText = '更新失败：' + messageFor(error);
       setStatus('❌ 更新失败: ' + messageFor(error), 'warn');
       render();
@@ -159,8 +160,8 @@ export function createUpdateController(deps) {
       state.statusText = phase;
       setStatus('❌ ' + phase, 'warn');
     } else if (phase === '重启中') {
-      state.mode = 'idle';
-      state.busy = false;
+      state.mode = 'applying';
+      state.busy = true;
       state.statusText = '更新完成，正在重启…';
       showToast('✅ 更新完成，正在重启…');
     }
