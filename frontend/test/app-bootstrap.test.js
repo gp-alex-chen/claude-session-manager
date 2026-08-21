@@ -5,7 +5,11 @@ import { createApplication } from '../src/app/bootstrap.js';
 
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'session-list', 'hidden-panel', 'hidden-count',
-  'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu',
+  'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
+  'settings-close', 'settings-nav', 'settings-tab-appearance',
+  'settings-tab-terminal', 'settings-tab-update', 'settings-content',
+  'settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update',
+  'settings-version',
 ];
 
 class FakeNode {

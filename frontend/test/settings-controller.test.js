@@ -10,6 +10,7 @@ class FakeClassList {
   constructor() { this.values = new Set(); }
   add(...names) { names.forEach((name) => this.values.add(name)); }
   remove(...names) { names.forEach((name) => this.values.delete(name)); }
+  contains(name) { return this.values.has(name); }
   toggle(name, force) {
     const next = force === undefined ? !this.values.has(name) : force;
     if (next) this.values.add(name); else this.values.delete(name);
@@ -20,17 +21,26 @@ class FakeNode {
   constructor() {
     this.children = [];
     this.dataset = {};
+    this.attributes = new Map();
     this.style = { setProperty() {} };
     this.classList = new FakeClassList();
     this.listeners = new Map();
+    this.listenerAdds = new Map();
     this._innerHTML = '';
     this.textContent = '';
     this.value = '';
+    this.hidden = false;
+    this.focused = false;
   }
-  append(...children) { this.children.push(...children); }
-  appendChild(child) { this.children.push(child); return child; }
-  addEventListener(name, callback) { this.listeners.set(name, callback); }
-  removeEventListener(name) { this.listeners.delete(name); }
+  append(...children) { children.forEach((child) => this.appendChild(child)); }
+  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  addEventListener(name, callback) {
+    this.listeners.set(name, callback);
+    this.listenerAdds.set(name, (this.listenerAdds.get(name) || 0) + 1);
+  }
+  removeEventListener(name, callback) {
+    if (!callback || this.listeners.get(name) === callback) this.listeners.delete(name);
+  }
   querySelectorAll(selector) {
     const found = [];
     const matches = selector.startsWith('.') ? selector.slice(1) : '';
@@ -41,6 +51,13 @@ class FakeNode {
     visit(this);
     return found;
   }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) || null; }
+  contains(node) {
+    if (node === this) return true;
+    return this.children.some((child) => child.contains?.(node));
+  }
+  focus() { this.focused = true; }
   set innerHTML(value) {
     this._innerHTML = value;
     if (value === '') this.children = [];
@@ -56,8 +73,9 @@ function fixture(options = {}) {
   settingsMenu.style.display = 'none';
   const documentRef = {
     documentElement: { dataset: {} },
-    addEventListener() {},
-    removeEventListener() {},
+    listeners: new Map(),
+    addEventListener(name, callback) { this.listeners.set(name, callback); },
+    removeEventListener(name) { this.listeners.delete(name); },
   };
   const windowRef = { innerHeight: 800, addEventListener() {}, removeEventListener() {} };
   const storageValues = new Map(Object.entries(options.storage || {}));
@@ -81,6 +99,7 @@ function fixture(options = {}) {
       menu.appendChild(label);
     },
   };
+  const dialogDeps = makeDialogDeps(settingsMenu, documentRef);
   const controller = createSettingsController({
     state,
     backend,
@@ -99,6 +118,7 @@ function fixture(options = {}) {
     },
     setStatus: (message, kind) => statuses.push({ message, kind }),
     updateController,
+    ...dialogDeps,
   });
   return {
     state,
@@ -110,11 +130,59 @@ function fixture(options = {}) {
     statuses,
     applied,
     backend,
+    ...dialogDeps,
+  };
+}
+
+function makeDialogDeps(settingsMenu, documentRef) {
+  const settingsDialog = new FakeNode();
+  const settingsClose = new FakeNode();
+  const settingsNav = new FakeNode();
+  const settingsContent = new FakeNode();
+  const settingsVersion = new FakeNode();
+  const categories = ['appearance', 'terminal', 'update'].map((name) => {
+    const button = new FakeNode();
+    button.dataset.category = name;
+    button.textContent = { appearance: '外观', terminal: '终端', update: '更新' }[name];
+    button.setAttribute('role', 'tab');
+    settingsNav.appendChild(button);
+    return button;
+  });
+  const panels = Object.fromEntries(['appearance', 'terminal', 'update'].map((name) => {
+    const panel = new FakeNode();
+    panel.dataset.panel = name;
+    settingsContent.appendChild(panel);
+    return [name, panel];
+  }));
+  settingsMenu.setAttribute('role', 'dialog');
+  settingsMenu.setAttribute('aria-modal', 'true');
+  settingsClose.textContent = '关闭';
+  settingsDialog.append(settingsClose, settingsVersion, settingsNav, settingsContent);
+  settingsMenu.appendChild(settingsDialog);
+  settingsMenu.hidden = true;
+  return {
+    settingsDialog,
+    settingsClose,
+    settingsNav,
+    settingsContent,
+    settingsVersion,
+    categoryButtons: categories,
+    panels,
   };
 }
 
 function childWith(menu, key, value) {
-  return menu.children.find((child) => child.dataset?.[key] === value);
+  return allNodes(menu).find((child) => child.dataset?.[key] === value);
+}
+
+function allNodes(root) {
+  const nodes = [];
+  const visit = (node) => {
+    nodes.push(node);
+    for (const child of node.children || []) visit(child);
+  };
+  visit(root);
+  return nodes;
 }
 
 test('initialize validates stored UI and terminal themes', async () => {
@@ -146,15 +214,16 @@ test('shell selection validates pwsh and preserves menu on failure', async () =>
     SetShell: async () => { setCalls += 1; },
   });
   await fixtureData.controller.build();
-  fixtureData.settingsMenu.style.display = 'block';
+  fixtureData.settingsMenu.hidden = false;
   await childWith(fixtureData.settingsMenu, 'shell', 'pwsh').listeners.get('click')();
   assert.equal(setCalls, 0);
+  assert.equal(fixtureData.settingsMenu.hidden, false);
   assert.match(fixtureData.statuses.at(-1).message, /未检测到 pwsh/);
 
   fixtureData.backend.ShellInstalled = async () => true;
   fixtureData.backend.SetShell = async () => { throw new Error('cannot save'); };
   await childWith(fixtureData.settingsMenu, 'shell', 'pwsh').listeners.get('click')();
-  assert.equal(fixtureData.settingsMenu.style.display, 'block');
+  assert.equal(fixtureData.settingsMenu.hidden, false);
   assert.match(fixtureData.statuses.at(-1).message, /切换 Shell 失败/);
 
   const success = fixture({
@@ -162,15 +231,14 @@ test('shell selection validates pwsh and preserves menu on failure', async () =>
     SetShell: async () => {},
   });
   await success.controller.build();
-  success.settingsMenu.style.display = 'block';
+  success.settingsMenu.hidden = false;
   await childWith(success.settingsMenu, 'shell', 'pwsh').listeners.get('click')();
-  assert.equal(success.settingsMenu.style.display, 'none');
+  assert.equal(success.settingsMenu.hidden, true);
   assert.match(success.statuses.at(-1).message, /底层 Shell 已切换: pwsh/);
 });
 
 test('first settings click opens CSS-hidden menu and second click closes it', async () => {
   const fixtureData = fixture({ GetShell: async () => { throw new Error('offline'); } });
-  fixtureData.settingsMenu.style.display = '';
   fixtureData.controller.start();
   let stopped = false;
   await fixtureData.settingsButton.listeners.get('click')({
@@ -179,12 +247,11 @@ test('first settings click opens CSS-hidden menu and second click closes it', as
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(stopped, true);
-  assert.equal(fixtureData.settingsMenu.style.display, 'block');
-  assert.equal(fixtureData.settingsMenu.style.left, '10px');
+  assert.equal(fixtureData.settingsMenu.hidden, false);
   assert.ok(fixtureData.settingsMenu.children.length > 0);
 
   fixtureData.settingsButton.listeners.get('click')({ stopPropagation() {} });
-  assert.equal(fixtureData.settingsMenu.style.display, 'none');
+  assert.equal(fixtureData.settingsMenu.hidden, true);
 });
 
 test('pwsh fallback note is shown when configured shell is unavailable', async () => {
@@ -193,7 +260,7 @@ test('pwsh fallback note is shown when configured shell is unavailable', async (
     ShellInstalled: async () => false,
   });
   await fixtureData.controller.build();
-  assert.ok(fixtureData.settingsMenu.children.some((child) => child.textContent.includes('cmd 兜底')));
+  assert.ok(allNodes(fixtureData.settingsMenu).some((child) => child.textContent.includes('cmd 兜底')));
 });
 
 test('shell read failure safely selects cmd', async () => {
@@ -214,10 +281,88 @@ test('stale shell builds cannot append after a newer menu build', async () => {
   await second;
   resolvers[0]('pwsh');
   await first;
-  const labels = fixtureData.settingsMenu.children
+  const labels = allNodes(fixtureData.settingsMenu)
     .filter((child) => child.className === 'settings-group-label')
     .map((child) => child.textContent);
   assert.deepEqual(labels, ['界面外观', '终端配色', '底层 Shell', '更新']);
   assert.match(childWith(fixtureData.settingsMenu, 'shell', 'cmd').className, /cur/);
   assert.doesNotMatch(childWith(fixtureData.settingsMenu, 'shell', 'pwsh').className, /cur/);
+});
+
+test('settings uses a modal dialog with semantic categories and close paths', async () => {
+  const fixtureData = fixture();
+  fixtureData.controller.start();
+  let buttonStopped = false;
+  fixtureData.settingsButton.listeners.get('click')({
+    stopPropagation: () => { buttonStopped = true; },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(buttonStopped, true);
+  assert.equal(fixtureData.settingsMenu.hidden, false);
+  assert.equal(fixtureData.settingsMenu.getAttribute('role'), 'dialog');
+  assert.equal(fixtureData.settingsMenu.getAttribute('aria-hidden'), 'false');
+  assert.deepEqual(fixtureData.categoryButtons.map((button) => button.textContent), ['外观', '终端', '更新']);
+  assert.ok(fixtureData.categoryButtons.every((button) => button.getAttribute('role') === 'tab'));
+  assert.equal(typeof fixtureData.settingsClose.listeners.get('click'), 'function');
+
+  let dialogStopped = false;
+  fixtureData.settingsDialog.listeners.get('click')({
+    stopPropagation: () => { dialogStopped = true; },
+  });
+  assert.equal(dialogStopped, true);
+
+  fixtureData.settingsMenu.listeners.get('click')({ target: fixtureData.settingsMenu });
+  assert.equal(fixtureData.settingsMenu.hidden, true);
+  assert.equal(fixtureData.settingsButton.focused, true);
+
+  fixtureData.settingsButton.focused = false;
+  fixtureData.settingsButton.listeners.get('click')({ stopPropagation() {} });
+  fixtureData.documentRef.listeners.get('keydown')({ key: 'Escape' });
+  assert.equal(fixtureData.settingsMenu.hidden, true);
+  assert.equal(fixtureData.settingsButton.focused, true);
+});
+
+test('settings category persists across close and stale shell builds cannot write after close', async () => {
+  const resolvers = [];
+  const fixtureData = fixture({
+    GetShell: () => new Promise((resolve) => resolvers.push(resolve)),
+  });
+  fixtureData.controller.start();
+  fixtureData.settingsButton.listeners.get('click')({ stopPropagation() {} });
+  await Promise.resolve();
+  fixtureData.categoryButtons[1].listeners.get('click')({ stopPropagation() {} });
+  assert.equal(fixtureData.panels.terminal.hidden, false);
+  assert.equal(fixtureData.panels.appearance.hidden, true);
+  fixtureData.settingsClose.listeners.get('click')({ stopPropagation() {} });
+  assert.equal(fixtureData.settingsMenu.hidden, true);
+
+  resolvers[0]('pwsh');
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(fixtureData.panels.terminal.children.length, 0);
+
+  fixtureData.settingsButton.listeners.get('click')({ stopPropagation() {} });
+  assert.equal(fixtureData.panels.terminal.hidden, false);
+  assert.equal(fixtureData.panels.appearance.hidden, true);
+});
+
+test('settings start and stop do not accumulate listeners', () => {
+  const fixtureData = fixture();
+  fixtureData.controller.start();
+  fixtureData.controller.start();
+  assert.equal(fixtureData.settingsButton.listenerAdds.get('click'), 1);
+  assert.equal(fixtureData.categoryButtons[0].listenerAdds.get('click'), 1);
+
+  fixtureData.controller.stop();
+  fixtureData.controller.stop();
+  assert.equal(fixtureData.settingsButton.listeners.size, 0);
+  assert.equal(fixtureData.categoryButtons[0].listeners.size, 0);
+
+  fixtureData.controller.start();
+  assert.equal(fixtureData.settingsButton.listenerAdds.get('click'), 2);
+  assert.equal(fixtureData.categoryButtons[0].listenerAdds.get('click'), 2);
+  assert.equal(fixtureData.categoryButtons[0].listeners.size, 1);
+  fixtureData.controller.stop();
 });

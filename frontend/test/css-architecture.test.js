@@ -75,3 +75,11 @@ test('complete selectors are owned by one CSS module', () => {
     }
   }
 });
+
+test('settings skeleton provides an overlay, dialog, navigation, and panel surface', () => {
+  const menus = read('menus.css');
+  assert.match(menus, /#settings-menu\.settings-overlay/);
+  assert.match(menus, /\.settings-dialog/);
+  assert.match(menus, /\.settings-nav/);
+  assert.match(menus, /\.settings-panel/);
+});

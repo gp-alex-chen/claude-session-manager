@@ -8,6 +8,11 @@ export function createSettingsController(deps) {
     themes,
     settingsButton,
     settingsMenu,
+    settingsDialog,
+    settingsClose,
+    settingsVersion,
+    categoryButtons = [],
+    panels = {},
     documentRef,
     windowRef,
     storage,
@@ -18,14 +23,12 @@ export function createSettingsController(deps) {
 
   let started = false;
   let buildGeneration = 0;
+  let activeCategory = 'appearance';
+  const categoryHandlers = new Map();
 
-  function onSettingsClick(event) {
-    event.stopPropagation();
-    open();
+  function isOpen() {
+    return !settingsMenu.hidden;
   }
-
-  function onDocumentClick() { hide(); }
-  function onWindowBlur() { hide(); }
 
   function readStorage(key) {
     try {
@@ -46,44 +49,93 @@ export function createSettingsController(deps) {
     writeStorage('ui-theme', theme);
   }
 
-  function hide() {
-    buildGeneration += 1;
-    settingsMenu.style.display = 'none';
+  function setCategory(category) {
+    if (!panels[category]) return;
+    activeCategory = category;
+    for (const button of categoryButtons) {
+      const selected = button.dataset.category === category;
+      button.setAttribute('aria-selected', String(selected));
+      button.classList.toggle('active', selected);
+    }
+    for (const [name, panel] of Object.entries(panels)) {
+      panel.hidden = name !== category;
+    }
   }
 
-  function addThemeGroups() {
-    settingsMenu.appendChild(el('div', 'settings-group-label', '界面外观'));
+  function hide(restoreFocus = false) {
+    buildGeneration += 1;
+    settingsMenu.hidden = true;
+    settingsMenu.setAttribute('aria-hidden', 'true');
+    if (restoreFocus) settingsButton.focus?.();
+  }
+
+  function close(event) {
+    event?.stopPropagation?.();
+    hide(true);
+  }
+
+  function show() {
+    settingsMenu.hidden = false;
+    settingsMenu.setAttribute('aria-hidden', 'false');
+    setCategory(activeCategory);
+    void build();
+  }
+
+  function onSettingsClick(event) {
+    event.stopPropagation();
+    if (isOpen()) close();
+    else show();
+  }
+
+  function onOverlayClick(event) {
+    if (event.target === settingsMenu) close(event);
+  }
+
+  function onDialogClick(event) {
+    event.stopPropagation();
+  }
+
+  function onEscape(event) {
+    if (event.key === 'Escape' && isOpen()) close(event);
+  }
+
+  function onWindowBlur() {
+    if (isOpen()) hide();
+  }
+
+  function addThemeGroups(panel) {
+    panel.appendChild(el('div', 'settings-group-label', '界面外观'));
     for (const [mode, text] of [['light', '☀️ 日间模式'], ['dark', '🌙 夜间模式']]) {
       const item = el('div', 'settings-item' + (mode === state.uiTheme ? ' cur' : ''), text);
       item.dataset.mode = mode;
       item.addEventListener('click', () => {
         applyUiTheme(mode);
-        hide();
+        close();
       });
-      settingsMenu.appendChild(item);
+      panel.appendChild(item);
     }
 
-    settingsMenu.appendChild(el('div', 'settings-group-label', '终端配色'));
+    panel.appendChild(el('div', 'settings-group-label', '终端配色'));
     for (const [key, theme] of Object.entries(themes)) {
       const item = el('div', 'settings-item' + (key === state.currentTheme ? ' cur' : ''), theme.name);
       item.dataset.theme = key;
       item.style.setProperty('--dot', theme.background);
       item.addEventListener('click', () => {
         terminalController.applyTheme(key);
-        hide();
+        close();
       });
-      settingsMenu.appendChild(item);
+      panel.appendChild(item);
     }
   }
 
-  function addShellGroup(generation) {
+  function addShellGroup(generation, panel) {
     return Promise.resolve()
       .then(() => backend.GetShell())
       .catch(() => 'cmd')
       .then(async (configuredShell) => {
         if (generation !== buildGeneration) return false;
         const shell = configuredShell === 'pwsh' ? 'pwsh' : 'cmd';
-        settingsMenu.appendChild(el('div', 'settings-group-label', '底层 Shell'));
+        panel.appendChild(el('div', 'settings-group-label', '底层 Shell'));
         for (const [key, text] of [['cmd', 'cmd.exe（默认）'], ['pwsh', 'pwsh（PowerShell 7）']]) {
           const item = el('div', 'settings-item' + (key === shell ? ' cur' : ''), text);
           item.dataset.shell = key;
@@ -105,10 +157,10 @@ export function createSettingsController(deps) {
               setStatus('切换 Shell 失败: ' + error, 'warn');
               return;
             }
-            hide();
+            close();
             setStatus('底层 Shell 已切换: ' + (key === 'pwsh' ? 'pwsh' : 'cmd') + '（新启动/恢复的会话生效）', 'ok');
           });
-          settingsMenu.appendChild(item);
+          panel.appendChild(item);
         }
 
         if (shell === 'pwsh') {
@@ -116,7 +168,7 @@ export function createSettingsController(deps) {
           try { installed = await backend.ShellInstalled('pwsh'); } catch (error) { installed = false; }
           if (generation !== buildGeneration) return false;
           if (!installed) {
-            settingsMenu.appendChild(el(
+            panel.appendChild(el(
               'div',
               'settings-note',
               '⚠ 当前系统未检测到 pwsh，新启动的会话将以 cmd 兜底，装好后自动恢复 pwsh',
@@ -129,22 +181,47 @@ export function createSettingsController(deps) {
 
   async function build() {
     const generation = ++buildGeneration;
-    settingsMenu.innerHTML = '';
-    addThemeGroups();
-    await addShellGroup(generation);
+    for (const panel of Object.values(panels)) panel.innerHTML = '';
+    addThemeGroups(panels.appearance);
+    await addShellGroup(generation, panels.terminal);
     if (generation !== buildGeneration) return;
-    updateController.mount(settingsMenu);
+    updateController.mount(panels.update);
   }
 
-  function open() {
-    const isOpen = settingsMenu.style.display === 'block';
+  function start() {
+    if (started) return;
+    started = true;
+    settingsButton.addEventListener('click', onSettingsClick);
+    settingsMenu.addEventListener('click', onOverlayClick);
+    settingsDialog.addEventListener('click', onDialogClick);
+    settingsClose?.addEventListener('click', close);
+    for (const button of categoryButtons) {
+      const handler = (event) => {
+        event.stopPropagation?.();
+        setCategory(button.dataset.category);
+      };
+      categoryHandlers.set(button, handler);
+      button.addEventListener('click', handler);
+    }
+    documentRef.addEventListener('keydown', onEscape);
+    windowRef.addEventListener('blur', onWindowBlur);
+    setCategory(activeCategory);
+  }
+
+  function stop() {
+    if (!started) return;
+    started = false;
+    settingsButton.removeEventListener?.('click', onSettingsClick);
+    settingsMenu.removeEventListener?.('click', onOverlayClick);
+    settingsDialog.removeEventListener?.('click', onDialogClick);
+    settingsClose?.removeEventListener?.('click', close);
+    for (const [button, handler] of categoryHandlers) {
+      button.removeEventListener?.('click', handler);
+    }
+    categoryHandlers.clear();
+    documentRef.removeEventListener?.('keydown', onEscape);
+    windowRef.removeEventListener?.('blur', onWindowBlur);
     hide();
-    if (isOpen) return;
-    const rect = settingsButton.getBoundingClientRect();
-    settingsMenu.style.left = rect.left + 'px';
-    settingsMenu.style.bottom = (windowRef.innerHeight - rect.top + 4) + 'px';
-    settingsMenu.style.display = 'block';
-    void build();
   }
 
   async function initialize() {
@@ -154,35 +231,21 @@ export function createSettingsController(deps) {
     terminalController.applyTheme(state.currentTheme, false);
     try {
       const version = await backend.GetVersion();
-      settingsButton.title = '设置 · ' + formatVersion(version);
+      const formatted = formatVersion(version);
+      settingsButton.title = '设置 · ' + formatted;
+      if (settingsVersion) settingsVersion.textContent = formatted;
     } catch (error) {
       settingsButton.title = '设置';
+      if (settingsVersion) settingsVersion.textContent = '';
     }
-  }
-
-  function start() {
-    if (started) return;
-    started = true;
-    settingsButton.addEventListener('click', onSettingsClick);
-    documentRef.addEventListener('click', onDocumentClick);
-    windowRef.addEventListener('blur', onWindowBlur);
-  }
-
-  function stop() {
-    if (!started) return;
-    started = false;
-    settingsButton.removeEventListener?.('click', onSettingsClick);
-    documentRef.removeEventListener?.('click', onDocumentClick);
-    windowRef.removeEventListener?.('blur', onWindowBlur);
-    hide();
   }
 
   return {
     applyUiTheme,
     build,
-    close: hide,
+    close,
     initialize,
-    open,
+    open: show,
     start,
     stop,
   };

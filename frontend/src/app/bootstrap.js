@@ -9,7 +9,11 @@ import { clampProgress } from '../utils.js';
 
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'session-list', 'hidden-panel', 'hidden-count',
-  'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu',
+  'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
+  'settings-close', 'settings-nav', 'settings-tab-appearance',
+  'settings-tab-terminal', 'settings-tab-update', 'settings-content',
+  'settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update',
+  'settings-version',
 ];
 
 function requiredElement(documentRef, id) {
@@ -127,6 +131,20 @@ export function createApplication(deps) {
     themes,
     settingsButton: nodes['btn-settings'],
     settingsMenu: nodes['settings-menu'],
+    settingsDialog: nodes['settings-dialog'],
+    settingsClose: nodes['settings-close'],
+    settingsNav: nodes['settings-nav'],
+    settingsVersion: nodes['settings-version'],
+    categoryButtons: [
+      nodes['settings-tab-appearance'],
+      nodes['settings-tab-terminal'],
+      nodes['settings-tab-update'],
+    ],
+    panels: {
+      appearance: nodes['settings-panel-appearance'],
+      terminal: nodes['settings-panel-terminal'],
+      update: nodes['settings-panel-update'],
+    },
     documentRef,
     windowRef,
     storage: safeStorage(windowRef),
