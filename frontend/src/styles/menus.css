@@ -112,6 +112,67 @@
 .settings-nav button[aria-selected="true"] { background: var(--menu-hover); color: var(--accent); }
 .settings-content { min-width: 0; flex: 1; overflow: auto; padding: 12px 16px 16px; }
 .settings-panel[hidden] { display: none; }
+.settings-section-title {
+  margin: 4px 0 2px;
+  font-size: 14px;
+  color: var(--text);
+}
+.settings-section-description {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.settings-mode-group {
+  display: inline-flex;
+  margin-bottom: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.settings-segment {
+  min-width: 112px;
+  padding: 8px 14px;
+  border: 0;
+  background: var(--panel-2);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.settings-segment + .settings-segment { border-left: 1px solid var(--border-strong); }
+.settings-segment[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.settings-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.settings-theme-card,
+.settings-shell-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-theme-card:hover,
+.settings-shell-card:hover { border-color: var(--border-strong); background: var(--menu-hover); }
+.settings-theme-card[aria-pressed="true"],
+.settings-shell-card[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.settings-theme-preview { display: inline-flex; gap: 3px; flex-shrink: 0; }
+.settings-theme-swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); }
+.settings-theme-swatch-bg { background: var(--theme-bg); }
+.settings-theme-swatch-fg { background: var(--theme-fg); }
+.settings-theme-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-shell-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.settings-shell-card { flex-direction: column; align-items: flex-start; gap: 3px; }
+.settings-shell-name { font-size: 12.5px; font-weight: 600; }
+.settings-shell-description { font-size: 10.5px; line-height: 1.4; color: var(--text-faint); }
+.settings-shell-card:disabled { opacity: .55; cursor: not-allowed; }
 #settings-menu .settings-item {
   padding: 8px 12px;
   font-size: 12.5px;

@@ -41,7 +41,7 @@ test('all CSS variable references have a token declaration or dynamic ownership'
   const declared = new Set([
     ...read('themes.css').matchAll(/--([\w-]+)\s*:/g),
   ].map((match) => match[1]));
-  const dynamic = new Set(['dot', 'term-bg']);
+  const dynamic = new Set(['dot', 'term-bg', 'theme-bg', 'theme-fg']);
   for (const file of fs.readdirSync(stylesDir).filter((name) => name.endsWith('.css'))) {
     const source = read(file);
     for (const [, name] of source.matchAll(/var\(--([\w-]+)/g)) {

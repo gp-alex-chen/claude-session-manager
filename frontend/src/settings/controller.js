@@ -103,80 +103,113 @@ export function createSettingsController(deps) {
     if (isOpen()) hide();
   }
 
+  function setPressed(button, selected) {
+    button.setAttribute('aria-pressed', String(selected));
+    button.classList.toggle('cur', selected);
+  }
+
+  function makeButton(className, text) {
+    const button = el('button', className, text);
+    button.type = 'button';
+    return button;
+  }
+
+  function addHeading(panel, title, description) {
+    panel.appendChild(el('h3', 'settings-section-title', title));
+    if (description) panel.appendChild(el('p', 'settings-section-description', description));
+  }
+
   function addThemeGroups(panel) {
-    panel.appendChild(el('div', 'settings-group-label', '界面外观'));
-    for (const [mode, text] of [['light', '☀️ 日间模式'], ['dark', '🌙 夜间模式']]) {
-      const item = el('div', 'settings-item' + (mode === state.uiTheme ? ' cur' : ''), text);
+    addHeading(panel, '界面模式', '选择应用界面的明暗主题。');
+    const modeGroup = el('div', 'settings-mode-group');
+    for (const [mode, text] of [['light', '日间模式'], ['dark', '夜间模式']]) {
+      const item = makeButton('settings-segment', text);
       item.dataset.mode = mode;
+      setPressed(item, mode === state.uiTheme);
       item.addEventListener('click', () => {
         applyUiTheme(mode);
-        close();
+        for (const button of modeGroup.children) setPressed(button, button.dataset.mode === mode);
       });
-      panel.appendChild(item);
+      modeGroup.appendChild(item);
     }
+    panel.appendChild(modeGroup);
 
-    panel.appendChild(el('div', 'settings-group-label', '终端配色'));
+    addHeading(panel, '终端配色', '为新建和已有终端选择配色方案。');
+    const themeGrid = el('div', 'settings-theme-grid');
     for (const [key, theme] of Object.entries(themes)) {
-      const item = el('div', 'settings-item' + (key === state.currentTheme ? ' cur' : ''), theme.name);
+      const item = makeButton('settings-theme-card', theme.name);
       item.dataset.theme = key;
-      item.style.setProperty('--dot', theme.background);
+      item.style.setProperty('--theme-bg', theme.background);
+      item.style.setProperty('--theme-fg', theme.foreground);
+      const preview = el('span', 'settings-theme-preview');
+      preview.setAttribute('aria-hidden', 'true');
+      const backgroundSwatch = el('span', 'settings-theme-swatch settings-theme-swatch-bg');
+      const foregroundSwatch = el('span', 'settings-theme-swatch settings-theme-swatch-fg');
+      preview.append(backgroundSwatch, foregroundSwatch);
+      item.appendChild(preview);
+      const label = el('span', 'settings-theme-name', theme.name);
+      item.appendChild(label);
+      setPressed(item, key === state.currentTheme);
       item.addEventListener('click', () => {
+        state.currentTheme = key;
         terminalController.applyTheme(key);
-        close();
+        for (const button of themeGrid.children) setPressed(button, button.dataset.theme === key);
       });
-      panel.appendChild(item);
+      themeGrid.appendChild(item);
     }
+    panel.appendChild(themeGrid);
   }
 
   function addShellGroup(generation, panel) {
-    return Promise.resolve()
-      .then(() => backend.GetShell())
-      .catch(() => 'cmd')
-      .then(async (configuredShell) => {
-        if (generation !== buildGeneration) return false;
-        const shell = configuredShell === 'pwsh' ? 'pwsh' : 'cmd';
-        panel.appendChild(el('div', 'settings-group-label', '底层 Shell'));
-        for (const [key, text] of [['cmd', 'cmd.exe（默认）'], ['pwsh', 'pwsh（PowerShell 7）']]) {
-          const item = el('div', 'settings-item' + (key === shell ? ' cur' : ''), text);
-          item.dataset.shell = key;
-          item.title = key === 'pwsh'
-            ? '需要已安装 PowerShell 7（pwsh 在 PATH 中）；claude 退出后停留在 pwsh 提示符'
-            : 'Windows 自带；claude 退出后终端随之结束';
-          item.addEventListener('click', async () => {
-            if (key === 'pwsh') {
-              let installed = false;
-              try { installed = await backend.ShellInstalled('pwsh'); } catch (error) { /* unavailable */ }
-              if (!installed) {
-                setStatus('未检测到 pwsh（PowerShell 7）：请先安装并确保 pwsh 在 PATH 中，或保持 cmd', 'warn');
-                return;
-              }
-            }
-            try {
-              await backend.SetShell(key);
-            } catch (error) {
-              setStatus('切换 Shell 失败: ' + error, 'warn');
-              return;
-            }
-            close();
-            setStatus('底层 Shell 已切换: ' + (key === 'pwsh' ? 'pwsh' : 'cmd') + '（新启动/恢复的会话生效）', 'ok');
-          });
-          panel.appendChild(item);
-        }
-
-        if (shell === 'pwsh') {
-          let installed = true;
-          try { installed = await backend.ShellInstalled('pwsh'); } catch (error) { installed = false; }
-          if (generation !== buildGeneration) return false;
-          if (!installed) {
-            panel.appendChild(el(
-              'div',
-              'settings-note',
-              '⚠ 当前系统未检测到 pwsh，新启动的会话将以 cmd 兜底，装好后自动恢复 pwsh',
-            ));
+    return Promise.all([
+      Promise.resolve().then(() => backend.GetShell()).catch(() => 'cmd'),
+      Promise.resolve().then(() => backend.ShellInstalled('pwsh')).catch(() => false),
+    ]).then(([configuredShell, installed]) => {
+      if (generation !== buildGeneration) return false;
+      const shell = configuredShell === 'pwsh' ? 'pwsh' : 'cmd';
+      addHeading(panel, '底层 Shell', '选择新启动或恢复会话使用的命令解释器。');
+      const shellGrid = el('div', 'settings-shell-grid');
+      const shellButtons = new Map();
+      const setShellSelection = (selected) => {
+        for (const [name, button] of shellButtons) setPressed(button, name === selected);
+      };
+      for (const [key, text, description] of [
+        ['cmd', 'cmd.exe', 'Windows 自带，claude 退出后终端随之结束。'],
+        ['pwsh', 'PowerShell 7', '需要 pwsh 在 PATH 中，claude 退出后停留在提示符。'],
+      ]) {
+        const item = makeButton('settings-shell-card', text);
+        item.dataset.shell = key;
+        item.appendChild(el('span', 'settings-shell-name', text));
+        item.appendChild(el('span', 'settings-shell-description', description));
+        const unavailable = key === 'pwsh' && !installed;
+        item.disabled = unavailable;
+        item.setAttribute('aria-disabled', String(unavailable));
+        item.title = unavailable ? '未检测到 pwsh，请安装 PowerShell 7 并确保它在 PATH 中' : description;
+        setPressed(item, key === shell);
+        item.addEventListener('click', async () => {
+          if (unavailable) return;
+          try {
+            await backend.SetShell(key);
+          } catch (error) {
+            setStatus('切换 Shell 失败: ' + error, 'warn');
+            return;
           }
-        }
-        return true;
-      });
+          if (generation !== buildGeneration) return;
+          setShellSelection(key);
+          setStatus('底层 Shell 已切换: ' + (key === 'pwsh' ? 'pwsh' : 'cmd') + '（新启动/恢复的会话生效）', 'ok');
+        });
+        shellButtons.set(key, item);
+        shellGrid.appendChild(item);
+      }
+      panel.appendChild(shellGrid);
+      if (!installed) {
+        const message = shell === 'pwsh'
+          ? '当前配置为 pwsh，但未检测到 pwsh；新启动的会话将以 cmd 兜底。'
+          : 'pwsh 当前不可用；请安装 PowerShell 7 并确保它在 PATH 中。';
+        panel.appendChild(el('div', 'settings-note', message));
+      }
+      return true;
+    });
   }
 
   async function build() {

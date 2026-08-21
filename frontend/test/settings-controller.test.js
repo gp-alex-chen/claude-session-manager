@@ -22,13 +22,18 @@ class FakeNode {
     this.children = [];
     this.dataset = {};
     this.attributes = new Map();
-    this.style = { setProperty() {} };
+    const styleValues = new Map();
+    this.style = {
+      setProperty(name, value) { styleValues.set(name, value); },
+      getPropertyValue(name) { return styleValues.get(name) || ''; },
+    };
     this.classList = new FakeClassList();
     this.listeners = new Map();
     this.listenerAdds = new Map();
     this._innerHTML = '';
     this.textContent = '';
     this.value = '';
+    this.disabled = false;
     this.hidden = false;
     this.focused = false;
   }
@@ -112,6 +117,7 @@ function fixture(options = {}) {
     storage,
     el: (tag, className, text) => {
       const node = new FakeNode();
+      node.tagName = tag.toUpperCase();
       node.className = className || '';
       node.textContent = text || '';
       return node;
@@ -220,10 +226,11 @@ test('shell selection validates pwsh and preserves menu on failure', async () =>
   await childWith(fixtureData.settingsMenu, 'shell', 'pwsh').listeners.get('click')();
   assert.equal(setCalls, 0);
   assert.equal(fixtureData.settingsMenu.hidden, false);
-  assert.match(fixtureData.statuses.at(-1).message, /未检测到 pwsh/);
+  assert.ok(allNodes(fixtureData.panels.terminal).some((node) => /pwsh.*不可用|不可用.*pwsh/.test(node.textContent)));
 
   fixtureData.backend.ShellInstalled = async () => true;
   fixtureData.backend.SetShell = async () => { throw new Error('cannot save'); };
+  await fixtureData.controller.build();
   await childWith(fixtureData.settingsMenu, 'shell', 'pwsh').listeners.get('click')();
   assert.equal(fixtureData.settingsMenu.hidden, false);
   assert.match(fixtureData.statuses.at(-1).message, /切换 Shell 失败/);
@@ -235,8 +242,70 @@ test('shell selection validates pwsh and preserves menu on failure', async () =>
   await success.controller.build();
   success.settingsMenu.hidden = false;
   await childWith(success.settingsMenu, 'shell', 'pwsh').listeners.get('click')();
-  assert.equal(success.settingsMenu.hidden, true);
+  assert.equal(success.settingsMenu.hidden, false);
+  assert.equal(childWith(success.settingsMenu, 'shell', 'pwsh').getAttribute('aria-pressed'), 'true');
   assert.match(success.statuses.at(-1).message, /底层 Shell 已切换: pwsh/);
+});
+
+test('appearance uses semantic mode buttons and theme cards without closing', async () => {
+  const fixtureData = fixture();
+  fixtureData.settingsMenu.hidden = false;
+  await fixtureData.controller.build();
+
+  const modes = ['light', 'dark'].map((mode) => childWith(fixtureData.panels.appearance, 'mode', mode));
+  assert.ok(modes.every((button) => button.tagName === 'BUTTON'));
+  assert.deepEqual(modes.map((button) => button.getAttribute('aria-pressed')), ['true', 'false']);
+  assert.ok(modes.every((button) => button.className.includes('settings-segment')));
+
+  const cards = Object.keys(THEMES).map((theme) => childWith(fixtureData.panels.appearance, 'theme', theme));
+  assert.equal(cards.length, 8);
+  assert.ok(cards.every((card) => card.tagName === 'BUTTON'));
+  assert.ok(cards.every((card) => card.style.getPropertyValue('--theme-bg')));
+  assert.ok(cards.every((card) => card.style.getPropertyValue('--theme-fg')));
+  assert.equal(cards[0].getAttribute('aria-pressed'), 'true');
+
+  modes[1].listeners.get('click')();
+  assert.equal(fixtureData.state.uiTheme, 'dark');
+  assert.equal(fixtureData.settingsMenu.hidden, false);
+  assert.deepEqual(modes.map((button) => button.getAttribute('aria-pressed')), ['false', 'true']);
+
+  cards[1].listeners.get('click')();
+  assert.equal(fixtureData.settingsMenu.hidden, false);
+  assert.equal(fixtureData.state.currentTheme, 'dracula');
+  assert.equal(cards[1].getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(fixtureData.applied.at(-1), ['dracula']);
+});
+
+test('pwsh is checked during build and disabled when unavailable', async () => {
+  let setCalls = 0;
+  let installedChecks = 0;
+  const fixtureData = fixture({
+    GetShell: async () => 'cmd',
+    ShellInstalled: async () => { installedChecks += 1; return false; },
+    SetShell: async () => { setCalls += 1; },
+  });
+  await fixtureData.controller.build();
+
+  assert.equal(installedChecks, 1);
+  const pwsh = childWith(fixtureData.panels.terminal, 'shell', 'pwsh');
+  assert.equal(pwsh.tagName, 'BUTTON');
+  assert.equal(pwsh.disabled, true);
+  assert.equal(pwsh.getAttribute('aria-disabled'), 'true');
+  await pwsh.listeners.get('click')();
+  assert.equal(setCalls, 0);
+  assert.ok(allNodes(fixtureData.panels.terminal).some((node) => /pwsh.*不可用|不可用.*pwsh/.test(node.textContent)));
+});
+
+test('configured unavailable pwsh stays selected and explains fallback', async () => {
+  const fixtureData = fixture({
+    GetShell: async () => 'pwsh',
+    ShellInstalled: async () => false,
+  });
+  await fixtureData.controller.build();
+  const pwsh = childWith(fixtureData.panels.terminal, 'shell', 'pwsh');
+  assert.equal(pwsh.getAttribute('aria-pressed'), 'true');
+  assert.equal(pwsh.disabled, true);
+  assert.ok(allNodes(fixtureData.panels.terminal).some((node) => node.textContent.includes('cmd 兜底')));
 });
 
 test('first settings click opens CSS-hidden menu and second click closes it', async () => {
@@ -268,7 +337,7 @@ test('pwsh fallback note is shown when configured shell is unavailable', async (
 test('shell read failure safely selects cmd', async () => {
   const fixtureData = fixture({ GetShell: async () => { throw new Error('offline'); } });
   await fixtureData.controller.build();
-  assert.match(childWith(fixtureData.settingsMenu, 'shell', 'cmd').className, /cur/);
+  assert.equal(childWith(fixtureData.settingsMenu, 'shell', 'cmd').getAttribute('aria-pressed'), 'true');
 });
 
 test('stale shell builds cannot append after a newer menu build', async () => {
@@ -284,11 +353,11 @@ test('stale shell builds cannot append after a newer menu build', async () => {
   resolvers[0]('pwsh');
   await first;
   const labels = allNodes(fixtureData.settingsMenu)
-    .filter((child) => child.className === 'settings-group-label')
+    .filter((child) => child.className === 'settings-section-title' || child.className === 'settings-group-label')
     .map((child) => child.textContent);
-  assert.deepEqual(labels, ['界面外观', '终端配色', '底层 Shell', '更新']);
-  assert.match(childWith(fixtureData.settingsMenu, 'shell', 'cmd').className, /cur/);
-  assert.doesNotMatch(childWith(fixtureData.settingsMenu, 'shell', 'pwsh').className, /cur/);
+  assert.deepEqual(labels, ['界面模式', '终端配色', '底层 Shell', '更新']);
+  assert.equal(childWith(fixtureData.settingsMenu, 'shell', 'cmd').getAttribute('aria-pressed'), 'true');
+  assert.equal(childWith(fixtureData.settingsMenu, 'shell', 'pwsh').getAttribute('aria-pressed'), 'false');
 });
 
 test('settings uses a modal dialog with semantic categories and close paths', async () => {
