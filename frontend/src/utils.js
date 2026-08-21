@@ -24,3 +24,8 @@ export function leafOf(dir) {
 export function clampProgress(value) {
   return Math.max(0, Math.min(100, Number(value) || 0));
 }
+
+export function formatVersion(value) {
+  const version = String(value || 'dev').trim();
+  return version.startsWith('v') ? version : 'v' + version;
+}

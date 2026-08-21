@@ -125,6 +125,10 @@ test('initialize validates stored UI and terminal themes', async () => {
   assert.deepEqual(valid.applied, [['dracula', false]]);
   assert.equal(valid.settingsButton.title, '设置 · v1.2.3');
 
+  const tagged = fixture({ GetVersion: async () => 'v0.3-wails-rc2-local' });
+  await tagged.controller.initialize();
+  assert.equal(tagged.settingsButton.title, '设置 · v0.3-wails-rc2-local');
+
   const invalid = fixture({ storage: { 'ui-theme': 'sepia', 'term-theme': 'missing' }, GetVersion: async () => {
     throw new Error('offline');
   } });

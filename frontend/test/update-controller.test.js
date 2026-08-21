@@ -88,11 +88,16 @@ function fixture(options = {}) {
 }
 
 test('check no-update and reject states return to retryable idle', async () => {
-  const noUpdate = fixture();
+  const noUpdate = fixture({ check: async () => ({ hasUpdate: false, current: 'v0.3-wails-rc2-local' }) });
   await noUpdate.item.listeners.get('click')();
   assert.equal(noUpdate.controller.getSnapshot().mode, 'idle');
   assert.equal(noUpdate.calls.check, 1);
   assert.equal(noUpdate.item.classList.contains('disabled'), false);
+  assert.equal(noUpdate.statuses.at(-1).message, '✅ 已是最新版本（v0.3-wails-rc2-local）');
+
+  const noPrefix = fixture({ check: async () => ({ hasUpdate: false, current: '0.3-wails-rc2-local' }) });
+  await noPrefix.item.listeners.get('click')();
+  assert.equal(noPrefix.statuses.at(-1).message, '✅ 已是最新版本（v0.3-wails-rc2-local）');
 
   const rejected = fixture({ check: async () => { throw new Error('offline'); } });
   await rejected.item.listeners.get('click')();
@@ -122,7 +127,7 @@ test('ready information survives remount and remains actionable', async () => {
   await fixtureData.controller.check();
   const replacement = new FakeNode();
   fixtureData.controller.mount(replacement);
-  assert.match(replacement.children[1].textContent, /发现新版本 2.0.0/);
+  assert.match(replacement.children[1].textContent, /发现新版本 v2.0.0/);
   await replacement.children[1].listeners.get('click')();
   assert.equal(applied, 1);
 });

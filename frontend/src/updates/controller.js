@@ -1,3 +1,5 @@
+import { formatVersion } from '../utils.js';
+
 export function createUpdateController(deps) {
   const {
     backend,
@@ -40,7 +42,7 @@ export function createUpdateController(deps) {
   function render() {
     if (!updateItem) return;
     updateItem.textContent = state.mode === 'ready'
-      ? '发现新版本 ' + state.info.latest + ' → 点击更新并重启'
+      ? '发现新版本 ' + formatVersion(state.info.latest) + ' → 点击更新并重启'
       : state.mode === 'checking'
         ? '正在检查…'
         : state.mode === 'applying'
@@ -67,7 +69,7 @@ export function createUpdateController(deps) {
 
     if (updateNote) {
       updateNote.textContent = state.mode === 'ready'
-        ? '当前 v' + (state.info.current || 'dev') + '；将下载并自动重启，运行中的会话进程会结束'
+        ? '当前 ' + formatVersion(state.info.current) + '；将下载并自动重启，运行中的会话进程会结束'
         : '点击检查 GitHub 上是否有新版（v*-wails）';
     }
   }
@@ -85,13 +87,16 @@ export function createUpdateController(deps) {
         state.busy = false;
         state.phase = '';
         state.info = { ...info };
-        setStatus('发现新版本 ' + info.latest + '（当前 v' + (info.current || 'dev') + '）', 'warn');
+        setStatus(
+          '发现新版本 ' + formatVersion(info.latest) + '（当前 ' + formatVersion(info.current) + '）',
+          'warn',
+        );
       } else {
         state.info = null;
         state.busy = false;
         state.mode = 'idle';
         state.phase = '';
-        setStatus('✅ 已是最新版本（v' + ((info && info.current) || 'dev') + '）', 'ok');
+        setStatus('✅ 已是最新版本（' + formatVersion(info && info.current) + '）', 'ok');
       }
     } catch (error) {
       state.info = null;

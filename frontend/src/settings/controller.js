@@ -1,3 +1,5 @@
+import { formatVersion } from '../utils.js';
+
 export function createSettingsController(deps) {
   const {
     state,
@@ -152,7 +154,7 @@ export function createSettingsController(deps) {
     terminalController.applyTheme(state.currentTheme, false);
     try {
       const version = await backend.GetVersion();
-      settingsButton.title = '设置 · v' + version;
+      settingsButton.title = '设置 · ' + formatVersion(version);
     } catch (error) {
       settingsButton.title = '设置';
     }
