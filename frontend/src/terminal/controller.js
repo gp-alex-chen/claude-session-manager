@@ -16,11 +16,6 @@ export function createTerminalController(deps) {
     onActivate,
   } = deps;
 
-  const clipboardWriter = deps.writeClipboard || ((text) => {
-    if (!navigatorRef?.clipboard?.writeText) return Promise.reject(new Error('剪贴板不可用'));
-    return navigatorRef.clipboard.writeText(text);
-  });
-
   function writeTerm(session, data) {
     backend.TermWrite(session.token, bytesToB64(new TextEncoder().encode(data)));
   }
@@ -52,19 +47,6 @@ export function createTerminalController(deps) {
     if (text && session.term) session.term.paste(text);
   }
 
-  async function copySelection(session, event) {
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    const selection = session.term?.getSelection?.() || '';
-    if (!selection) return;
-    try {
-      await clipboardWriter(selection);
-      setStatus?.('已复制', 'ok');
-    } catch (error) {
-      setStatus?.('复制失败: ' + error, 'warn');
-    }
-  }
-
   function openTab(token, name) {
     state.closedTokens.delete(token);
     const existing = state.terminals.get(token);
@@ -83,9 +65,6 @@ export function createTerminalController(deps) {
       host: hostFactory(),
     };
     session.host.classList.add('term-host');
-    session.host.addEventListener('contextmenu', (event) => {
-      void copySelection(session, event);
-    });
     appendHost(session.host);
     state.terminals.set(token, session);
     return session;
