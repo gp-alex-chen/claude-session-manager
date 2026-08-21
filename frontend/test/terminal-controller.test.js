@@ -29,7 +29,11 @@ class FakeHost {
   constructor() {
     this.classList = new FakeClassList();
     this.removed = false;
+    this.listeners = new Map();
   }
+
+  addEventListener(name, callback) { this.listeners.set(name, callback); }
+  emit(name, event) { return this.listeners.get(name)?.(event); }
 
   remove() {
     this.removed = true;
@@ -48,6 +52,7 @@ class FakeTerm {
     this.writes = [];
     this.pastes = [];
     this.disposed = false;
+    this.selection = '';
   }
 
   loadAddon(addon) { this.addon = addon; }
@@ -58,18 +63,21 @@ class FakeTerm {
   attachCustomKeyEventHandler(handler) { this.keyHandler = handler; }
   write(bytes) { this.writes.push(bytes); }
   paste(text) { this.pastes.push(text); }
+  hasSelection() { return this.selection.length > 0; }
+  getSelection() { return this.selection; }
   focus() { this.focused = true; }
   dispose() { this.disposed = true; }
   emitData(data) { this.dataHandler(data); }
   emitKey(event) { return this.keyHandler(event); }
 }
 
-function createFixture() {
+function createFixture(options = {}) {
   const state = createAppState();
   const hosts = [];
   const writes = [];
   const killed = [];
   const statuses = [];
+  const copied = [];
   const documentRef = {
     documentElement: { style: { setProperty() {} } },
   };
@@ -98,8 +106,9 @@ function createFixture() {
     documentRef,
     navigatorRef,
     storageRef: { setItem() {} },
+    writeClipboard: options.writeClipboard || (async (text) => { copied.push(text); }),
   });
-  return { state, controller, hosts, writes, killed, statuses };
+  return { state, controller, hosts, writes, killed, statuses, copied };
 }
 
 function openAndActivate(fixture, token = 'session-1') {
@@ -194,4 +203,57 @@ test('terminal input preserves UTF-8 and shortcut semantics', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(session.term.pastes, ['粘贴内容', '粘贴内容', '粘贴内容']);
   assert.equal(new TextDecoder().decode(b64ToBytes(fixture.writes.at(-1).b64)), '\n');
+});
+
+test('terminal right click copies one complete UTF-8 multiline selection', async () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture, 'session-1');
+  session.term.selection = '第一行🙂\nsecond line\n第三行';
+  const event = {
+    preventDefault() { this.prevented = (this.prevented || 0) + 1; },
+    stopPropagation() { this.stopped = (this.stopped || 0) + 1; },
+  };
+
+  session.host.emit('contextmenu', event);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(event.prevented, 1);
+  assert.equal(event.stopped, 1);
+  assert.deepEqual(fixture.copied, ['第一行🙂\nsecond line\n第三行']);
+  assert.deepEqual(fixture.statuses.at(-1), { message: '已复制', kind: 'ok' });
+});
+
+test('terminal right click without a selection does not write or report success', async () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture, 'session-1');
+  const event = {
+    preventDefault() { this.prevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+
+  session.host.emit('contextmenu', event);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+  assert.deepEqual(fixture.copied, []);
+  assert.equal(fixture.statuses.some(({ message }) => message === '已复制'), false);
+});
+
+test('terminal right click reports clipboard failures without leaking rejection', async () => {
+  const fixture = createFixture({
+    writeClipboard: async () => { throw new Error('clipboard denied'); },
+  });
+  const session = openAndActivate(fixture, 'session-1');
+  session.term.selection = 'copy me';
+  const event = { preventDefault() {}, stopPropagation() {} };
+
+  await assert.doesNotReject(async () => {
+    session.host.emit('contextmenu', event);
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  assert.deepEqual(fixture.statuses.at(-1), {
+    message: '复制失败: Error: clipboard denied',
+    kind: 'warn',
+  });
 });

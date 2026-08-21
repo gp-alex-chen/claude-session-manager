@@ -10,10 +10,6 @@
 #status-bar.ok { color: var(--ok); }
 #status-bar.warn { color: var(--warn); }
 #terminal { flex: 1; position: relative; padding: 0; }
-.term-host,
-.term-host .xterm {
-  --default-contextmenu: show;
-}
 .term-host {
   position: absolute;
   inset: 0;

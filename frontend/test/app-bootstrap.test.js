@@ -72,10 +72,11 @@ function makeFixture(options = {}) {
       eventsOff.push(name);
       runtimeListeners.delete(name);
     },
+    ClipboardSetText: async (text) => { calls.clipboard.push(text); },
   };
   const calls = {
     factories: {}, starts: {}, stops: {}, initializes: {}, routed: [],
-    resize: 0, cancels: 0,
+    resize: 0, cancels: 0, clipboard: [],
   };
   const makeController = (name, extra = {}) => {
     calls.starts[name] = 0;
@@ -142,15 +143,17 @@ function makeFixture(options = {}) {
   return { app, calls, documentRef, elements, windowListeners, runtimeListeners, eventsOff };
 }
 
-test('bootstrap creates controllers around one shared state and wires callbacks', () => {
+test('bootstrap creates controllers around one shared state and wires callbacks', async () => {
   const fixture = makeFixture();
   assert.equal(Object.keys(fixture.calls.factories).length, 5);
   assert.equal(fixture.calls.factories.agent.state, fixture.app.state);
   assert.equal(fixture.calls.factories.session.state, fixture.app.state);
   fixture.calls.factories.agent.refreshFoldState();
   fixture.calls.factories.terminal.onActivate();
+  await fixture.calls.factories.terminal.writeClipboard('复制内容');
   fixture.calls.factories.update.showToast('hello');
   assert.deepEqual(fixture.calls.routed, [['fold'], ['active'], ['toast', 'hello']]);
+  assert.deepEqual(fixture.calls.clipboard, ['复制内容']);
 });
 
 test('start is idempotent and initializes both controllers once', async () => {
