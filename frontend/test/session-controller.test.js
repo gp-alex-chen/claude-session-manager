@@ -222,6 +222,22 @@ test('controller pairing updates the temporary label for a new real session', ()
   assert.deepEqual(fixture.state.pendingNew, []);
 });
 
+test('full refresh pairs pending sessions before replacing the loaded snapshot', async () => {
+  const old = session('old', 'work', 'Old');
+  const real = session('real', 'work', 'Real name');
+  const fixture = makeFixture({ listResults: [[old, real]] });
+  fixture.controller.renderSessions([old]);
+  fixture.state.pendingNew.push({ token: 'new-1', dir: 'work' });
+  fixture.terminalController.openTab('new-1', '新会话 1');
+
+  await fixture.controller.loadSessions();
+
+  assert.equal(fixture.state.realToNew.get('real'), 'new-1');
+  assert.equal(fixture.state.newToReal.get('new-1'), 'real');
+  assert.deepEqual(fixture.state.pendingNew, []);
+  assert.equal(fixture.state.terminals.get('new-1').labelText, 'Real name');
+});
+
 test('rename updates the mapped temporary terminal label', async () => {
   const fixture = makeFixture();
   fixture.state.realToNew.set('real', 'new-real');

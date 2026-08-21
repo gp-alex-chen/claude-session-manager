@@ -108,7 +108,9 @@ export function createSessionController(deps) {
       setStatus('加载会话失败: ' + error, 'warn');
       return false;
     }
-    renderSessions(Array.isArray(list) ? list : []);
+    list = Array.isArray(list) ? list : [];
+    pairNewSessions(list);
+    renderSessions(list);
     return true;
   }
 
