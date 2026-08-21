@@ -101,15 +101,15 @@ type Manager struct {
 	cols, rows  int
 	cb          Callbacks
 	start       StartFunc
-	persist     func() error
+	persist     func([]string) error
 	persistErr  func(error)
 }
 
-func NewManager(cb Callbacks, persist func() error) *Manager {
+func NewManager(cb Callbacks, persist func([]string) error) *Manager {
 	return NewManagerWithStart(cb, persist, productionStart)
 }
 
-func NewManagerWithStart(cb Callbacks, persist func() error, start StartFunc) *Manager {
+func NewManagerWithStart(cb Callbacks, persist func([]string) error, start StartFunc) *Manager {
 	if start == nil {
 		start = productionStart
 	}
@@ -142,11 +142,11 @@ func (m *Manager) reportPersist(err error) {
 	}
 }
 
-func (m *Manager) persistOpen() error {
+func (m *Manager) persistSnapshot(ids []string) error {
 	if m.persist == nil {
 		return nil
 	}
-	return m.persist()
+	return m.persist(append([]string(nil), ids...))
 }
 
 func (m *Manager) SetCallbacks(cb Callbacks) {
@@ -180,6 +180,10 @@ func (m *Manager) IsRunning(token string) bool {
 func (m *Manager) OpenIDs() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.openIDsLocked()
+}
+
+func (m *Manager) openIDsLocked() []string {
 	ids := make([]string, 0, len(m.terms))
 	for token, r := range m.terms {
 		if token != "" && !strings.HasPrefix(token, "new-") && r != nil && !r.Closed() {
@@ -214,15 +218,22 @@ func (m *Manager) Kill(token string) {
 	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
 	r, ok := m.terms[token]
+	var ids []string
 	if ok {
 		delete(m.terms, token)
+		ids = m.openIDsLocked()
 	}
 	m.mu.Unlock()
-	if !ok || r == nil {
+	if !ok {
 		return
 	}
-	r.Close()
-	m.reportPersist(m.persistOpen())
+	if r != nil {
+		r.Close()
+	}
+	m.reportPersist(m.persistSnapshot(ids))
+	if r == nil {
+		return
+	}
 	if cb := m.callbacks(); cb.Exit != nil {
 		cb.Exit(token)
 	}
@@ -233,6 +244,7 @@ func (m *Manager) CloseAll() {
 	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
 	terms := m.terms
+	ids := m.openIDsLocked()
 	m.terms = make(map[string]*ptyRef)
 	m.mu.Unlock()
 	for _, r := range terms {
@@ -240,7 +252,9 @@ func (m *Manager) CloseAll() {
 			r.Close()
 		}
 	}
-	m.reportPersist(m.persistOpen())
+	// Persist the snapshot captured before clearing the map. Reader teardown
+	// waits on lifecycleMu and therefore cannot overwrite it with an empty set.
+	m.reportPersist(m.persistSnapshot(ids))
 }
 
 func (m *Manager) Start(token, cmdLine, dir string) error {
@@ -267,13 +281,14 @@ func (m *Manager) Start(token, cmdLine, dir string) error {
 	r := &ptyRef{pty: pty}
 	m.mu.Lock()
 	m.terms[token] = r
+	ids := m.openIDsLocked()
 	m.mu.Unlock()
 	if old != nil {
 		old.Close()
 	}
 	// Persistence is auxiliary state. A disk error must not tear down the
 	// successfully-created PTY (especially after an old instance was replaced).
-	m.reportPersist(m.persistOpen())
+	m.reportPersist(m.persistSnapshot(ids))
 	m.readLoop(token, r)
 	return nil
 }
@@ -299,17 +314,21 @@ func (m *Manager) readLoop(token string, r *ptyRef) {
 // finishRead is the synchronous reader teardown path. Identity is checked
 // while holding m.mu so an old reader can never remove a replacement.
 func (m *Manager) finishRead(token string, r *ptyRef) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	r.Close()
 	m.mu.Lock()
 	current := m.terms[token] == r
+	var ids []string
 	if current {
 		delete(m.terms, token)
+		ids = m.openIDsLocked()
 	}
 	m.mu.Unlock()
 	if !current {
 		return
 	}
-	m.reportPersist(m.persistOpen())
+	m.reportPersist(m.persistSnapshot(ids))
 	if cb := m.callbacks(); cb.Exit != nil {
 		cb.Exit(token)
 	}

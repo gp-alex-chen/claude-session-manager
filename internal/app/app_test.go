@@ -1,14 +1,18 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
+	"github.com/gp-alex-chen/claude-session-manager/internal/terminal"
 )
 
 func testApp(t *testing.T) (*App, *state.Store, *[]string, string) {
@@ -162,6 +166,31 @@ func TestMalformedStateUsesSafeDefaultsAndLogs(t *testing.T) {
 	}
 }
 
+func TestShutdownPreservesOpenSessions(t *testing.T) {
+	a, store, _, _ := testApp(t)
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func(ids []string) error { return store.SaveOpen(ids) },
+		func(string, string, int, int, []string) (terminal.Pty, error) {
+			return newShutdownPty(), nil
+		},
+	)
+	for _, id := range []string{"session-b", "session-a"} {
+		if err := a.terms.Start(id, "cmd", "."); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a.shutdown(context.Background())
+	got, err := store.LoadOpen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"session-a", "session-b"}) {
+		t.Fatalf("open sessions after shutdown = %v", got)
+	}
+}
+
 func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 	typ := reflect.TypeOf(&App{})
 	want := []string{
@@ -184,4 +213,25 @@ func containsLog(logs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+type shutdownPty struct {
+	once sync.Once
+	done chan struct{}
+}
+
+func newShutdownPty() *shutdownPty {
+	return &shutdownPty{done: make(chan struct{})}
+}
+
+func (p *shutdownPty) Read([]byte) (int, error) {
+	<-p.done
+	return 0, io.EOF
+}
+
+func (p *shutdownPty) Write(data []byte) (int, error) { return len(data), nil }
+func (p *shutdownPty) Resize(int, int) error          { return nil }
+func (p *shutdownPty) Close() error {
+	p.once.Do(func() { close(p.done) })
+	return nil
 }

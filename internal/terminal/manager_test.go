@@ -3,6 +3,7 @@ package terminal
 import (
 	"errors"
 	"io"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -178,7 +179,7 @@ func TestStartPersistsErrorWithoutTearingDownPTY(t *testing.T) {
 	sentinel := errors.New("persist failed")
 	p := &fakePty{read: make(chan struct{})}
 	var reported atomic.Int32
-	m := NewManagerWithStart(Callbacks{}, func() error { return sentinel }, func(string, string, int, int, []string) (Pty, error) { return p, nil })
+	m := NewManagerWithStart(Callbacks{}, func([]string) error { return sentinel }, func(string, string, int, int, []string) (Pty, error) { return p, nil })
 	m.SetPersistErrorHandler(func(err error) {
 		if errors.Is(err, sentinel) {
 			reported.Add(1)
@@ -240,7 +241,7 @@ func TestOldReaderCannotDeleteReplacementOrEmitExit(t *testing.T) {
 	next := &fakePty{}
 	var persistCalls atomic.Int32
 	exits := make(chan string, 2)
-	m := NewManagerWithStart(Callbacks{Exit: func(token string) { exits <- token }}, func() error { persistCalls.Add(1); return nil }, nil)
+	m := NewManagerWithStart(Callbacks{Exit: func(token string) { exits <- token }}, func([]string) error { persistCalls.Add(1); return nil }, nil)
 	oldRef := &ptyRef{pty: old}
 	nextRef := &ptyRef{pty: next}
 	m.terms["same"] = nextRef
@@ -275,6 +276,34 @@ func TestOpenIDsSortedAndFiltersTemporaryClosedAndNil(t *testing.T) {
 	got := m.OpenIDs()
 	if len(got) != 2 || got[0] != "session-a" || got[1] != "session-b" {
 		t.Fatalf("OpenIDs=%v", got)
+	}
+}
+
+func TestCloseAllPersistsOpenIDsBeforeClearing(t *testing.T) {
+	var persisted [][]string
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error {
+		persisted = append(persisted, ids)
+		return nil
+	}, nil)
+	first := &ptyRef{pty: &fakePty{}}
+	second := &ptyRef{pty: &fakePty{}}
+	m.terms["session-b"] = second
+	m.terms["session-a"] = first
+	m.terms["new-temporary"] = &ptyRef{pty: &fakePty{}}
+	m.terms["closed"] = &ptyRef{pty: &fakePty{}, closed: true}
+	m.terms[""] = &ptyRef{pty: &fakePty{}}
+	m.terms["nil"] = nil
+
+	m.CloseAll()
+	if len(persisted) != 1 || !reflect.DeepEqual(persisted[0], []string{"session-a", "session-b"}) {
+		t.Fatalf("persisted snapshots = %v", persisted)
+	}
+
+	// A reader finishing after CloseAll must not write the now-empty manager
+	// state over the shutdown snapshot.
+	m.finishRead("session-a", first)
+	if len(persisted) != 1 {
+		t.Fatalf("reader teardown persisted an extra snapshot: %v", persisted)
 	}
 }
 

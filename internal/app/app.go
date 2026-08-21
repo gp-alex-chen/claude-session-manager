@@ -43,7 +43,9 @@ func NewAppWithStore(store *state.Store) *App {
 		store = state.Default()
 	}
 	a := &App{store: store, lookPath: exec.LookPath, debugLog: agent.DebugLog}
-	a.terms = terminal.NewManager(terminal.Callbacks{}, a.persistOpenSessions)
+	a.terms = terminal.NewManager(terminal.Callbacks{}, func(ids []string) error {
+		return a.store.SaveOpen(ids)
+	})
 	a.terms.SetPersistErrorHandler(func(err error) { a.log("持久化打开会话失败: " + err.Error()) })
 	return a
 }
