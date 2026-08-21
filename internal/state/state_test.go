@@ -156,6 +156,22 @@ func TestCorruptFilesReturnSafeDefaultsAndErrors(t *testing.T) {
 	}
 }
 
+func TestMissingFilesReturnDefaultsWithoutErrors(t *testing.T) {
+	s := NewStore(t.TempDir())
+	fav, err := s.Load()
+	if err != nil || fav == nil || fav.Aliases == nil {
+		t.Fatalf("missing favorites fav=%+v err=%v", fav, err)
+	}
+	ids, err := s.LoadOpen()
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("missing open ids=%v err=%v", ids, err)
+	}
+	shell, err := s.Shell()
+	if err != nil || shell != "cmd" {
+		t.Fatalf("missing shell=%q err=%v", shell, err)
+	}
+}
+
 func TestAtomicWritesLeaveNoTemporaryFilesAndReportConflicts(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
@@ -177,5 +193,14 @@ func TestAtomicWritesLeaveNoTemporaryFilesAndReportConflicts(t *testing.T) {
 	}
 	if files, _ := filepath.Glob(filepath.Join(dir, ".state-*")); len(files) != 0 {
 		t.Fatalf("temporary files remain after failure: %v", files)
+	}
+	if err := os.Mkdir(s.shellPath(), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetShell("pwsh"); err == nil {
+		t.Fatal("settings directory conflict should return error")
+	}
+	if files, _ := filepath.Glob(filepath.Join(dir, ".state-*")); len(files) != 0 {
+		t.Fatalf("temporary files remain after atomic replace failure: %v", files)
 	}
 }

@@ -79,23 +79,24 @@ func normalizeState(st *FavState) *FavState {
 	return st
 }
 
-func loadJSON(path string, dst any) error {
+func loadJSON(path string, dst any) (bool, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return true, err
 	}
 	if err := json.Unmarshal(b, dst); err != nil {
-		return fmt.Errorf("decode %s: %w", filepath.Base(path), err)
+		return true, fmt.Errorf("decode %s: %w", filepath.Base(path), err)
 	}
-	return nil
+	return true, nil
 }
 
 func (s *Store) loadLocked() (*FavState, error) {
 	st := emptyState()
-	if err := loadJSON(s.favPath(), st); err != nil {
+	_, err := loadJSON(s.favPath(), st)
+	if err != nil {
 		return st, err
 	}
 	return normalizeState(st), nil
@@ -136,7 +137,7 @@ func (s *Store) SetAlias(id, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, err := s.loadLocked()
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err != nil {
 		// Preserve the safe state but do not overwrite a corrupt file silently.
 		return err
 	}
@@ -152,7 +153,7 @@ func (s *Store) SetHidden(id string, hidden bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, err := s.loadLocked()
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err != nil {
 		return err
 	}
 	if hidden {
@@ -201,8 +202,12 @@ func (s *Store) LoadOpen() ([]string, error) {
 	var doc struct {
 		Ids []string `json:"ids"`
 	}
-	if err := loadJSON(s.openPath(), &doc); err != nil {
+	found, err := loadJSON(s.openPath(), &doc)
+	if err != nil {
 		return nil, err
+	}
+	if !found {
+		return nil, nil
 	}
 	return doc.Ids, nil
 }
@@ -226,8 +231,12 @@ func (s *Store) Shell() (string, error) {
 	var doc struct {
 		Shell string `json:"shell"`
 	}
-	if err := loadJSON(s.shellPath(), &doc); err != nil {
+	found, err := loadJSON(s.shellPath(), &doc)
+	if err != nil {
 		return "cmd", err
+	}
+	if !found {
+		return "cmd", nil
 	}
 	if doc.Shell != "cmd" && doc.Shell != "pwsh" {
 		return "cmd", fmt.Errorf("invalid shell %q", doc.Shell)
@@ -241,14 +250,4 @@ func (st *FavState) HiddenSet() map[string]bool {
 		m[h] = true
 	}
 	return m
-}
-
-func (st *FavState) RemoveHidden(id string) {
-	out := st.Hidden[:0]
-	for _, h := range st.Hidden {
-		if h != id {
-			out = append(out, h)
-		}
-	}
-	st.Hidden = out
 }
