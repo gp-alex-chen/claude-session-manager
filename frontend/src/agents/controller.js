@@ -134,10 +134,11 @@ export function createAgentController(deps) {
         const current = next.get(id);
         const previousBusy = isBusy(previous);
         const currentBusy = isBusy(current);
+        const previousDone = previous.state === 'done';
         const disappeared = !current;
-        const ended = current?.state === 'done'
+        const ended = !previousDone && (current?.state === 'done'
           || (previousBusy && (!current || !currentBusy))
-          || (!previousBusy && previous.kind === 'interactive' && disappeared);
+          || (!previousBusy && previous.kind === 'interactive' && disappeared));
         const skip = state.closedTokens.has(id);
         if (ended && !state.endedAgents.has(id) && !skip) {
           state.endedAgents.add(id);

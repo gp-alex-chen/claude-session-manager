@@ -60,6 +60,14 @@ test('first snapshot establishes a baseline without notifying', () => {
   assert.equal(fixtureData.state.previousRunningAgents.get('job').state, 'working');
 });
 
+test('done baseline and repeated done or disappearance stay silent', () => {
+  const fixtureData = fixture();
+  fixtureData.controller.applyAgents([agent('done', { state: 'done' })]);
+  fixtureData.controller.applyAgents([agent('done', { state: 'done' })]);
+  fixtureData.controller.applyAgents([]);
+  assert.equal(fixtureData.notices.length, 0);
+});
+
 test('background completion or disappearance notifies only once', () => {
   const fixtureData = fixture();
   fixtureData.controller.applyAgents([agent('job', { kind: 'background', state: 'working' })]);
@@ -103,6 +111,20 @@ test('closed sessions are skipped and re-busy clears the completion latch', () =
   repeated.controller.applyAgents([agent('job', { state: 'working' })]);
   repeated.controller.applyAgents([agent('job', { state: 'done' })]);
   assert.equal(repeated.notices.length, 2);
+});
+
+test('reopening after a skipped done does not replay stale completion', () => {
+  const fixtureData = fixture();
+  fixtureData.controller.applyAgents([agent('job', { state: 'working' })]);
+  fixtureData.state.closedTokens.add('job');
+  fixtureData.controller.applyAgents([agent('job', { state: 'done' })]);
+  fixtureData.state.closedTokens.delete('job');
+  fixtureData.controller.applyAgents([agent('job', { state: 'done' })]);
+  assert.equal(fixtureData.notices.length, 0);
+
+  fixtureData.controller.applyAgents([agent('job', { state: 'working' })]);
+  fixtureData.controller.applyAgents([agent('job', { state: 'done' })]);
+  assert.equal(fixtureData.notices.length, 1);
 });
 
 test('active sessions avoid unread but still notify', () => {
