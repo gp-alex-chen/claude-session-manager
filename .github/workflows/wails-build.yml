@@ -1,0 +1,67 @@
+name: wails-build
+
+# 路线 3 demo：Wails + xterm.js + ConPTY 的 Windows exe（仅本分支）
+# 每次 push 分支不再自动构建（2026-08-19 起）：只在打 v*-wails tag
+# 发布或手动触发时构建
+# （与 main 分支的 fyne 版 Release 按 tag 后缀分开：v1.2 无后缀= fyne 版，
+#  v1.2-wails= wails 版；tag 是仓库级，不按分支过滤）
+on:
+  push:
+    tags: ['v*-wails']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0' # 与 wails-terminal/go.mod 一致
+          cache-dependency-path: wails-terminal/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 构建前端（xterm.js + esbuild）
+        working-directory: wails-terminal/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: 交叉编译 Windows exe（Wails 纯 Go，无需 CGO）
+        working-directory: wails-terminal
+        shell: bash
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+          REF: ${{ github.ref_name }}
+        run: |
+          # 版本号：打 tag（v*-wails）时 = tag 本身；手动 dispatch 时 = dev-<分支>
+          VER="${REF}"
+          [[ "${VER}" == v* ]] || VER="dev-${VER}"
+          echo "version=${VER}"
+          go build -tags "webview2 production" \
+            -ldflags "-s -w -H windowsgui -X main.Version=${VER}" \
+            -o claude-terminal.exe .
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-terminal-windows
+          path: wails-terminal/claude-terminal.exe
+
+      - name: 发布 GitHub Release（仅打 v*-wails tag 时）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wails-terminal/claude-terminal.exe
+          generate_release_notes: true
+          # 仅以 -pre / -rc 结尾的 tag 标为预发布（v0.1-wails 为正式版）
+          prerelease: ${{ endsWith(github.ref_name, '-pre') || endsWith(github.ref_name, '-rc') }}

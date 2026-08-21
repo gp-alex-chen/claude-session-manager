@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Claude 会话管理</title>
+  <!-- 本文件会被复制到 dist/，故资源路径相对 dist 根 -->
+  <link rel="stylesheet" href="main.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <div class="brand"><span class="brand-dot"></span><span>Claude 会话管理</span></div>
+        <span class="header-btns">
+          <button id="btn-eye" title="折叠时显示运行中的会话（点击切换）"></button>
+          <button id="btn-hidden">归档(<span id="hidden-count">0</span>)</button>
+        </span>
+      </div>
+      <div id="hidden-panel" class="hidden-panel hidden"></div>
+      <div id="session-list"></div>
+      <div id="sidebar-footer">
+        <button id="btn-settings" title="设置"><span class="gear">⚙</span>设置</button>
+      </div>
+    </aside>
+    <main id="terminal-pane">
+      <div id="status-bar">未运行 — 点击左侧会话恢复，或点分组行 <b>+</b> 新建会话</div>
+      <div id="terminal"></div>
+    </main>
+  </div>
+  <div id="settings-menu"></div>
+  <script src="main.js"></script>
+</body>
+</html>
