@@ -111,3 +111,23 @@ func TestGetPerformsInitialSynchronousFetchAndReturnsCopy(t *testing.T) {
 		t.Fatal("Get result shares cache backing array")
 	}
 }
+
+func TestGetCachesSuccessfulEmptyResult(t *testing.T) {
+	calls := 0
+	w := NewWatcherWithFetcher(func(context.Context) ([]AgentInfo, string) {
+		calls++
+		return []AgentInfo{}, "empty"
+	}, nil)
+	if got := w.Get(); len(got) != 0 {
+		t.Fatalf("first result=%v, want empty", got)
+	}
+	if got := w.Get(); len(got) != 0 {
+		t.Fatalf("second result=%v, want empty", got)
+	}
+	if calls != 1 {
+		t.Fatalf("fetch calls=%d, want 1", calls)
+	}
+	if got := w.Snapshot(); len(got) != 0 {
+		t.Fatalf("snapshot=%v, want empty", got)
+	}
+}

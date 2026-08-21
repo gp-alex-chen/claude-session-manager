@@ -95,6 +95,7 @@ type Watcher struct {
 	cacheMu     sync.RWMutex
 	cache       []AgentInfo
 	sig         string
+	cacheReady  bool
 	fetch       Fetcher
 	emit        func([]AgentInfo)
 }
@@ -174,7 +175,7 @@ func (w *Watcher) pollOnce(ctx context.Context, fail *int) time.Duration {
 	sig := Signature(list)
 	w.cacheMu.Lock()
 	changed := sig != w.sig
-	w.cache, w.sig = cloneAgents(list), sig
+	w.cache, w.sig, w.cacheReady = cloneAgents(list), sig, true
 	w.cacheMu.Unlock()
 	if len(list) > 0 {
 		DebugLog("watch raw=" + raw)
@@ -190,9 +191,14 @@ func (w *Watcher) pollOnce(ctx context.Context, fail *int) time.Duration {
 }
 
 func (w *Watcher) Snapshot() []AgentInfo {
+	snapshot, _ := w.snapshot()
+	return snapshot
+}
+
+func (w *Watcher) snapshot() ([]AgentInfo, bool) {
 	w.cacheMu.RLock()
 	defer w.cacheMu.RUnlock()
-	return cloneAgents(w.cache)
+	return cloneAgents(w.cache), w.cacheReady
 }
 
 func (w *Watcher) Get() []AgentInfo { return w.GetContext(context.Background()) }
@@ -200,13 +206,17 @@ func (w *Watcher) GetContext(ctx context.Context) []AgentInfo {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if got := w.Snapshot(); len(got) > 0 {
+	if got, ready := w.snapshot(); ready {
 		return got
 	}
 	list, raw := w.fetch(ctx)
+	if list == nil {
+		DebugLog("GetAgents 首次拉取失败 raw=" + raw)
+		return nil
+	}
 	list = cloneAgents(list)
 	w.cacheMu.Lock()
-	w.cache, w.sig = cloneAgents(list), Signature(list)
+	w.cache, w.sig, w.cacheReady = cloneAgents(list), Signature(list), true
 	w.cacheMu.Unlock()
 	DebugLog("GetAgents 首次拉取 len=" + fmt.Sprint(len(list)) + " raw=" + raw)
 	return cloneAgents(list)
