@@ -9,8 +9,8 @@ import {
   GetVersion, CheckForUpdate, UpdateToLatest,
 } from './api/backend.js';
 import { createAppState } from './state/app-state.js';
-import { b64ToBytes, bytesToB64 } from './terminal/manager.js';
-import { leafOf } from './sessions/list.js';
+import { b64ToBytes, bytesToB64, leafOf } from './utils.js';
+import { createTermOptions, THEMES } from './themes/catalog.js';
 
 // —— 多会话终端管理 ——
 // 每个会话一个独立 xterm 实例；切换/关闭都在左侧列表操作，
@@ -19,136 +19,21 @@ import { leafOf } from './sessions/list.js';
 const termStack = document.getElementById('terminal');
 const statusEl = document.getElementById('status-bar');
 
-// token -> { name, host, term, fit, exited, visible }
-const uiState = createAppState();
-const sessions = uiState.sessions;
-// 用户已关闭的 token：其后的迟到事件（最后帧输出/退出）一律丢弃，
-// 避免关闭后又被 term:data 兜底逻辑重建出"幽灵标签"
-const closedTokens = uiState.closedTokens;
-// 会话 id -> 显示名（来自列表加载，兜底建档时查真实名字）
-const sessionNames = uiState.sessionNames;
-// 项目折叠状态（本次运行内有效）：dir -> collapsed
-const collapsedDirs = uiState.collapsedDirs;
-// 首屏是否已执行"默认全折叠"：只启动时折叠一次，之后保留用户手动折叠/展开
-let collapseAllDone = uiState.collapseAllDone;
-// 全局眼睛开关（仅折叠时有效）：false=睁眼（折叠时各组露出运行中的会话），
-// true=闭眼（折叠即全隐藏）。展开时不影响显示。
-let eyeGlobalOff = uiState.eyeGlobalOff;
-let activeToken = uiState.activeToken;
+const state = createAppState();
 let newCounter = 0;
-// 新建会话的"临时 token -> 真实会话 id"配对：
-// StartNew 返回 new-<时间戳> 这类进程内临时 token，而 claude 稍后落盘的
-// jsonl 对应真实会话 id。列表轮询刷新发现新 id 后在此配对，让行内
-// × 关闭 / 点击重开 / 高亮都指向真实运行中的那个终端。
-const realToNew = uiState.realToNew; // 真实 id -> new token（配对成功后才有）
-const newToReal = uiState.newToReal; // new token -> 真实 id
-let pendingNew = uiState.pendingNew; // 等待配对的 { token, dir }
-
-// —— 现成终端配色主题（xterm theme 对象；含社区知名配色） ——
-const THEMES = {
-  claude: {
-    name: 'Claude 暖黑',
-    foreground: '#e8e6e1', background: '#141412', cursor: '#d97757',
-    cursorAccent: '#141412', selectionBackground: 'rgba(217,119,87,.32)', selectionForeground: '#ffffff',
-    black: '#1f1e1b', red: '#e58a8a', green: '#8fb996', yellow: '#e0a458',
-    blue: '#8ab4d8', magenta: '#c9a7d8', cyan: '#8ad0d0', white: '#e8e6e1',
-    brightBlack: '#6f6c66', brightRed: '#f0a09a', brightGreen: '#a8ccae',
-    brightYellow: '#eec07a', brightBlue: '#a3c8ea', brightMagenta: '#dcc0ea',
-    brightCyan: '#a4e2e2', brightWhite: '#faf8f4',
-  },
-  dracula: {
-    name: 'Dracula',
-    foreground: '#f8f8f2', background: '#282a36', cursor: '#f8f8f2',
-    cursorAccent: '#282a36', selectionBackground: 'rgba(189,147,249,.3)', selectionForeground: '#ffffff',
-    black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
-    blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
-    brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94',
-    brightYellow: '#ffffa5', brightBlue: '#d6acff', brightMagenta: '#ff92df',
-    brightCyan: '#a4ffff', brightWhite: '#ffffff',
-  },
-  onedark: {
-    name: 'One Dark',
-    foreground: '#abb2bf', background: '#282c34', cursor: '#528bff',
-    cursorAccent: '#282c34', selectionBackground: 'rgba(97,175,239,.3)', selectionForeground: '#ffffff',
-    black: '#282c34', red: '#e06c75', green: '#98c379', yellow: '#e5c07b',
-    blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#abb2bf',
-    brightBlack: '#5c6370', brightRed: '#be5046', brightGreen: '#98c379',
-    brightYellow: '#d19a66', brightBlue: '#61afef', brightMagenta: '#c678dd',
-    brightCyan: '#56b6c2', brightWhite: '#ffffff',
-  },
-  solarized: {
-    name: 'Solarized Dark',
-    foreground: '#839496', background: '#002b36', cursor: '#93a1a1',
-    cursorAccent: '#002b36', selectionBackground: 'rgba(38,139,210,.3)', selectionForeground: '#ffffff',
-    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
-    blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
-    brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#859900',
-    brightYellow: '#b58900', brightBlue: '#268bd2', brightMagenta: '#d33682',
-    brightCyan: '#2aa198', brightWhite: '#fdf6e3',
-  },
-  nord: {
-    name: 'Nord',
-    foreground: '#d8dee9', background: '#2e3440', cursor: '#d8dee9',
-    cursorAccent: '#2e3440', selectionBackground: 'rgba(136,192,208,.3)', selectionForeground: '#ffffff',
-    black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
-    blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0',
-    brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c',
-    brightYellow: '#ebcb8b', brightBlue: '#81a1c1', brightMagenta: '#b48ead',
-    brightCyan: '#8fbcbb', brightWhite: '#eceff4',
-  },
-  solarizedlight: {
-    name: 'Solarized Light',
-    foreground: '#657b83', background: '#fdf6e3', cursor: '#586e75',
-    cursorAccent: '#fdf6e3', selectionBackground: 'rgba(38,139,210,.22)', selectionForeground: '#002b36',
-    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
-    blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
-    brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#859900',
-    brightYellow: '#b58900', brightBlue: '#268bd2', brightMagenta: '#d33682',
-    brightCyan: '#2aa198', brightWhite: '#fdf6e3',
-  },
-  onelight: {
-    name: 'One Light',
-    foreground: '#383a42', background: '#fafafa', cursor: '#526eff',
-    cursorAccent: '#fafafa', selectionBackground: 'rgba(82,110,255,.2)', selectionForeground: '#383a42',
-    black: '#383a42', red: '#e45649', green: '#50a14f', yellow: '#c18401',
-    blue: '#0184bc', magenta: '#a626a4', cyan: '#0997b3', white: '#fafafa',
-    brightBlack: '#a0a1a7', brightRed: '#e45649', brightGreen: '#50a14f',
-    brightYellow: '#c18401', brightBlue: '#0184bc', brightMagenta: '#a626a4',
-    brightCyan: '#0997b3', brightWhite: '#fafafa',
-  },
-  githublight: {
-    name: 'GitHub Light',
-    foreground: '#1f2328', background: '#ffffff', cursor: '#0969da',
-    cursorAccent: '#ffffff', selectionBackground: 'rgba(9,105,218,.2)', selectionForeground: '#1f2328',
-    black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#4d2d00',
-    blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#ffffff',
-    brightBlack: '#6e7781', brightRed: '#cf222e', brightGreen: '#116329',
-    brightYellow: '#4d2d00', brightBlue: '#0969da', brightMagenta: '#8250df',
-    brightCyan: '#1b7c83', brightWhite: '#ffffff',
-  },
-};
-
-const TERM_OPTS = {
-  fontFamily: "'Cascadia Mono', Consolas, 'Microsoft YaHei', monospace",
-  fontSize: 14,
-  lineHeight: 1.2,
-  cursorBlink: true,
-  scrollback: 8000,
-  theme: THEMES.claude,
-};
+const TERM_OPTS = createTermOptions();
 
 // —— 日间/夜间 UI 模式（默认日间） ——
 // 只影响外壳 UI（侧边栏/列表等）；终端配色由左下角设置菜单独立控制。
-let uiTheme = 'light';
 try {
-  if (localStorage.getItem('ui-theme') === 'dark') uiTheme = 'dark';
+  if (localStorage.getItem('ui-theme') === 'dark') state.uiTheme = 'dark';
 } catch (e) { /* localStorage 不可用时保持默认日间 */ }
 function applyUiTheme(mode) {
-  uiTheme = mode;
+  state.uiTheme = mode;
   document.documentElement.dataset.theme = mode;
   try { localStorage.setItem('ui-theme', mode); } catch (e) {}
 }
-applyUiTheme(uiTheme);
+applyUiTheme(state.uiTheme);
 
 // —— 工具 ——
 function setStatus(msg, cls) {
@@ -199,8 +84,8 @@ function el(tag, cls, text) {
 
 // —— 会话终端（无标签栏：切换/关闭全在左侧列表操作） ——
 function openTab(token, name) {
-  closedTokens.delete(token); // 重新打开后此 token 的事件恢复有效
-  let s = sessions.get(token);
+  state.closedTokens.delete(token); // 重新打开后此 token 的事件恢复有效
+  let s = state.terminals.get(token);
   if (s) {
     activate(token);
     return s;
@@ -218,7 +103,7 @@ function openTab(token, name) {
   s.host = el('div', 'term-host');
   termStack.appendChild(s.host);
 
-  sessions.set(token, s);
+  state.terminals.set(token, s);
   return s;
 }
 
@@ -279,16 +164,16 @@ function fitAndSync(s) {
 }
 
 function activate(token) {
-  const s = sessions.get(token);
+  const s = state.terminals.get(token);
   if (!s) return;
-  activeToken = token;
-  for (const [t, e] of sessions) {
+  state.activeToken = token;
+  for (const [t, e] of state.terminals) {
     const on = t === token;
     e.host.classList.toggle('active', on);
     e.visible = on;
   }
   syncActiveHighlight(); // 左侧列表高亮当前终端
-  if (unreadSet.delete(token)) renderUnreadMarks(); // 查看过 = 清除未读
+  if (state.unreadSessions.delete(token)) renderUnreadMarks(); // 查看过 = 清除未读
   if (!s.term) makeTerminal(s);
   fitAndSync(s);
   s.term.focus();
@@ -296,77 +181,76 @@ function activate(token) {
 }
 
 function disposeSession(token) {
-  const s = sessions.get(token);
+  const s = state.terminals.get(token);
   if (!s) return;
   if (s.term) {
     try { s.term.dispose(); } catch (e) { /* ignore */ }
   }
   s.host.remove();
-  sessions.delete(token);
+  state.terminals.delete(token);
 }
 
 // 左侧列表：高亮当前打开的终端对应的会话行
 // （配对后的新会话：行 id 是真实 id，但终端 token 是 new-，需经映射）
 function syncActiveHighlight() {
   for (const item of listEl.querySelectorAll('.session-item')) {
-    const token = realToNew.get(item.dataset.id) || item.dataset.id;
-    item.classList.toggle('active', token === activeToken);
+    const token = state.realToNew.get(item.dataset.id) || item.dataset.id;
+    item.classList.toggle('active', token === state.activeToken);
   }
 }
 
 // 当前终端被 dispose 后：若无剩余终端则回到空态
 function pickNextAfter(token) {
-  const rest = [...sessions.keys()];
-  if (activeToken === token) {
+  const rest = [...state.terminals.keys()];
+  if (state.activeToken === token) {
     if (rest.length) activate(rest[rest.length - 1]);
     else {
-      activeToken = null;
+      state.activeToken = null;
       setStatus('未运行 — 点击左侧会话恢复，或点分组行 + 新建会话', '');
     }
   }
 }
 
 function closeTab(token) {
-  const s = sessions.get(token);
+  const s = state.terminals.get(token);
   if (!s) {
     // 终端已不存在但仍可能留在待配对队列（new 启动失败等）：只清队列
-    const i = pendingNew.findIndex(p => p.token === token);
-    if (i >= 0) pendingNew.splice(i, 1);
+    const i = state.pendingNew.findIndex(p => p.token === token);
+    if (i >= 0) state.pendingNew.splice(i, 1);
     return;
   }
-  closedTokens.add(token); // 先标记：迟到的数据/退出事件不再重建终端
+  state.closedTokens.add(token); // 先标记：迟到的数据/退出事件不再重建终端
   TermKill(token).catch(() => {});
-  const real = newToReal.get(token); // 若曾配对到真实会话，解除映射
-  if (real) { newToReal.delete(token); realToNew.delete(real); }
-  const i2 = pendingNew.findIndex(p => p.token === token);
-  if (i2 >= 0) pendingNew.splice(i2, 1);
+  const real = state.newToReal.get(token); // 若曾配对到真实会话，解除映射
+  if (real) { state.newToReal.delete(token); state.realToNew.delete(real); }
+  const i2 = state.pendingNew.findIndex(p => p.token === token);
+  if (i2 >= 0) state.pendingNew.splice(i2, 1);
   disposeSession(token);
   pickNextAfter(token);
 }
 
 window.addEventListener('resize', () => {
-  const s = sessions.get(activeToken);
+  const s = state.terminals.get(state.activeToken);
   if (s && s.term) fitAndSync(s);
 });
 
 // —— 终端配色主题切换（暗色：Claude 暖黑/Dracula/One Dark/Solarized/Nord；
 //                       亮色：Solarized Light/One Light/GitHub Light） ——
-let currentTheme = 'claude';
 try {
   const saved = localStorage.getItem('term-theme');
-  if (saved && THEMES[saved]) currentTheme = saved;
+  if (saved && THEMES[saved]) state.currentTheme = saved;
 } catch (e) { /* localStorage 不可用时保持默认 */ }
-TERM_OPTS.theme = THEMES[currentTheme] || THEMES.claude;
+TERM_OPTS.theme = THEMES[state.currentTheme] || THEMES.claude;
 // 同步终端宿主背景（CSS --term-bg），否则边框/滚动条缝隙处仍透出暗色
 document.documentElement.style.setProperty('--term-bg', TERM_OPTS.theme.background);
 
 function applyTheme(name) {
-  currentTheme = name;
+  state.currentTheme = name;
   try { localStorage.setItem('term-theme', name); } catch (e) {}
   const t = THEMES[name] || THEMES.claude;
   TERM_OPTS.theme = t;
   document.documentElement.style.setProperty('--term-bg', t.background);
-  for (const [, s] of sessions) {
+  for (const [, s] of state.terminals) {
     if (s.term) s.term.options.theme = t; // 已打开的所有终端即时换肤
   }
   setStatus('终端配色已切换: ' + t.name, 'ok');
@@ -381,7 +265,7 @@ function buildSettingsMenu() {
   const label1 = el('div', 'settings-group-label', '界面外观');
   settingsMenu.appendChild(label1);
   for (const [mode, text] of [['light', '☀️ 日间模式'], ['dark', '🌙 夜间模式']]) {
-    const it = el('div', 'settings-item' + (mode === uiTheme ? ' cur' : ''), text);
+    const it = el('div', 'settings-item' + (mode === state.uiTheme ? ' cur' : ''), text);
     it.dataset.mode = mode;
     it.addEventListener('click', () => { applyUiTheme(mode); hideSettingsMenu(); });
     settingsMenu.appendChild(it);
@@ -389,7 +273,7 @@ function buildSettingsMenu() {
   const label2 = el('div', 'settings-group-label', '终端配色');
   settingsMenu.appendChild(label2);
   for (const key of Object.keys(THEMES)) {
-    const it = el('div', 'settings-item' + (key === currentTheme ? ' cur' : ''), THEMES[key].name);
+    const it = el('div', 'settings-item' + (key === state.currentTheme ? ' cur' : ''), THEMES[key].name);
     it.dataset.theme = key;
     it.style.setProperty('--dot', THEMES[key].background);
     it.addEventListener('click', () => { applyTheme(key); hideSettingsMenu(); });
@@ -612,7 +496,7 @@ window.addEventListener('blur', hideCtx);
 
 // 重命名：本地别名（不动 claude 数据；留空恢复原名；真正改名请用 claude 内 /rename）
 async function renameSession(target) {
-  const cur = sessionNames.get(target.id) || target.name;
+  const cur = state.sessionNames.get(target.id) || target.name;
   const input = window.prompt('重命名会话（留空 = 恢复原名）\n提示：这里只改本软件的显示名，真正改名请在 claude 会话内使用 /rename', cur);
   if (input === null) return;
   const name = input.trim();
@@ -622,9 +506,9 @@ async function renameSession(target) {
     setStatus('重命名失败: ' + e, 'warn');
     return;
   }
-  sessionNames.set(target.id, name || target.name);
+  state.sessionNames.set(target.id, name || target.name);
   // 同步更新已打开终端的状态栏名字
-  const ss = sessions.get(target.id);
+  const ss = state.terminals.get(target.id);
   if (ss) ss.labelText = name || target.name;
   await loadSessions();
   setStatus(name ? '已重命名: ' + name : '已恢复原名', 'ok');
@@ -639,9 +523,9 @@ async function deleteSession(target) {
     setStatus('归档失败: ' + e, 'warn');
     return;
   }
-  closedTokens.add(target.id); // 关闭其终端并丢弃迟到事件
+  state.closedTokens.add(target.id); // 关闭其终端并丢弃迟到事件
   closeTab(target.id);
-  sessionNames.delete(target.id);
+  state.sessionNames.delete(target.id);
   await loadSessions();
   setStatus('已归档（不再显示）: ' + target.name, 'warn');
 }
@@ -705,7 +589,7 @@ document.getElementById('btn-hidden').addEventListener('click', () => {
 //   已完成: state=done                             -> 灰点 + 未读逻辑接管
 //   不在列表:                                      -> 灰点（未运行）
 function classifyAgent(id) {
-  const a = runningMap.get(id);
+  const a = state.runningAgents.get(id);
   if (!a) return 'idle';
   if (a.state === 'done') return 'idle'; // 已完成：归入未运行视觉，未读逻辑接管
   if (a.status === 'busy' || a.state === 'working' || a.state === 'queued') return 'working';
@@ -736,28 +620,33 @@ function applyAgents(list) {
   // 完成检测：会话"从亮到灭/从忙到闲"就算结束，两种语义都支持：
   //   background: state working -> done（或消失）
   //   interactive: status busy -> idle（任务做完回到待输入，实测无 state 字段）
-  for (const [id, prev] of prevRunning) {
+  for (const [id, prev] of state.previousRunningAgents) {
     const cur = next.get(id);
     const prevBusy = prev.status === 'busy' || prev.state === 'working' || prev.state === 'queued';
     const curBusy = !!(cur && (cur.status === 'busy' || cur.state === 'working' || cur.state === 'queued'));
     // 结束 = 消失 / state=done / 上一轮忙碌而本轮不再忙碌
     const nowEnded = !cur || cur.state === 'done' || (prevBusy && !curBusy && cur);
-    const skip = closedTokens.has(id); // 用户手动关闭的会话不提示
-    DebugLog(`检测 id=${id} prev=${prev.state}/${prev.status} cur=${cur ? cur.state + '/' + cur.status : 'gone'} prevBusy=${prevBusy} curBusy=${curBusy} ended=${nowEnded} 提示过=${endedSet.has(id)} 关闭=${skip}`);
-    if (nowEnded && !endedSet.has(id) && !skip) {
-      endedSet.add(id); // 一次结束只提示一次
+    const skip = state.closedTokens.has(id); // 用户手动关闭的会话不提示
+    DebugLog(
+      `检测 id=${id} prev=${prev.state}/${prev.status} ` +
+      `cur=${cur ? cur.state + '/' + cur.status : 'gone'} ` +
+      `prevBusy=${prevBusy} curBusy=${curBusy} ended=${nowEnded} ` +
+      `提示过=${state.endedAgents.has(id)} 关闭=${skip}`,
+    );
+    if (nowEnded && !state.endedAgents.has(id) && !skip) {
+      state.endedAgents.add(id); // 一次结束只提示一次
       DebugLog(`>>> 触发提示 ${id} 类型=${prevBusy ? '任务完成' : '会话结束'}`);
-      markEnded(id, sessionNames.get(id) || id, prevBusy);
+      markEnded(id, state.sessionNames.get(id) || id, prevBusy);
     }
   }
-  prevRunning = new Map(next);
-  runningMap.clear();
-  for (const [id, a] of next) runningMap.set(id, a);
+  state.previousRunningAgents = new Map(next);
+  state.runningAgents.clear();
+  for (const [id, a] of next) state.runningAgents.set(id, a);
 
   // 会话重新忙碌（又开新任务）则允许再次提示
-  for (const id of endedSet) {
-    const a = runningMap.get(id);
-    if (a && (a.status === 'busy' || a.state === 'working' || a.state === 'queued')) endedSet.delete(id);
+  for (const id of state.endedAgents) {
+    const a = state.runningAgents.get(id);
+    if (a && (a.status === 'busy' || a.state === 'working' || a.state === 'queued')) state.endedAgents.delete(id);
   }
 
   renderUnreadMarks();
@@ -767,7 +656,7 @@ function applyAgents(list) {
   for (const b of badges) {
     if (b.classList.contains('ended-anim')) continue; // 正在播结束动画，跳过
     const id = b.dataset.id;
-    if (unreadSet.has(id)) continue; // 未读标记优先（替换状态点，查看后换回）
+    if (state.unreadSessions.has(id)) continue; // 未读标记优先（替换状态点，查看后换回）
     const cls = classifyAgent(id);
     b.classList.remove('ecg', 'open', 'running', 'blocked', 'idle');
     if (cls === 'working') {
@@ -801,45 +690,57 @@ refreshAgents();
 
 // —— 后端事件路由 ——
 window.runtime.EventsOn('term:data', (token, b64) => {
-  if (closedTokens.has(token)) return; // 已关闭的会话：丢弃迟到输出
-  let s = sessions.get(token);
+  if (state.closedTokens.has(token)) return; // 已关闭的会话：丢弃迟到输出
+  let s = state.terminals.get(token);
   if (!s) {
     // 兜底：数据先于终端到达时自动建档（名字尽量用列表里的真实会话名）
-    s = openTab(token, sessionNames.get(token) || '正在连接…');
+    s = openTab(token, state.sessionNames.get(token) || '正在连接…');
   }
   if (!s.term) makeTerminal(s);
   s.term.write(b64ToBytes(b64));
 });
 
 window.runtime.EventsOn('term:exit', (token) => {
-  if (closedTokens.has(token)) return; // 已关闭的会话：忽略退出事件
-  const real = newToReal.get(token);
+  if (state.closedTokens.has(token)) return; // 已关闭的会话：忽略退出事件
+  const real = state.newToReal.get(token);
   if (real) {
     // 曾配对到真实会话的"新会话"终端退出：解除映射并清理临时终端，
     // 真实会话行保留（agents 徽标回到未运行，可点击重新打开）
-    newToReal.delete(token);
-    realToNew.delete(real);
+    state.newToReal.delete(token);
+    state.realToNew.delete(real);
     disposeSession(token);
     pickNextAfter(token);
     return;
   }
   if (token.startsWith('new-')) {
     // 从未配对的新终端退出（如 claude 启动即失败）：移出待配队列并清理
-    const i = pendingNew.findIndex(p => p.token === token);
-    if (i >= 0) pendingNew.splice(i, 1);
+    const i = state.pendingNew.findIndex(p => p.token === token);
+    if (i >= 0) state.pendingNew.splice(i, 1);
     disposeSession(token);
     pickNextAfter(token);
     return;
   }
-  const s = sessions.get(token);
+  const s = state.terminals.get(token);
   if (!s) return;
   s.exited = true;
   setStatus('会话已退出: ' + s.labelText, 'warn');
 });
 
 // 眼睛开关图标（SVG，随当前颜色渲染）
-const ICON_EYE_OPEN = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>';
-const ICON_EYE_CLOSED = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 10.2C6 8.4 8.8 7.4 12 7.4s6 1 8 2.8"/><path d="M4 13.8c2 1.8 4.8 2.8 8 2.8s6-1 8-2.8"/><path d="M6.5 5.5l11 13"/></svg>';
+const ICON_EYE_OPEN = [
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"',
+  ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"',
+  ' stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12',
+  ' 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"',
+  '/></svg>',
+].join('');
+const ICON_EYE_CLOSED = [
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"',
+  ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round">',
+  '<path d="M4 10.2C6 8.4 8.8 7.4 12 7.4s6 1 8 2.8"/>',
+  '<path d="M4 13.8c2 1.8 4.8 2.8 8 2.8s6-1 8-2.8"/>',
+  '<path d="M6.5 5.5l11 13"/></svg>',
+].join('');
 
 function setEyeIcon(eye, off) {
   eye.innerHTML = off ? ICON_EYE_CLOSED : ICON_EYE_OPEN;
@@ -849,10 +750,6 @@ function setEyeIcon(eye, off) {
 const listEl = document.getElementById('session-list');
 // 最近一次全量列表 + 运行中信息（id -> kind），用于渲染状态徽标
 let lastLoaded = [];
-const runningMap = new Map();
-const unreadSet = new Set(); // 已结束且未查看的会话
-const endedSet = new Set();   // 已完成并提示过（防重复提示）的会话
-let prevRunning = new Map(); // 上一次轮询的运行中集合（检测"刚结束"）
 
 // —— 心电图心跳节拍（共享 tick：所有运行中徽标同步跳动） ——
 const ECG = ['▁', '▂', '▃', '▅', '▇', '▅', '▃', '▂', '▁', '─', '─', '─'];
@@ -911,8 +808,8 @@ function repaintBadge(b) {
 // 顶部横幅 + 提示音 + 未读标记（正在看该会话时不打扰）。
 // wasWorking=true 提示"任务完成"，false（交互空闲会话结束）提示"会话结束"。
 function markEnded(id, name, wasWorking) {
-  const watching = activeToken === id; // 用户正开着这个会话的终端
-  if (!watching) unreadSet.add(id);
+  const watching = state.activeToken === id; // 用户正开着这个会话的终端
+  if (!watching) state.unreadSessions.add(id);
 
   const item = listEl.querySelector('.group .session-item[data-id="' + id + '"]');
   const badge = item && item.querySelector('.badge');
@@ -935,7 +832,7 @@ function markEnded(id, name, wasWorking) {
   renderUnreadMarks();
 }
 
-// 按 unreadSet 切换会话左侧徽标：
+// 按 state.unreadSessions 切换会话左侧徽标：
 //   未读 -> 用橙色脉冲点"替换"原状态标记；查看/点击后 -> 换回原状态标记
 // （ended-anim 动画播放中的徽标不动，动画结束后由 markEnded 的回调收尾）
 function renderUnreadMarks() {
@@ -943,7 +840,7 @@ function renderUnreadMarks() {
     const id = item.dataset.id;
     const badge = item.querySelector('.badge');
     if (!badge) continue;
-    if (unreadSet.has(id)) {
+    if (state.unreadSessions.has(id)) {
       if (badge.classList.contains('ended-anim')) continue; // 动画中：播完再变未读点
       if (!badge.classList.contains('unread')) {
         badge.classList.remove('ecg', 'open', 'running', 'blocked', 'idle');
@@ -958,11 +855,11 @@ function renderUnreadMarks() {
 }
 
 async function openFromList(s) {
-  const token = realToNew.get(s.id) || s.id; // 已配对的新会话：切到其运行中的终端
-  const existing = sessions.get(token);
+  const token = state.realToNew.get(s.id) || s.id; // 已配对的新会话：切到其运行中的终端
+  const existing = state.terminals.get(token);
   if (existing && !existing.exited) {
     activate(token); // 已在运行：直接换过去
-    unreadSet.delete(s.id); // 查看过 = 清除未读
+    state.unreadSessions.delete(s.id); // 查看过 = 清除未读
     renderUnreadMarks();
     return;
   }
@@ -974,7 +871,7 @@ async function openFromList(s) {
   try {
     await StartSession(s.id, s.dir);
     setStatus('已恢复: ' + s.name, 'ok');
-    unreadSet.delete(s.id); // 查看过 = 清除未读
+    state.unreadSessions.delete(s.id); // 查看过 = 清除未读
     renderUnreadMarks();
     activate(token);
   } catch (e) {
@@ -992,7 +889,7 @@ function refreshFoldState() {
     const id = item.dataset.id;
     const dir = item.dataset.dir;
     const cls = classifyAgent(id);
-    const folded = collapsedDirs.has(dir) && (eyeGlobalOff || cls === 'idle');
+    const folded = state.collapsedDirs.has(dir) && (state.eyeGlobalOff || cls === 'idle');
     item.classList.toggle('fold-hidden', folded);
   }
 }
@@ -1020,29 +917,29 @@ async function loadSessions() {
 // 规则：同目录、FIFO（先启动的 new 先配对到先出现的真实 id）；
 // 只在真实 id 首次出现的那一轮执行（此后在 lastLoaded 里，不会再算作新出现）。
 function pairNewSessions(list) {
-  if (!pendingNew.length) return;
+  if (!state.pendingNew.length) return;
   const prev = new Set(lastLoaded.map(x => x.id));
   const newInDir = new Map(); // dir -> [id, ...]（出现顺序）
   for (const s of list) {
-    if (prev.has(s.id) || realToNew.has(s.id)) continue;
+    if (prev.has(s.id) || state.realToNew.has(s.id)) continue;
     if (!newInDir.has(s.dir)) newInDir.set(s.dir, []);
     newInDir.get(s.dir).push(s.id);
   }
   const stillPending = [];
-  for (const p of pendingNew) {
+  for (const p of state.pendingNew) {
     const ids = newInDir.get(p.dir);
     const id = ids && ids.length ? ids.shift() : null;
     if (!id) { stillPending.push(p); continue; }
-    newToReal.set(p.token, id);
-    realToNew.set(id, p.token);
-    const s = sessions.get(p.token);
+    state.newToReal.set(p.token, id);
+    state.realToNew.set(id, p.token);
+    const s = state.terminals.get(p.token);
     if (s) {
       const info = list.find(x => x.id === id);
       if (info) s.labelText = info.name; // 状态栏名字顺带更新为真实名
     }
-    if (activeToken === p.token) syncActiveHighlight(); // 高亮跟着真实行走
+    if (state.activeToken === p.token) syncActiveHighlight(); // 高亮跟着真实行走
   }
-  pendingNew = stillPending;
+  state.pendingNew = stillPending;
 }
 
 // 后台轮询刷新：新建会话 claude 要稍后才落盘 jsonl，claude 内 /rename、
@@ -1066,20 +963,20 @@ function renderSessions(list) {
   lastLoaded = list;
   lastListSig = listSig(list);
   // 软件打开首屏：默认闭合所有目录树（只执行一次；此后用户手动折叠/展开）
-  if (!collapseAllDone && list.length) {
-    collapseAllDone = true;
-    for (const s of list) collapsedDirs.add(s.dir);
+  if (!state.collapseAllDone && list.length) {
+    state.collapseAllDone = true;
+    for (const s of list) state.collapsedDirs.add(s.dir);
   }
   const groups = new Map();
   for (const s of list) {
-    sessionNames.set(s.id, s.name);
+    state.sessionNames.set(s.id, s.name);
     if (!groups.has(s.dir)) groups.set(s.dir, []);
     groups.get(s.dir).push(s);
   }
   listEl.innerHTML = '';
   for (const [dir, items] of groups) {
     const g = el('div', 'group');
-    if (collapsedDirs.has(dir)) g.classList.add('collapsed');
+    if (state.collapsedDirs.has(dir)) g.classList.add('collapsed');
     const head = el('div', 'group-head');
     const chev = el('span', 'chevron');
     chev.title = '点击折叠/展开';
@@ -1093,8 +990,8 @@ function renderSessions(list) {
         const token = await StartNew(dir);
         const label = '新会话 ' + (++newCounter) + ' · ' + leafOf(dir);
         openTab(token, label);
-        sessions.get(token).dir = dir; // 记住所属目录，供轮询配对新会话 id
-        pendingNew.push({ token, dir });
+        state.terminals.get(token).dir = dir; // 记住所属目录，供轮询配对新会话 id
+        state.pendingNew.push({ token, dir });
         activate(token);
         setStatus('已启动新会话: ' + leafOf(dir), 'ok');
       } catch (e) {
@@ -1104,8 +1001,8 @@ function renderSessions(list) {
     // 点击组头 = 折叠/展开整个项目；立即重算可见性，不等下一轮轮询
     head.addEventListener('click', () => {
       const collapsed = g.classList.toggle('collapsed');
-      if (collapsed) collapsedDirs.add(dir);
-      else collapsedDirs.delete(dir);
+      if (collapsed) state.collapsedDirs.add(dir);
+      else state.collapsedDirs.delete(dir);
       chev.classList.toggle('collapsed', collapsed);
       refreshFoldState();
     });
@@ -1121,8 +1018,8 @@ function renderSessions(list) {
       item.dataset.dir = s.dir;
       item.title = s.dir;
       // 折叠的组：闭眼 -> 全隐藏；睁眼 -> 只隐藏未运行（灰点）的
-      if (collapsedDirs.has(dir) &&
-          (eyeGlobalOff || classifyAgent(s.id) === 'idle')) {
+      if (state.collapsedDirs.has(dir) &&
+          (state.eyeGlobalOff || classifyAgent(s.id) === 'idle')) {
         item.classList.add('fold-hidden');
       }
       const nameRow = el('div', 's-name');
@@ -1137,7 +1034,7 @@ function renderSessions(list) {
       closeBtn.title = '关闭此终端（结束进程）';
       closeBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        closeTab(realToNew.get(s.id) || s.id);
+        closeTab(state.realToNew.get(s.id) || s.id);
       });
       nameRow.appendChild(closeBtn);
       item.appendChild(nameRow);
@@ -1164,14 +1061,14 @@ function renderSessions(list) {
 // 全局眼睛开关按钮（仅折叠时有效；展开时显示不受影响）
 const btnEye = document.getElementById('btn-eye');
 function paintEye() {
-  btnEye.classList.toggle('off', eyeGlobalOff);
-  btnEye.title = eyeGlobalOff
+  btnEye.classList.toggle('off', state.eyeGlobalOff);
+  btnEye.title = state.eyeGlobalOff
     ? '折叠时隐藏所有会话（点击开启：折叠时显示运行中的）'
     : '折叠时显示运行中的会话（点击关闭：折叠即全部隐藏）';
-  setEyeIcon(btnEye, eyeGlobalOff);
+  setEyeIcon(btnEye, state.eyeGlobalOff);
 }
 btnEye.addEventListener('click', () => {
-  eyeGlobalOff = !eyeGlobalOff;
+  state.eyeGlobalOff = !state.eyeGlobalOff;
   paintEye();
   refreshFoldState();
 });

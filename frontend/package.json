@@ -2,9 +2,11 @@
   "name": "claude-terminal-frontend",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
   "scripts": {
     "build": "esbuild src/main.js --bundle --outfile=dist/main.js --minify && node -e \"require('fs').copyFileSync('src/index.html','dist/index.html')\"",
-    "watch": "esbuild src/main.js --bundle --outfile=dist/main.js --sourcemap --watch"
+    "watch": "esbuild src/main.js --bundle --outfile=dist/main.js --sourcemap --watch",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
