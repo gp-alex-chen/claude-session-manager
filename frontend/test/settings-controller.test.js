@@ -145,6 +145,7 @@ function makeDialogDeps(settingsMenu, documentRef) {
     button.dataset.category = name;
     button.textContent = { appearance: '外观', terminal: '终端', update: '更新' }[name];
     button.setAttribute('role', 'tab');
+    button.setAttribute('aria-controls', `settings-panel-${name}`);
     settingsNav.appendChild(button);
     return button;
   });
@@ -156,6 +157,7 @@ function makeDialogDeps(settingsMenu, documentRef) {
   }));
   settingsMenu.setAttribute('role', 'dialog');
   settingsMenu.setAttribute('aria-modal', 'true');
+  settingsNav.setAttribute('role', 'tablist');
   settingsClose.textContent = '关闭';
   settingsDialog.append(settingsClose, settingsVersion, settingsNav, settingsContent);
   settingsMenu.appendChild(settingsDialog);
@@ -303,8 +305,17 @@ test('settings uses a modal dialog with semantic categories and close paths', as
   assert.equal(fixtureData.settingsMenu.hidden, false);
   assert.equal(fixtureData.settingsMenu.getAttribute('role'), 'dialog');
   assert.equal(fixtureData.settingsMenu.getAttribute('aria-hidden'), 'false');
+  assert.equal(fixtureData.settingsNav.getAttribute('role'), 'tablist');
   assert.deepEqual(fixtureData.categoryButtons.map((button) => button.textContent), ['外观', '终端', '更新']);
   assert.ok(fixtureData.categoryButtons.every((button) => button.getAttribute('role') === 'tab'));
+  assert.deepEqual(
+    fixtureData.categoryButtons.map((button) => button.getAttribute('aria-controls')),
+    ['settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update'],
+  );
+  assert.deepEqual(
+    fixtureData.categoryButtons.map((button) => button.getAttribute('aria-selected')),
+    ['true', 'false', 'false'],
+  );
   assert.equal(typeof fixtureData.settingsClose.listeners.get('click'), 'function');
 
   let dialogStopped = false;

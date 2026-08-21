@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const stylesDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/styles');
+const sourceDir = path.resolve(stylesDir, '..');
 const read = (name) => fs.readFileSync(path.join(stylesDir, name), 'utf8');
 const splitBlock = (source, selector) => {
   const match = source.match(new RegExp(selector + '\\s*\\{([\\s\\S]*?)\\}'));
@@ -78,8 +79,14 @@ test('complete selectors are owned by one CSS module', () => {
 
 test('settings skeleton provides an overlay, dialog, navigation, and panel surface', () => {
   const menus = read('menus.css');
+  const html = fs.readFileSync(path.join(sourceDir, 'index.html'), 'utf8');
   assert.match(menus, /#settings-menu\.settings-overlay/);
   assert.match(menus, /\.settings-dialog/);
   assert.match(menus, /\.settings-nav/);
   assert.match(menus, /\.settings-panel/);
+  assert.match(html, /id="settings-nav"[^>]*role="tablist"/);
+  for (const category of ['appearance', 'terminal', 'update']) {
+    assert.match(html, new RegExp(`id="settings-tab-${category}"[\\s\\S]*?role="tab"`));
+    assert.match(html, new RegExp(`id="settings-tab-${category}"[\\s\\S]*?aria-controls="settings-panel-${category}"`));
+  }
 });
