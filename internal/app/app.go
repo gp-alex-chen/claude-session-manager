@@ -31,6 +31,7 @@ type App struct {
 	lifecycleID uint64
 	lookPath    func(string) (string, error)
 	debugLog    func(string)
+	startPTYFn  func(string, string, string) error
 }
 
 func NewApp() *App {
@@ -53,10 +54,8 @@ func (a *App) startup(ctx context.Context) {
 	watcher := agent.NewWatcher(func(list []agent.AgentInfo) {
 		runtime.EventsEmit(ctx, "agents:update", list)
 	})
-	a.terms.SetCallbacks(terminal.Callbacks{
-		Data: func(token, data string) { runtime.EventsEmit(ctx, "term:data", token, data) },
-		Exit: func(token string) { runtime.EventsEmit(ctx, "term:exit", token) },
-	})
+	// Register the candidate before stopping the old watcher. Stop may wait on
+	// its fetch loop, so it must never run while lifecycleMu is held.
 	a.lifecycleMu.Lock()
 	old := a.watcher
 	a.lifecycleID++
@@ -67,9 +66,15 @@ func (a *App) startup(ctx context.Context) {
 	if old != nil {
 		old.Stop()
 	}
+	// Recheck the generation before installing callbacks or starting the
+	// candidate. A concurrent Startup/Shutdown may have made it stale.
 	a.lifecycleMu.Lock()
 	current := a.lifecycleID == lifecycleID && a.watcher == watcher
 	if current {
+		a.terms.SetCallbacks(terminal.Callbacks{
+			Data: func(token, data string) { runtime.EventsEmit(ctx, "term:data", token, data) },
+			Exit: func(token string) { runtime.EventsEmit(ctx, "term:exit", token) },
+		})
 		watcher.Start(ctx)
 	}
 	a.lifecycleMu.Unlock()
@@ -142,7 +147,12 @@ func (a *App) StartNew(dir string) (string, error) {
 	}
 	return token, nil
 }
-func (a *App) startPTY(token, cmdLine, dir string) error { return a.terms.Start(token, cmdLine, dir) }
+func (a *App) startPTY(token, cmdLine, dir string) error {
+	if a.startPTYFn != nil {
+		return a.startPTYFn(token, cmdLine, dir)
+	}
+	return a.terms.Start(token, cmdLine, dir)
+}
 func (a *App) TermWrite(token, b64 string) {
 	raw, err := terminal.DecodeInput(b64)
 	if err == nil {

@@ -11,17 +11,18 @@ import (
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 )
 
-func testApp(t *testing.T) (*App, *state.Store, *[]string) {
+func testApp(t *testing.T) (*App, *state.Store, *[]string, string) {
 	t.Helper()
-	store := state.NewStore(t.TempDir())
+	dir := t.TempDir()
+	store := state.NewStore(dir)
 	logs := []string{}
 	a := NewAppWithStore(store)
 	a.debugLog = func(msg string) { logs = append(logs, msg) }
-	return a, store, &logs
+	return a, store, &logs, dir
 }
 
 func TestSessionMutationsTrimAndUseTransactions(t *testing.T) {
-	a, store, _ := testApp(t)
+	a, store, _, _ := testApp(t)
 	if err := a.RenameSession("abc", "  Friendly name  "); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestSessionMutationsTrimAndUseTransactions(t *testing.T) {
 }
 
 func TestClaudeCommandShellSelection(t *testing.T) {
-	a, _, _ := testApp(t)
+	a, _, _, _ := testApp(t)
 	if got := a.claudeCmd(""); got != "cmd /c claude" {
 		t.Fatalf("default command = %q", got)
 	}
@@ -62,8 +63,16 @@ func TestClaudeCommandShellSelection(t *testing.T) {
 	if err := a.SetShell("pwsh"); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.claudeCmd("new"); got != `pwsh -NoLogo -NoExit -Command "claude new"` {
-		t.Fatalf("pwsh new command = %q", got)
+	var startedCommand string
+	a.startPTYFn = func(_, cmdLine, _ string) error {
+		startedCommand = cmdLine
+		return nil
+	}
+	if _, err := a.StartNew(`C:\sessions`); err != nil {
+		t.Fatal(err)
+	}
+	if startedCommand != `pwsh -NoLogo -NoExit -Command "claude "` {
+		t.Fatalf("pwsh new command = %q", startedCommand)
 	}
 	if got := a.claudeCmd("-r abc"); got != `pwsh -NoLogo -NoExit -Command "claude -r abc"` {
 		t.Fatalf("pwsh resume command = %q", got)
@@ -71,7 +80,7 @@ func TestClaudeCommandShellSelection(t *testing.T) {
 }
 
 func TestClaudeCommandFallsBackWhenPwshMissing(t *testing.T) {
-	a, store, logs := testApp(t)
+	a, store, logs, _ := testApp(t)
 	if err := store.SetShell("pwsh"); err != nil {
 		t.Fatal(err)
 	}
@@ -85,12 +94,26 @@ func TestClaudeCommandFallsBackWhenPwshMissing(t *testing.T) {
 }
 
 func TestSetShellInvalidNameUsesCmdFallback(t *testing.T) {
-	a, store, _ := testApp(t)
+	a, store, _, _ := testApp(t)
 	if err := a.SetShell("fish"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := store.Shell(); err != nil || got != "cmd" {
 		t.Fatalf("stored shell = %q, err=%v", got, err)
+	}
+}
+
+func TestSetShellPwshMissingReturnsErrorAndPreservesSetting(t *testing.T) {
+	a, store, _, _ := testApp(t)
+	if err := store.SetShell("pwsh"); err != nil {
+		t.Fatal(err)
+	}
+	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	if err := a.SetShell("pwsh"); err == nil {
+		t.Fatal("SetShell(pwsh) unexpectedly succeeded")
+	}
+	if got, err := store.Shell(); err != nil || got != "pwsh" {
+		t.Fatalf("stored shell after rejected selection = %q, err=%v", got, err)
 	}
 }
 
@@ -121,8 +144,7 @@ func TestAppReturnsSaveErrors(t *testing.T) {
 }
 
 func TestMalformedStateUsesSafeDefaultsAndLogs(t *testing.T) {
-	a, store, logs := testApp(t)
-	dir := storeDir(store)
+	a, _, logs, dir := testApp(t)
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -162,9 +184,4 @@ func containsLog(logs []string, want string) bool {
 		}
 	}
 	return false
-}
-
-func storeDir(store *state.Store) string {
-	value := reflect.ValueOf(store).Elem().FieldByName("dir")
-	return value.String()
 }

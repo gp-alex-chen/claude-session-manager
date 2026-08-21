@@ -78,7 +78,9 @@ func (a *App) UpdateToLatest() error {
 
 	// 更新前收尾：持久化"当前打开的会话"（供新版恢复），再关闭全部 ConPTY
 	// （关闭 = claude 进程终止；闭眼前不再等待任务，符合"立即生效"的用户预期）
-	a.persistOpenSessions()
+	if err := a.persistOpenSessions(); err != nil {
+		a.log("更新前持久化打开会话失败: " + err.Error())
+	}
 	a.closeAllTerms()
 
 	runtime.EventsEmit(runtimeCtx, "update:state", "重启中")
