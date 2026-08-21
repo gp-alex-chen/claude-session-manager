@@ -11,6 +11,8 @@ import (
 type fakePty struct {
 	mu          sync.Mutex
 	closed      int
+	writes      int
+	resizes     int
 	writeStart  chan struct{}
 	resizeStart chan struct{}
 	allowWrite  chan struct{}
@@ -33,6 +35,9 @@ func (p *fakePty) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 func (p *fakePty) Write([]byte) (int, error) {
+	p.mu.Lock()
+	p.writes++
+	p.mu.Unlock()
 	if p.writeStart != nil {
 		signal(p.writeStart)
 		<-p.allowWrite
@@ -40,6 +45,9 @@ func (p *fakePty) Write([]byte) (int, error) {
 	return 1, nil
 }
 func (p *fakePty) Resize(int, int) error {
+	p.mu.Lock()
+	p.resizes++
+	p.mu.Unlock()
 	if p.resizeStart != nil {
 		signal(p.resizeStart)
 		<-p.allowResize
@@ -55,7 +63,9 @@ func (p *fakePty) Close() error {
 	}
 	return nil
 }
-func (p *fakePty) closeCount() int { p.mu.Lock(); defer p.mu.Unlock(); return p.closed }
+func (p *fakePty) closeCount() int  { p.mu.Lock(); defer p.mu.Unlock(); return p.closed }
+func (p *fakePty) writeCount() int  { p.mu.Lock(); defer p.mu.Unlock(); return p.writes }
+func (p *fakePty) resizeCount() int { p.mu.Lock(); defer p.mu.Unlock(); return p.resizes }
 
 func signal(ch chan struct{}) {
 	select {
@@ -99,8 +109,12 @@ func TestWriteAndCloseAreMutuallyExclusive(t *testing.T) {
 	close(p.allowWrite)
 	<-writeDone
 	<-closeDone
-	if _, _ = r.Write([]byte("after")); p.closeCount() != 1 {
-		t.Fatal("write after close touched PTY")
+	if got := p.writeCount(); got != 1 {
+		t.Fatalf("blocked Write count=%d, want 1", got)
+	}
+	_, _ = r.Write([]byte("after"))
+	if got := p.writeCount(); got != 1 {
+		t.Fatalf("Write after Close touched PTY, count=%d", got)
 	}
 }
 
@@ -120,6 +134,13 @@ func TestResizeAndCloseAreMutuallyExclusive(t *testing.T) {
 	close(p.allowResize)
 	<-resizeDone
 	<-closeDone
+	if got := p.resizeCount(); got != 1 {
+		t.Fatalf("blocked Resize count=%d, want 1", got)
+	}
+	_ = r.Resize(80, 24)
+	if got := p.resizeCount(); got != 1 {
+		t.Fatalf("Resize after Close touched PTY, count=%d", got)
+	}
 }
 
 func TestStartFailureKeepsOldPTY(t *testing.T) {
@@ -141,8 +162,42 @@ func TestStartFailureKeepsOldPTY(t *testing.T) {
 	if !m.IsRunning("session") {
 		t.Fatal("old PTY was not retained")
 	}
+	m.mu.Lock()
+	current := m.terms["session"]
+	m.mu.Unlock()
+	if current == nil || current.pty != old {
+		t.Fatal("old PTY identity was not retained after failed replacement")
+	}
 	if old.closeCount() != 0 {
 		t.Fatal("old PTY was closed after failed replacement")
+	}
+	m.Kill("session")
+}
+
+func TestStartPersistsErrorWithoutTearingDownPTY(t *testing.T) {
+	sentinel := errors.New("persist failed")
+	p := &fakePty{read: make(chan struct{})}
+	var reported atomic.Int32
+	m := NewManagerWithStart(Callbacks{}, func() error { return sentinel }, func(string, string, int, int, []string) (Pty, error) { return p, nil })
+	m.SetPersistErrorHandler(func(err error) {
+		if errors.Is(err, sentinel) {
+			reported.Add(1)
+		}
+	})
+	if err := m.Start("session", "cmd", "."); err != nil {
+		t.Fatalf("Start returned persistence error: %v", err)
+	}
+	if !m.IsRunning("session") {
+		t.Fatal("PTY was torn down after persistence error")
+	}
+	m.mu.Lock()
+	current := m.terms["session"]
+	m.mu.Unlock()
+	if current == nil || current.pty != p {
+		t.Fatal("PTY is not the current identity after persistence error")
+	}
+	if got := reported.Load(); got != 1 {
+		t.Fatalf("persist error reports=%d, want 1", got)
 	}
 	m.Kill("session")
 }
@@ -181,25 +236,18 @@ func TestConcurrentStartsLeaveOneClosedAndOneCurrent(t *testing.T) {
 }
 
 func TestOldReaderCannotDeleteReplacementOrEmitExit(t *testing.T) {
-	old := &fakePty{read: make(chan struct{}), readStart: make(chan struct{}), readDone: make(chan struct{})}
-	next := &fakePty{read: make(chan struct{})}
-	var calls atomic.Int32
+	old := &fakePty{}
+	next := &fakePty{}
+	var persistCalls atomic.Int32
 	exits := make(chan string, 2)
-	start := func(cmd, dir string, cols, rows int, env []string) (Pty, error) {
-		if calls.Add(1) == 1 {
-			return old, nil
-		}
-		return next, nil
+	m := NewManagerWithStart(Callbacks{Exit: func(token string) { exits <- token }}, func() error { persistCalls.Add(1); return nil }, nil)
+	oldRef := &ptyRef{pty: old}
+	nextRef := &ptyRef{pty: next}
+	m.terms["same"] = nextRef
+	m.finishRead("same", oldRef)
+	if persistCalls.Load() != 0 {
+		t.Fatal("old reader persisted after replacement")
 	}
-	m := NewManagerWithStart(Callbacks{Exit: func(token string) { exits <- token }}, nil, start)
-	if err := m.Start("same", "one", "."); err != nil {
-		t.Fatal(err)
-	}
-	<-old.readStart
-	if err := m.Start("same", "two", "."); err != nil {
-		t.Fatal(err)
-	}
-	<-old.readDone
 	select {
 	case got := <-exits:
 		t.Fatalf("old reader emitted Exit for %q", got)
@@ -208,6 +256,11 @@ func TestOldReaderCannotDeleteReplacementOrEmitExit(t *testing.T) {
 	if !m.IsRunning("same") {
 		t.Fatal("old reader removed replacement")
 	}
+	m.mu.Lock()
+	if m.terms["same"] != nextRef {
+		t.Fatal("replacement identity changed")
+	}
+	m.mu.Unlock()
 	m.Kill("same")
 }
 

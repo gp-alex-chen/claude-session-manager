@@ -271,16 +271,9 @@ func (m *Manager) Start(token, cmdLine, dir string) error {
 	if old != nil {
 		old.Close()
 	}
-	if err := m.persistOpen(); err != nil {
-		m.mu.Lock()
-		if m.terms[token] == r {
-			delete(m.terms, token)
-		}
-		m.mu.Unlock()
-		r.Close()
-		m.reportPersist(err)
-		return err
-	}
+	// Persistence is auxiliary state. A disk error must not tear down the
+	// successfully-created PTY (especially after an old instance was replaced).
+	m.reportPersist(m.persistOpen())
 	m.readLoop(token, r)
 	return nil
 }
@@ -299,21 +292,27 @@ func (m *Manager) readLoop(token string, r *ptyRef) {
 				break
 			}
 		}
-		r.Close()
-		m.mu.Lock()
-		current := m.terms[token] == r
-		if current {
-			delete(m.terms, token)
-		}
-		m.mu.Unlock()
-		if !current {
-			return
-		}
-		m.reportPersist(m.persistOpen())
-		if cb := m.callbacks(); cb.Exit != nil {
-			cb.Exit(token)
-		}
+		m.finishRead(token, r)
 	}()
+}
+
+// finishRead is the synchronous reader teardown path. Identity is checked
+// while holding m.mu so an old reader can never remove a replacement.
+func (m *Manager) finishRead(token string, r *ptyRef) {
+	r.Close()
+	m.mu.Lock()
+	current := m.terms[token] == r
+	if current {
+		delete(m.terms, token)
+	}
+	m.mu.Unlock()
+	if !current {
+		return
+	}
+	m.reportPersist(m.persistOpen())
+	if cb := m.callbacks(); cb.Exit != nil {
+		cb.Exit(token)
+	}
 }
 
 func DecodeInput(b64 string) ([]byte, error) {
