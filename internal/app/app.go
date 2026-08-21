@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"io/fs"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -24,33 +23,66 @@ type SessionInfo struct {
 	Time string `json:"time"`
 }
 type App struct {
-	ctx      context.Context
-	mu       sync.Mutex
-	terms    *terminal.Manager
-	store    *state.Store
-	watcher  *agent.Watcher
-	lookPath func(string) (string, error)
+	lifecycleMu sync.Mutex
+	ctx         context.Context
+	terms       *terminal.Manager
+	store       *state.Store
+	watcher     *agent.Watcher
+	lifecycleID uint64
+	lookPath    func(string) (string, error)
+	debugLog    func(string)
 }
 
-func NewApp(_ fs.FS) *App {
-	return NewAppWithStore(nil, state.Default())
+func NewApp() *App {
+	return NewAppWithStore(state.Default())
 }
 
-func NewAppWithStore(_ fs.FS, store *state.Store) *App {
-	a := &App{store: store, lookPath: exec.LookPath}
+func NewAppWithStore(store *state.Store) *App {
+	if store == nil {
+		store = state.Default()
+	}
+	a := &App{store: store, lookPath: exec.LookPath, debugLog: agent.DebugLog}
 	a.terms = terminal.NewManager(terminal.Callbacks{}, a.persistOpenSessions)
-	a.terms.SetPersistErrorHandler(func(err error) { a.DebugLog("持久化打开会话失败: " + err.Error()) })
+	a.terms.SetPersistErrorHandler(func(err error) { a.log("持久化打开会话失败: " + err.Error()) })
 	return a
 }
 func (a *App) startup(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	watcher := agent.NewWatcher(func(list []agent.AgentInfo) {
+		runtime.EventsEmit(ctx, "agents:update", list)
+	})
+	a.terms.SetCallbacks(terminal.Callbacks{
+		Data: func(token, data string) { runtime.EventsEmit(ctx, "term:data", token, data) },
+		Exit: func(token string) { runtime.EventsEmit(ctx, "term:exit", token) },
+	})
+	a.lifecycleMu.Lock()
+	old := a.watcher
+	a.lifecycleID++
+	lifecycleID := a.lifecycleID
 	a.ctx = ctx
-	a.terms.SetCallbacks(terminal.Callbacks{Data: func(token, data string) { runtime.EventsEmit(a.ctx, "term:data", token, data) }, Exit: func(token string) { runtime.EventsEmit(a.ctx, "term:exit", token) }})
-	a.watcher = agent.NewWatcher(func(list []agent.AgentInfo) { runtime.EventsEmit(a.ctx, "agents:update", list) })
-	a.watcher.Start(ctx)
+	a.watcher = watcher
+	a.lifecycleMu.Unlock()
+	if old != nil {
+		old.Stop()
+	}
+	a.lifecycleMu.Lock()
+	current := a.lifecycleID == lifecycleID && a.watcher == watcher
+	if current {
+		watcher.Start(ctx)
+	}
+	a.lifecycleMu.Unlock()
 }
 func (a *App) shutdown(context.Context) {
-	if a.watcher != nil {
-		a.watcher.Stop()
+	a.lifecycleMu.Lock()
+	watcher := a.watcher
+	a.lifecycleID++
+	a.watcher = nil
+	a.ctx = nil
+	a.lifecycleMu.Unlock()
+	if watcher != nil {
+		watcher.Stop()
 	}
 	a.terms.CloseAll()
 }
@@ -139,15 +171,33 @@ func (a *App) claudeCmd(sessionArgs string) string {
 	}
 	return "cmd /c claude " + args
 }
-func (a *App) DebugLog(msg string) { agent.DebugLog(msg) }
-func (a *App) GetAgents() []agent.AgentInfo {
-	if a.watcher == nil {
-		a.watcher = agent.NewWatcher(nil)
+func (a *App) log(msg string) {
+	if a.debugLog != nil {
+		a.debugLog(msg)
 	}
+}
+func (a *App) DebugLog(msg string) { a.log(msg) }
+func (a *App) runtimeContext() context.Context {
+	a.lifecycleMu.Lock()
 	ctx := a.ctx
+	a.lifecycleMu.Unlock()
 	if ctx == nil {
-		ctx = context.Background()
+		return context.Background()
 	}
-	return a.watcher.GetContext(ctx)
+	return ctx
+}
+func (a *App) GetAgents() []agent.AgentInfo {
+	a.lifecycleMu.Lock()
+	watcher := a.watcher
+	ctx := a.ctx
+	if watcher == nil {
+		watcher = agent.NewWatcher(nil)
+		a.watcher = watcher
+	}
+	a.lifecycleMu.Unlock()
+	if ctx == nil {
+		ctx = a.runtimeContext()
+	}
+	return watcher.GetContext(ctx)
 }
 func (a *App) GetVersion() string { return Version }

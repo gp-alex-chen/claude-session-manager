@@ -46,11 +46,12 @@ func (a *App) CheckForUpdate() (*updater.Info, error) {
 func (a *App) UpdateToLatest() error {
 	ctx, cancel := context.WithTimeout(context.Background(), updateDownloadTimeout)
 	defer cancel()
+	runtimeCtx := a.runtimeContext()
 
 	u := a.updater()
 	info, err := u.Check(ctx)
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "update:state", "检查失败")
+		runtime.EventsEmit(runtimeCtx, "update:state", "检查失败")
 		return err
 	}
 	if !info.HasUpdate {
@@ -64,25 +65,25 @@ func (a *App) UpdateToLatest() error {
 	tmp := self + ".new"
 	_ = os.Remove(tmp) // 清掉上次可能残留的下载
 
-	runtime.EventsEmit(a.ctx, "update:state", "下载中")
+	runtime.EventsEmit(runtimeCtx, "update:state", "下载中")
 	if err := u.DownloadTo(ctx, info, tmp, func(pct int, _, _ int64) {
-		runtime.EventsEmit(a.ctx, "update:progress", pct)
+		runtime.EventsEmit(runtimeCtx, "update:progress", pct)
 	}); err != nil {
 		_ = os.Remove(tmp)
-		runtime.EventsEmit(a.ctx, "update:state", "下载失败")
+		runtime.EventsEmit(runtimeCtx, "update:state", "下载失败")
 		return err
 	}
-	runtime.EventsEmit(a.ctx, "update:state", "正在替换程序")
-	runtime.EventsEmit(a.ctx, "update:progress", 100)
+	runtime.EventsEmit(runtimeCtx, "update:state", "正在替换程序")
+	runtime.EventsEmit(runtimeCtx, "update:progress", 100)
 
 	// 更新前收尾：持久化"当前打开的会话"（供新版恢复），再关闭全部 ConPTY
 	// （关闭 = claude 进程终止；闭眼前不再等待任务，符合"立即生效"的用户预期）
 	a.persistOpenSessions()
 	a.closeAllTerms()
 
-	runtime.EventsEmit(a.ctx, "update:state", "重启中")
+	runtime.EventsEmit(runtimeCtx, "update:state", "重启中")
 	if err := u.Apply(tmp, true); err != nil {
-		runtime.EventsEmit(a.ctx, "update:state", "更新失败")
+		runtime.EventsEmit(runtimeCtx, "update:state", "更新失败")
 		return err
 	}
 	return nil // 正常情况下不会走到：Apply 成功会启动新版并 os.Exit
