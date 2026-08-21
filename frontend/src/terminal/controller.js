@@ -276,6 +276,7 @@ export function createTerminalController(deps) {
     const fontSize = normalizeTerminalFontSize(value);
     state.terminalFontSize = fontSize;
     termOptions.fontSize = fontSize;
+    try { storageRef?.setItem('term-font-size', String(fontSize)); } catch (error) { /* ignore */ }
     for (const [, session] of state.terminals) {
       if (session.term) session.term.options.fontSize = fontSize;
     }

@@ -256,6 +256,7 @@ export function createSettingsController(deps) {
     const savedTerminalTheme = readStorage('term-theme');
     state.currentTheme = themes[savedTerminalTheme] ? savedTerminalTheme : 'claude';
     terminalController.applyTheme(state.currentTheme, false);
+    terminalController.applyFontSize(readStorage('term-font-size'), false);
     try {
       const version = await backend.GetVersion();
       const formatted = formatVersion(version);

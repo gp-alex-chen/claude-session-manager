@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createAppState } from '../src/state/app-state.js';
+import { normalizeTerminalFontSize } from '../src/terminal/options.js';
 import { THEMES } from '../src/themes/catalog.js';
 import { createSettingsController } from '../src/settings/controller.js';
 import { createUpdateController } from '../src/updates/controller.js';
@@ -90,11 +91,15 @@ function fixture(options = {}) {
   };
   const storageValues = new Map(Object.entries(options.storage || {}));
   const storage = {
-    getItem: (key) => storageValues.get(key) || null,
+    getItem: (key) => {
+      if (options.storageGetError) throw new Error('storage unavailable');
+      return storageValues.get(key) || null;
+    },
     setItem: (key, value) => storageValues.set(key, value),
   };
   const statuses = [];
   const applied = [];
+  const appliedFontSizes = [];
   const backend = {
     GetShell: options.GetShell || (async () => 'cmd'),
     ShellInstalled: options.ShellInstalled || (async () => true),
@@ -113,7 +118,14 @@ function fixture(options = {}) {
   const controller = createSettingsController({
     state,
     backend,
-    terminalController: { applyTheme: (...args) => applied.push(args) },
+    terminalController: {
+      applyTheme: (...args) => applied.push(args),
+      applyFontSize: (value, notify) => {
+        appliedFontSizes.push([value, notify]);
+        state.terminalFontSize = normalizeTerminalFontSize(value);
+        return state.terminalFontSize;
+      },
+    },
     themes: THEMES,
     settingsButton,
     settingsMenu,
@@ -141,6 +153,7 @@ function fixture(options = {}) {
     storage,
     statuses,
     applied,
+    appliedFontSizes,
     backend,
     ...dialogDeps,
   };
@@ -208,11 +221,15 @@ function countOccurrences(value, needle) {
 }
 
 test('initialize validates stored UI and terminal themes', async () => {
-  const valid = fixture({ storage: { 'ui-theme': 'dark', 'term-theme': 'dracula' } });
+  const valid = fixture({
+    storage: { 'ui-theme': 'dark', 'term-theme': 'dracula', 'term-font-size': '18.6' },
+  });
   await valid.controller.initialize();
   assert.equal(valid.state.uiTheme, 'dark');
   assert.equal(valid.documentRef.documentElement.dataset.theme, 'dark');
   assert.deepEqual(valid.applied, [['dracula', false]]);
+  assert.deepEqual(valid.appliedFontSizes, [['18.6', false]]);
+  assert.equal(valid.state.terminalFontSize, 19);
   assert.equal(valid.settingsButton.title, '设置 · v1.2.3');
 
   const tagged = fixture({ GetVersion: async () => 'v0.3-wails-rc2-local' });
@@ -226,7 +243,29 @@ test('initialize validates stored UI and terminal themes', async () => {
   assert.equal(invalid.state.uiTheme, 'light');
   assert.equal(invalid.state.currentTheme, 'claude');
   assert.deepEqual(invalid.applied, [['claude', false]]);
+  assert.deepEqual(invalid.appliedFontSizes, [[null, false]]);
+  assert.equal(invalid.state.terminalFontSize, 14);
   assert.equal(invalid.settingsButton.title, '设置');
+});
+
+test('initialize repairs damaged font sizes and contains storage read errors', async () => {
+  for (const [stored, expected] of [
+    ['invalid', 14],
+    ['NaN', 14],
+    ['Infinity', 14],
+    ['99', 24],
+    ['', 14],
+  ]) {
+    const fixtureData = fixture({ storage: { 'term-font-size': stored } });
+    await assert.doesNotReject(fixtureData.controller.initialize());
+    assert.equal(fixtureData.state.terminalFontSize, expected);
+    assert.deepEqual(fixtureData.appliedFontSizes, [[stored || null, false]]);
+  }
+
+  const unavailable = fixture({ storageGetError: true });
+  await assert.doesNotReject(unavailable.controller.initialize());
+  assert.equal(unavailable.state.terminalFontSize, 14);
+  assert.deepEqual(unavailable.appliedFontSizes, [[null, false]]);
 });
 
 test('initialize forwards one formatted version to the update card', async () => {

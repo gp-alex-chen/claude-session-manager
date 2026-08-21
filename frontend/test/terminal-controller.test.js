@@ -88,6 +88,7 @@ function createFixture(options = {}) {
   const statuses = [];
   const clipboardReads = [];
   const clipboardWrites = [];
+  const storageWrites = [];
   const frames = [];
   const termOptions = createTermOptions();
   const documentRef = {
@@ -117,7 +118,12 @@ function createFixture(options = {}) {
     appendHost: () => {},
     documentRef,
     navigatorRef,
-    storageRef: { setItem() {} },
+    storageRef: {
+      setItem(key, value) {
+        if (options.storageSetError) throw new Error('storage unavailable');
+        storageWrites.push([key, value]);
+      },
+    },
     readClipboard: options.readClipboard || (async () => {
       clipboardReads.push(true);
       return options.clipboardText ?? '粘贴内容';
@@ -140,6 +146,7 @@ function createFixture(options = {}) {
     statuses,
     clipboardReads,
     clipboardWrites,
+    storageWrites,
     frames,
     termOptions,
     flushFrame: () => frames.shift()?.(),
@@ -268,6 +275,19 @@ test('applyFontSize normalizes values and coalesces active fits within one frame
   fixture.flushFrame();
   assert.equal(session.fit.fitCalls, fitCalls + 1);
   assert.equal(session.term.focused, focusState);
+});
+
+test('applyFontSize persists normalized values even without notification', () => {
+  const fixture = createFixture();
+  openAndActivate(fixture, 'active');
+
+  assert.equal(fixture.controller.applyFontSize(19.6, false), 20);
+  assert.deepEqual(fixture.storageWrites.at(-1), ['term-font-size', '20']);
+
+  const brokenStorage = createFixture({ storageSetError: true });
+  openAndActivate(brokenStorage, 'active');
+  assert.doesNotThrow(() => brokenStorage.controller.applyFontSize('invalid', false));
+  assert.equal(brokenStorage.controller.getFontSize(), 14);
 });
 
 test('scheduled font fit ignores stale sessions after switching or closing', () => {
