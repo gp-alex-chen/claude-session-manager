@@ -1,4 +1,4 @@
-package main
+package app
 
 // App 的更新相关绑定方法：一键"检查更新 / 更新到最新版"。
 // 数据层在 internal/updater；这里负责：
@@ -12,7 +12,7 @@ import (
 	"os"
 	"time"
 
-	"claude-terminal/internal/updater"
+	"github.com/gp-alex-chen/claude-session-manager/internal/updater"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -29,10 +29,8 @@ const (
 	updateDownloadTimeout = 5 * time.Minute
 )
 
-// GetVersion 返回当前版本（-ldflags -X main.Version=<tag> 注入；
+// GetVersion 返回当前版本（-ldflags -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=<tag> 注入；
 // 未注入时为 "dev"，表示手工/开发构建）。
-func (a *App) GetVersion() string { return Version }
-
 // CheckForUpdate 手动检查更新：查询 GitHub Releases 里最新 wails 正式版。
 // 返回 updater.Info（前端据此展示"发现新版本/已是最新"）。
 func (a *App) CheckForUpdate() (*updater.Info, error) {
@@ -98,7 +96,7 @@ func (a *App) updater() *updater.Updater {
 // cleanupUpdateArtifacts 清理更新器留下的残留文件（在主函数启动时调用）：
 //   - <exe>.old：上次自替换成功后旧版程序（新版已跑起来，旧文件不再需要）；
 //   - <exe>.new：上次下载被中断/失败留下的临时文件。
-func cleanupUpdateArtifacts() {
+func CleanupUpdateArtifacts() {
 	if self, err := os.Executable(); err == nil {
 		_ = os.Remove(self + ".old")
 		_ = os.Remove(self + ".new")
@@ -108,10 +106,5 @@ func cleanupUpdateArtifacts() {
 // closeAllTerms 关闭全部 ConPTY 会话（与 shutdown 相同的幂等路径，
 // 仅用于"更新替换前"的主动收尾）。
 func (a *App) closeAllTerms() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for k, r := range a.terms {
-		r.close()
-		delete(a.terms, k)
-	}
+	a.terms.CloseAll()
 }

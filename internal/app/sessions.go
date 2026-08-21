@@ -1,17 +1,11 @@
-package main
+package app
 
-// App 的 favorites 相关绑定方法（数据层在 internal/favorites）。
+// App 的会话别名、归档与 Shell 设置绑定。
 
 import (
 	"errors"
-	"os/exec"
 	"strings"
-
-	"claude-terminal/internal/favorites"
 )
-
-// lookPath 查找可执行文件（默认 exec.LookPath；测试可替换为桩）。
-var lookPath = exec.LookPath
 
 // shellAvailable 底层 Shell 是否可用：cmd.exe 系统自带恒可用；
 // pwsh 需要在 PATH 中能找到（PowerShell 7）。
@@ -19,41 +13,40 @@ func (a *App) shellAvailable(name string) bool {
 	if name != "pwsh" {
 		return true
 	}
-	_, err := lookPath("pwsh")
+	_, err := a.lookPath("pwsh")
 	return err == nil
 }
 
 // RenameSession 设置/清除会话别名（空串 = 清除，恢复原名）。
 // 注意：只改本软件的显示名；真正重命名请用 claude 会话内的 /rename。
 func (a *App) RenameSession(id, name string) error {
-	st := favorites.Load()
+	st := a.store.Load()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		delete(st.Aliases, id)
 	} else {
 		st.Aliases[id] = name
 	}
-	favorites.Save(st)
-	return nil
+	return a.store.Save(st)
 }
 
 // DeleteSession 软删除：把会话 ID 记入 hidden，列表不再显示。
 // 不物理删除 ~/.claude 下的会话文件；可在"归档"面板恢复。
 func (a *App) DeleteSession(id string) error {
-	st := favorites.Load()
+	st := a.store.Load()
 	if !st.HiddenSet()[id] {
 		st.Hidden = append(st.Hidden, id)
-		favorites.Save(st)
+		return a.store.Save(st)
 	}
 	return nil
 }
 
 // UnhideSession 从 hidden 移除，恢复显示。
 func (a *App) UnhideSession(id string) error {
-	st := favorites.Load()
+	st := a.store.Load()
 	if st.HiddenSet()[id] {
 		st.RemoveHidden(id)
-		favorites.Save(st)
+		return a.store.Save(st)
 	}
 	return nil
 }
@@ -62,12 +55,12 @@ func (a *App) UnhideSession(id string) error {
 // 启动时前端据此把所有这些会话全部恢复。集合由后端在会话打开/关闭时
 // 自动维护（persistOpenSessions），前端只要启动时读一次。
 func (a *App) GetOpenSessions() []string {
-	return favorites.LoadOpen()
+	return a.store.LoadOpen()
 }
 
 // GetShell 当前底层 Shell（cmd / pwsh，默认 cmd）。
 func (a *App) GetShell() string {
-	return favorites.Shell()
+	return a.store.Shell()
 }
 
 // ShellInstalled 查询某个 Shell 是否可用（前端选型时预检用）。
@@ -82,6 +75,5 @@ func (a *App) SetShell(name string) error {
 	if name == "pwsh" && !a.shellAvailable("pwsh") {
 		return errors.New("未检测到 pwsh（PowerShell 7）：请先安装并确保 pwsh 在 PATH 中，或保持 cmd")
 	}
-	favorites.SaveShell(name)
-	return nil
+	return a.store.SaveShell(name)
 }

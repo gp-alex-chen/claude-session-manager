@@ -1,4 +1,4 @@
-module claude-terminal
+module github.com/gp-alex-chen/claude-session-manager
 
 go 1.25.0
 
