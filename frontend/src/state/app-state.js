@@ -1,3 +1,5 @@
+import { DEFAULT_TERMINAL_FONT_SIZE } from '../terminal/options.js';
+
 export function createAppState() {
   return {
     terminals: new Map(),
@@ -15,6 +17,7 @@ export function createAppState() {
     collapseAllDone: false,
     eyeGlobalOff: false,
     currentTheme: 'claude',
+    terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
     uiTheme: 'light',
   };
 }

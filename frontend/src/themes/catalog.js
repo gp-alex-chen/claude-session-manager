@@ -1,3 +1,8 @@
+import {
+  DEFAULT_TERMINAL_FONT_SIZE,
+  normalizeTerminalFontSize,
+} from '../terminal/options.js';
+
 const themes = {
   claude: {
     name: 'Claude 暖黑',
@@ -91,15 +96,16 @@ export const THEMES = Object.freeze(
 
 export const TERM_OPTS = Object.freeze({
   fontFamily: "'Cascadia Mono', Consolas, 'Microsoft YaHei', monospace",
-  fontSize: 14,
+  fontSize: DEFAULT_TERMINAL_FONT_SIZE,
   lineHeight: 1.2,
   cursorBlink: true,
   scrollback: 8000,
 });
 
-export function createTermOptions(themeName = 'claude') {
+export function createTermOptions(themeName = 'claude', fontSize = DEFAULT_TERMINAL_FONT_SIZE) {
   return {
     ...TERM_OPTS,
+    fontSize: normalizeTerminalFontSize(fontSize),
     theme: THEMES[themeName] || THEMES.claude,
   };
 }

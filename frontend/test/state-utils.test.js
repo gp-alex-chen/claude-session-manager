@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createAppState } from '../src/state/app-state.js';
+import {
+  DEFAULT_TERMINAL_FONT_SIZE,
+  MAX_TERMINAL_FONT_SIZE,
+  MIN_TERMINAL_FONT_SIZE,
+  TERMINAL_FONT_SIZE_STEP,
+  normalizeTerminalFontSize,
+} from '../src/terminal/options.js';
 import { b64ToBytes, bytesToB64, clampProgress, leafOf } from '../src/utils.js';
 import { createTermOptions, THEMES } from '../src/themes/catalog.js';
 
@@ -25,6 +32,33 @@ test('shared state is the single source for primitive and array updates', () => 
 
   assert.equal(state.activeToken, 'token');
   assert.equal(state.pendingNew[0].token, 'token');
+});
+
+test('terminal font-size constants and normalization define safe integer bounds', () => {
+  assert.equal(DEFAULT_TERMINAL_FONT_SIZE, 14);
+  assert.equal(MIN_TERMINAL_FONT_SIZE, 10);
+  assert.equal(MAX_TERMINAL_FONT_SIZE, 24);
+  assert.equal(TERMINAL_FONT_SIZE_STEP, 1);
+
+  for (const value of [undefined, null, '', '   ', Number.NaN, Infinity, -Infinity, 'invalid']) {
+    assert.equal(normalizeTerminalFontSize(value), DEFAULT_TERMINAL_FONT_SIZE);
+  }
+  assert.equal(normalizeTerminalFontSize(9), MIN_TERMINAL_FONT_SIZE);
+  assert.equal(normalizeTerminalFontSize('10'), MIN_TERMINAL_FONT_SIZE);
+  assert.equal(normalizeTerminalFontSize(17.4), 17);
+  assert.equal(normalizeTerminalFontSize(17.5), 18);
+  assert.equal(normalizeTerminalFontSize('23.6'), MAX_TERMINAL_FONT_SIZE);
+  assert.equal(normalizeTerminalFontSize(25), MAX_TERMINAL_FONT_SIZE);
+});
+
+test('app state owns an independent terminal font-size primitive', () => {
+  const first = createAppState();
+  const second = createAppState();
+
+  assert.equal(first.terminalFontSize, DEFAULT_TERMINAL_FONT_SIZE);
+  first.terminalFontSize = 20;
+  assert.equal(first.terminalFontSize, 20);
+  assert.equal(second.terminalFontSize, DEFAULT_TERMINAL_FONT_SIZE);
 });
 
 test('base64 utilities round-trip UTF-8 bytes', () => {
@@ -52,6 +86,9 @@ test('theme catalog contains all themes and default terminal options', () => {
   ]);
   const options = createTermOptions();
   assert.equal(options.theme, THEMES.claude);
-  assert.equal(options.fontSize, 14);
+  assert.equal(options.fontSize, DEFAULT_TERMINAL_FONT_SIZE);
+  assert.equal(createTermOptions('dracula', 19.6).fontSize, 20);
+  assert.equal(createTermOptions('dracula', 'invalid').fontSize, DEFAULT_TERMINAL_FONT_SIZE);
+  assert.equal(createTermOptions('dracula', 100).fontSize, MAX_TERMINAL_FONT_SIZE);
   assert.equal(Object.isFrozen(THEMES.claude), true);
 });
