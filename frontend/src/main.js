@@ -12,6 +12,7 @@ import { createAppState } from './state/app-state.js';
 import { leafOf } from './utils.js';
 import { createTermOptions, THEMES } from './themes/catalog.js';
 import { createTerminalController } from './terminal/controller.js';
+import { createAgentController } from './agents/controller.js';
 
 // —— 多会话终端管理 ——
 // 每个会话一个独立 xterm 实例；切换/关闭都在左侧列表操作，
@@ -19,6 +20,7 @@ import { createTerminalController } from './terminal/controller.js';
 
 const termStack = document.getElementById('terminal');
 const statusEl = document.getElementById('status-bar');
+const listEl = document.getElementById('session-list');
 
 const state = createAppState();
 let newCounter = 0;
@@ -59,6 +61,17 @@ function syncActiveHighlight() {
   }
 }
 
+const agentController = createAgentController({
+  state,
+  GetAgents,
+  DebugLog,
+  NotifyBeep,
+  setStatus,
+  listRoot: listEl,
+  documentRef: document,
+  refreshFoldState,
+});
+
 const terminalController = createTerminalController({
   state,
   backend: { TermWrite, TermResize, TermKill },
@@ -72,7 +85,7 @@ const terminalController = createTerminalController({
   documentRef: document,
   onActivate: () => {
     syncActiveHighlight();
-    renderUnreadMarks();
+    agentController.renderUnreadMarks();
   },
 });
 
@@ -193,7 +206,7 @@ window.runtime.EventsOn('update:state', (s) => {
     upd.busy = false;
     setStatus('❌ ' + s, 'warn');
   } else if (s === '重启中') {
-    showToast('✅ 更新完成，正在重启…');
+    agentController.showToast('✅ 更新完成，正在重启…');
   }
   renderUpdItem();
 });
@@ -411,115 +424,10 @@ document.getElementById('btn-hidden').addEventListener('click', () => {
   if (hiddenOpen) refreshHidden(true);
 });
 
-// —— 运行状态徽标（claude agents --json，每 10s 轮询） ——
-// 语义（2026-08-18 实测 state/status 字段）：
-//   正在执行任务: state=working / status=busy      -> 绿色心电图跳动
-//   交互会话(打开但空闲): kind=interactive 非 busy -> 绿色静态 ◉
-//   等待权限批准: state=blocked / status=waiting   -> 橙色 ⚠ 闪烁（需要用户处理）
-//   后台待命/排队: kind=background 非 busy          -> 橙色 ●
-//   已完成: state=done                             -> 灰点 + 未读逻辑接管
-//   不在列表:                                      -> 灰点（未运行）
-function classifyAgent(id) {
-  const a = state.runningAgents.get(id);
-  if (!a) return 'idle';
-  if (a.state === 'done') return 'idle'; // 已完成：归入未运行视觉，未读逻辑接管
-  if (a.status === 'busy' || a.state === 'working' || a.state === 'queued') return 'working';
-  if (a.state === 'blocked' || a.status === 'waiting') return 'blocked';
-  if (a.kind === 'interactive') return 'open';
-  return 'bg';
-}
-
-// —— 实时状态：后端常驻监视器推送 agents:update 事件 ——
-// 后端起 goroutine 每 1~2s 拉一次 claude agents 快照，变化时推事件。
-// 前端不再轮询：收到事件立即应用。30s 兜底轮询防止事件丢失。
-// 一次只处理一份数据（事件到达即同步执行，无并发叠加问题）。
-async function refreshAgents() {
-  let list = [];
-  try {
-    list = await GetAgents(); // 读后端缓存，秒回
-  } catch (e) {
-    return;
-  }
-  applyAgents(list);
-}
-
-function applyAgents(list) {
-  const next = new Map();
-  for (const a of list) if (a.sessionId) next.set(a.sessionId, a);
-  DebugLog('应用 agents=' + list.length + ' 条, 可识别' + next.size + ' 个');
-
-  // 完成检测：会话"从亮到灭/从忙到闲"就算结束，两种语义都支持：
-  //   background: state working -> done（或消失）
-  //   interactive: status busy -> idle（任务做完回到待输入，实测无 state 字段）
-  for (const [id, prev] of state.previousRunningAgents) {
-    const cur = next.get(id);
-    const prevBusy = prev.status === 'busy' || prev.state === 'working' || prev.state === 'queued';
-    const curBusy = !!(cur && (cur.status === 'busy' || cur.state === 'working' || cur.state === 'queued'));
-    // 结束 = 消失 / state=done / 上一轮忙碌而本轮不再忙碌
-    const nowEnded = !cur || cur.state === 'done' || (prevBusy && !curBusy && cur);
-    const skip = state.closedTokens.has(id); // 用户手动关闭的会话不提示
-    DebugLog(
-      `检测 id=${id} prev=${prev.state}/${prev.status} ` +
-      `cur=${cur ? cur.state + '/' + cur.status : 'gone'} ` +
-      `prevBusy=${prevBusy} curBusy=${curBusy} ended=${nowEnded} ` +
-      `提示过=${state.endedAgents.has(id)} 关闭=${skip}`,
-    );
-    if (nowEnded && !state.endedAgents.has(id) && !skip) {
-      state.endedAgents.add(id); // 一次结束只提示一次
-      DebugLog(`>>> 触发提示 ${id} 类型=${prevBusy ? '任务完成' : '会话结束'}`);
-      markEnded(id, state.sessionNames.get(id) || id, prevBusy);
-    }
-  }
-  state.previousRunningAgents = new Map(next);
-  state.runningAgents.clear();
-  for (const [id, a] of next) state.runningAgents.set(id, a);
-
-  // 会话重新忙碌（又开新任务）则允许再次提示
-  for (const id of state.endedAgents) {
-    const a = state.runningAgents.get(id);
-    if (a && (a.status === 'busy' || a.state === 'working' || a.state === 'queued')) state.endedAgents.delete(id);
-  }
-
-  renderUnreadMarks();
-
-  refreshFoldState(); // 状态变化：变忙浮现、变闲收回
-  const badges = document.querySelectorAll('#session-list .badge');
-  for (const b of badges) {
-    if (b.classList.contains('ended-anim')) continue; // 正在播结束动画，跳过
-    const id = b.dataset.id;
-    if (state.unreadSessions.has(id)) continue; // 未读标记优先（替换状态点，查看后换回）
-    const cls = classifyAgent(id);
-    b.classList.remove('ecg', 'open', 'running', 'blocked', 'idle');
-    if (cls === 'working') {
-      b.classList.add('ecg', 'green');
-      b.textContent = ECG[ecgTick];
-      b.title = '正在执行任务';
-    } else if (cls === 'open') {
-      b.classList.add('open');
-      b.textContent = '◉';
-      b.title = '已打开（交互会话，空闲等待输入）';
-    } else if (cls === 'blocked') {
-      b.classList.add('blocked');
-      b.textContent = '⚠';
-      b.title = '等待权限批准';
-    } else if (cls === 'bg') {
-      b.classList.add('running');
-      b.textContent = '●';
-      b.title = '后台待命/排队';
-    } else {
-      b.classList.add('idle');
-      b.textContent = '●';
-      b.title = '未运行';
-    }
-  }
-}
-
-// 实时事件推送（后端监视器检测到状态变化立即发来）+ 30s 兜底轮询
-window.runtime.EventsOn('agents:update', (list) => applyAgents(list || []));
-setInterval(() => GetAgents().then(applyAgents).catch(() => {}), 30000);
-refreshAgents();
-
 // —— 后端事件路由 ——
+window.runtime.EventsOn('agents:update', (list) => agentController.applyAgents(list));
+agentController.start();
+
 window.runtime.EventsOn('term:data', (token, b64) => {
   terminalController.handleData(token, b64);
 });
@@ -549,112 +457,8 @@ function setEyeIcon(eye, off) {
 }
 
 // —— 会话列表 ——
-const listEl = document.getElementById('session-list');
 // 最近一次全量列表 + 运行中信息（id -> kind），用于渲染状态徽标
 let lastLoaded = [];
-
-// —— 心电图心跳节拍（共享 tick：所有运行中徽标同步跳动） ——
-const ECG = ['▁', '▂', '▃', '▅', '▇', '▅', '▃', '▂', '▁', '─', '─', '─'];
-let ecgTick = 0;
-setInterval(() => {
-  ecgTick = (ecgTick + 1) % ECG.length;
-  for (const e of document.querySelectorAll('.badge.ecg')) {
-    if (!e.classList.contains('ended-anim')) e.textContent = ECG[ecgTick];
-  }
-}, 120);
-
-// 顶部横幅提示（任务完成等），2.8s 后自动淡出
-function showToast(text) {
-  let t = document.getElementById('toast');
-  if (!t) {
-    t = el('div', 'toast');
-    t.id = 'toast';
-    document.body.appendChild(t);
-  }
-  t.textContent = text;
-  t.classList.add('show');
-  clearTimeout(t._tm);
-  t._tm = setTimeout(() => t.classList.remove('show'), 2800);
-}
-
-// 按会话真实状态重绘某个徽标（动画结束后恢复正确样式，
-// 避免把还活着的交互会话错标成"未运行"灰色）
-function repaintBadge(b) {
-  const id = b.dataset.id;
-  const cls = classifyAgent(id);
-  b.classList.remove('ecg', 'open', 'running', 'blocked', 'idle', 'ended-anim', 'unread');
-  if (cls === 'working') {
-    b.classList.add('ecg', 'green');
-    b.textContent = ECG[ecgTick];
-    b.title = '正在执行任务';
-  } else if (cls === 'open') {
-    b.classList.add('open');
-    b.textContent = '◉';
-    b.title = '已打开（交互会话，空闲等待输入）';
-  } else if (cls === 'blocked') {
-    b.classList.add('blocked');
-    b.textContent = '⚠';
-    b.title = '等待权限批准';
-  } else if (cls === 'bg') {
-    b.classList.add('running');
-    b.textContent = '●';
-    b.title = '后台待命/排队';
-  } else {
-    b.classList.add('idle');
-    b.textContent = '●';
-    b.title = '未运行';
-  }
-}
-
-// 任务/会话结束提示：心跳停止动画（置顶区会整块重建，动画贴在列表区徽标上）+
-// 顶部横幅 + 提示音 + 未读标记（正在看该会话时不打扰）。
-// wasWorking=true 提示"任务完成"，false（交互空闲会话结束）提示"会话结束"。
-function markEnded(id, name, wasWorking) {
-  const watching = state.activeToken === id; // 用户正开着这个会话的终端
-  if (!watching) state.unreadSessions.add(id);
-
-  const item = listEl.querySelector('.group .session-item[data-id="' + id + '"]');
-  const badge = item && item.querySelector('.badge');
-  if (badge && !badge.classList.contains('ended-anim')) {
-    badge.classList.add('ended-anim');
-    badge.textContent = '─';
-    // 动画结束后摘掉 ended-anim（否则残留类会让徽标停在淡出态），
-    // 再交给 renderUnreadMarks 决定显示：未读点 or 原状态标记
-    const b = badge;
-    setTimeout(() => {
-      b.classList.remove('ended-anim');
-      renderUnreadMarks();
-    }, 900);
-  }
-
-  const label = wasWorking ? '任务完成' : '会话结束';
-  showToast('✅ ' + label + '：' + name);
-  setStatus(label + ': ' + name, 'ok');
-  NotifyBeep().catch(() => {});
-  renderUnreadMarks();
-}
-
-// 按 state.unreadSessions 切换会话左侧徽标：
-//   未读 -> 用橙色脉冲点"替换"原状态标记；查看/点击后 -> 换回原状态标记
-// （ended-anim 动画播放中的徽标不动，动画结束后由 markEnded 的回调收尾）
-function renderUnreadMarks() {
-  for (const item of listEl.querySelectorAll('.session-item')) {
-    const id = item.dataset.id;
-    const badge = item.querySelector('.badge');
-    if (!badge) continue;
-    if (state.unreadSessions.has(id)) {
-      if (badge.classList.contains('ended-anim')) continue; // 动画中：播完再变未读点
-      if (!badge.classList.contains('unread')) {
-        badge.classList.remove('ecg', 'open', 'running', 'blocked', 'idle');
-        badge.classList.add('unread');
-        badge.textContent = '●';
-        badge.title = '已完成 · 未读（点击查看）';
-      }
-    } else if (badge.classList.contains('unread') || badge.classList.contains('ended-anim')) {
-      repaintBadge(badge); // 点击查看后换回原状态标记（含动画残留的徽标）
-    }
-  }
-}
 
 async function openFromList(s) {
   const token = state.realToNew.get(s.id) || s.id; // 已配对的新会话：切到其运行中的终端
@@ -662,7 +466,7 @@ async function openFromList(s) {
   if (existing && !existing.exited) {
     terminalController.activate(token); // 已在运行：直接换过去
     state.unreadSessions.delete(s.id); // 查看过 = 清除未读
-    renderUnreadMarks();
+    agentController.renderUnreadMarks();
     return;
   }
   if (existing) {
@@ -674,7 +478,7 @@ async function openFromList(s) {
     await StartSession(s.id, s.dir);
     setStatus('已恢复: ' + s.name, 'ok');
     state.unreadSessions.delete(s.id); // 查看过 = 清除未读
-    renderUnreadMarks();
+    agentController.renderUnreadMarks();
     terminalController.activate(token);
   } catch (e) {
     setStatus('恢复失败: ' + e, 'warn');
@@ -690,7 +494,7 @@ function refreshFoldState() {
   for (const item of listEl.querySelectorAll('.group .session-item')) {
     const id = item.dataset.id;
     const dir = item.dataset.dir;
-    const cls = classifyAgent(id);
+    const cls = agentController.classifyAgent(id);
     const folded = state.collapsedDirs.has(dir) && (state.eyeGlobalOff || cls === 'idle');
     item.classList.toggle('fold-hidden', folded);
   }
@@ -821,7 +625,7 @@ function renderSessions(list) {
       item.title = s.dir;
       // 折叠的组：闭眼 -> 全隐藏；睁眼 -> 只隐藏未运行（灰点）的
       if (state.collapsedDirs.has(dir) &&
-          (state.eyeGlobalOff || classifyAgent(s.id) === 'idle')) {
+          (state.eyeGlobalOff || agentController.classifyAgent(s.id) === 'idle')) {
         item.classList.add('fold-hidden');
       }
       const nameRow = el('div', 's-name');
@@ -854,9 +658,9 @@ function renderSessions(list) {
     listEl.appendChild(g);
   }
   refreshHidden(true); // 每次刷新后同步"归档"计数
-  refreshAgents();     // 列表重建后立即刷新状态徽标
+  agentController.refreshAgents();     // 列表重建后立即刷新状态徽标
   refreshFoldState();
-  renderUnreadMarks();
+  agentController.renderUnreadMarks();
   syncActiveHighlight(); // 列表重建后恢复当前终端的高亮
 }
 
@@ -877,7 +681,7 @@ btnEye.addEventListener('click', () => {
 paintEye();
 
 (async () => {
-  await refreshAgents(); // 先取一轮 agents：首屏折叠/徽标不依赖轮询迟到
+  await agentController.refreshAgents(); // 先取一轮 agents：首屏折叠/徽标不依赖轮询迟到
   await loadSessions();
   // 恢复上次关闭时还打开着的所有会话（已被归档/已从磁盘消失的自动跳过；
   // 逐个走 openFromList，行为与手动点击一致）
