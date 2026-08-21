@@ -11,6 +11,14 @@ class FakeClassList {
     this.values = new Set();
   }
 
+  add(...names) {
+    names.forEach((name) => this.values.add(name));
+  }
+
+  contains(name) {
+    return this.values.has(name);
+  }
+
   toggle(name, enabled) {
     if (enabled) this.values.add(name);
     else this.values.delete(name);
@@ -147,6 +155,18 @@ test('activate updates active token and clears unread state', () => {
   assert.equal(fixture.state.unreadSessions.has('session-1'), false);
   assert.equal(session.term.focused, true);
   assert.equal(session.host.classList.values.has('active'), true);
+});
+
+test('multiple terminals use overlapping hosts with only the active host shown', () => {
+  const fixture = createFixture();
+  const first = openAndActivate(fixture, 'session-1');
+  const second = fixture.controller.openTab('session-2', 'session-2');
+  fixture.controller.activate('session-2');
+
+  assert.equal(first.host.classList.contains('term-host'), true);
+  assert.equal(second.host.classList.contains('term-host'), true);
+  assert.equal(first.host.classList.contains('active'), false);
+  assert.equal(second.host.classList.contains('active'), true);
 });
 
 test('applyTheme updates options on existing terminals', () => {

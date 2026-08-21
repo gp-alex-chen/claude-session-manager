@@ -64,6 +64,7 @@ export function createTerminalController(deps) {
       fit: null,
       host: hostFactory(),
     };
+    session.host.classList.add('term-host');
     appendHost(session.host);
     state.terminals.set(token, session);
     return session;
