@@ -67,7 +67,11 @@ export function createUpdateController(deps) {
           : '检查更新';
     actionButton.disabled = state.busy;
     actionButton.setAttribute('aria-disabled', String(state.busy));
-    if (card) card.setAttribute('aria-busy', String(state.busy));
+    actionButton.classList.toggle('disabled', state.busy);
+    if (card) {
+      card.setAttribute('aria-busy', String(state.busy));
+      card.classList.toggle('has-update', isReady);
+    }
     if (versionNode) versionNode.textContent = state.currentVersion;
 
     const defaultStatus = state.mode === 'checking'

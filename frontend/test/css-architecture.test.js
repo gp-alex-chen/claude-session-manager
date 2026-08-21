@@ -97,3 +97,44 @@ test('update panel has dedicated card styles', () => {
     assert.match(menus, new RegExp('\\' + selector));
   }
 });
+
+test('settings dialog has stable sizing, hierarchy, and focused controls', () => {
+  const menus = read('menus.css');
+  assert.match(menus, /width:\s*min\(680px/);
+  assert.match(menus, /height:\s*min\(500px/);
+  assert.match(menus, /max-height:\s*min\(500px/);
+  assert.match(menus, /settings-version[\s\S]*background:/);
+  assert.match(menus, /settings-nav button:focus-visible/);
+  assert.match(menus, /settings-theme-card:focus-visible/);
+  assert.match(menus, /settings-shell-card:focus-visible/);
+  assert.match(menus, /update-action:focus-visible/);
+});
+
+test('settings motion uses corporate timing and reduced-motion fallback', () => {
+  const menus = read('menus.css');
+  assert.match(menus, /cubic-bezier\(\.2,\s*0,\s*0,\s*1\)/);
+  assert.match(menus, /280ms/);
+  assert.match(menus, /180ms/);
+  assert.match(menus, /90ms/);
+  assert.match(menus, /#settings-menu\.settings-overlay:not\(\[hidden\]\)/);
+  assert.match(menus, /prefers-reduced-motion:\s*reduce/);
+  assert.match(menus, /transition:\s*none/);
+});
+
+test('settings layout adapts and update progress includes a track', () => {
+  const menus = read('menus.css');
+  assert.match(menus, /@media\s*\(max-width:\s*640px\)/);
+  assert.match(menus, /@media\s*\(max-width:\s*480px\)/);
+  assert.match(menus, /\.settings-nav[\s\S]*flex-direction:\s*row/);
+  assert.match(menus, /\.settings-progress-region|\.update-progress-region[\s\S]*background:\s*var\(--panel-3\)/);
+  assert.match(menus, /\.update-progress-bar[\s\S]*background:\s*var\(--accent\)/);
+});
+
+test('obsolete settings menu selectors are gone from production sources', () => {
+  const sourceDir = path.resolve(stylesDir, '..');
+  const production = fs.readdirSync(sourceDir, { recursive: true })
+    .filter((name) => typeof name === 'string' && /\.(css|js|html)$/.test(name))
+    .map((name) => fs.readFileSync(path.join(sourceDir, name), 'utf8'))
+    .join('\n');
+  assert.doesNotMatch(production, /settings-item|settings-group-label|upd-(run|col|progress|hint|note-ver)/);
+});
