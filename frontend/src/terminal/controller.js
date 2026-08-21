@@ -1,4 +1,5 @@
 import { b64ToBytes, bytesToB64 } from '../utils.js';
+import { normalizeTerminalFontSize } from './options.js';
 
 export function createTerminalController(deps) {
   const {
@@ -15,6 +16,15 @@ export function createTerminalController(deps) {
     storageRef = typeof localStorage === 'undefined' ? null : localStorage,
     onActivate,
   } = deps;
+
+  const requestFrame = deps.requestFrame || ((callback) => {
+    if (typeof globalThis.requestAnimationFrame === 'function') {
+      return globalThis.requestAnimationFrame(callback);
+    }
+    return globalThis.setTimeout(callback, 0);
+  });
+  let fontFitPending = false;
+  let fontFitTarget = null;
 
   const clipboardReader = deps.readClipboard || (() => {
     if (!navigatorRef?.clipboard?.readText) return Promise.reject(new Error('剪贴板不可用'));
@@ -193,6 +203,32 @@ export function createTerminalController(deps) {
     if (session?.term) fitAndSync(session);
   }
 
+  function scheduleFontFit() {
+    const token = state.activeToken;
+    const session = state.terminals.get(token);
+    if (!token || !session?.visible || !session.term || !session.fit) return;
+    fontFitTarget = { token, session };
+    if (fontFitPending) return;
+
+    fontFitPending = true;
+    requestFrame(() => {
+      fontFitPending = false;
+      const target = fontFitTarget;
+      fontFitTarget = null;
+      if (!target) return;
+      const { token: targetToken, session: targetSession } = target;
+      const current = state.terminals.get(targetToken);
+      if (
+        state.activeToken !== targetToken
+        || current !== targetSession
+        || !targetSession.visible
+        || !targetSession.term
+        || !targetSession.fit
+      ) return;
+      fitAndSync(targetSession);
+    });
+  }
+
   function handleData(token, b64) {
     if (state.closedTokens.has(token)) return;
     let session = state.terminals.get(token);
@@ -236,12 +272,30 @@ export function createTerminalController(deps) {
     if (notify) setStatus?.('终端配色已切换: ' + theme.name, 'ok');
   }
 
+  function applyFontSize(value, notify = true) {
+    const fontSize = normalizeTerminalFontSize(value);
+    state.terminalFontSize = fontSize;
+    termOptions.fontSize = fontSize;
+    for (const [, session] of state.terminals) {
+      if (session.term) session.term.options.fontSize = fontSize;
+    }
+    scheduleFontFit();
+    if (notify) setStatus?.('终端字号已调整: ' + fontSize + 'px', 'ok');
+    return fontSize;
+  }
+
+  function getFontSize() {
+    return normalizeTerminalFontSize(state.terminalFontSize);
+  }
+
   return {
+    applyFontSize,
     applyTheme,
     activate,
     closeTab,
     disposeSession,
     fitAndSync,
+    getFontSize,
     handleData,
     handleExit,
     makeTerminal,

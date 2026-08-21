@@ -84,6 +84,9 @@ export function createApplication(deps) {
     documentRef,
     readClipboard: () => runtime.ClipboardGetText(),
     writeClipboard: (text) => runtime.ClipboardSetText(text),
+    requestFrame: typeof windowRef?.requestAnimationFrame === 'function'
+      ? (callback) => windowRef.requestAnimationFrame(callback)
+      : undefined,
     storageRef: safeStorage(windowRef),
     onActivate: () => {
       sessionController?.syncActiveHighlight();

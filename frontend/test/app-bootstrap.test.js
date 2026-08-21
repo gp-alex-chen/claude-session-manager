@@ -46,10 +46,15 @@ function makeDocument(missing) {
 function makeFixture(options = {}) {
   const { documentRef, elements } = makeDocument(options.missing);
   const windowListeners = new Map();
+  const animationFrames = [];
   const windowRef = {
     addEventListener: (name, callback) => windowListeners.set(name, callback),
     removeEventListener: (name, callback) => {
       if (windowListeners.get(name) === callback) windowListeners.delete(name);
+    },
+    requestAnimationFrame: (callback) => {
+      animationFrames.push(callback);
+      return animationFrames.length;
     },
   };
   if (options.storageError) {
@@ -144,7 +149,16 @@ function makeFixture(options = {}) {
     controllerFactories: factories,
     onError: options.onError,
   });
-  return { app, calls, documentRef, elements, windowListeners, runtimeListeners, eventsOff };
+  return {
+    app,
+    calls,
+    documentRef,
+    elements,
+    windowListeners,
+    runtimeListeners,
+    eventsOff,
+    animationFrames,
+  };
 }
 
 test('bootstrap creates controllers around one shared state and wires callbacks', async () => {
@@ -156,8 +170,10 @@ test('bootstrap creates controllers around one shared state and wires callbacks'
   fixture.calls.factories.terminal.onActivate();
   await fixture.calls.factories.terminal.writeClipboard('复制内容');
   assert.equal(await fixture.calls.factories.terminal.readClipboard(), 'runtime clipboard');
+  fixture.calls.factories.terminal.requestFrame(() => fixture.calls.routed.push(['frame']));
+  fixture.animationFrames.shift()();
   fixture.calls.factories.update.showToast('hello');
-  assert.deepEqual(fixture.calls.routed, [['fold'], ['active'], ['toast', 'hello']]);
+  assert.deepEqual(fixture.calls.routed, [['fold'], ['active'], ['frame'], ['toast', 'hello']]);
   assert.deepEqual(fixture.calls.clipboardWrites, ['复制内容']);
   assert.equal(fixture.calls.clipboardReads, 1);
 });

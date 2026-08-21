@@ -41,12 +41,19 @@ class FakeHost {
 }
 
 class FakeFit {
-  fit() {}
+  constructor() { this.fitCalls = 0; }
+  fit() {
+    this.fitCalls += 1;
+    if (this.term) {
+      this.term.cols = 80;
+      this.term.rows = 24;
+    }
+  }
 }
 
 class FakeTerm {
   constructor(options) {
-    this.options = options;
+    this.options = { ...options };
     this.cols = 80;
     this.rows = 24;
     this.writes = [];
@@ -56,7 +63,7 @@ class FakeTerm {
     this.clearSelectionCalls = 0;
   }
 
-  loadAddon(addon) { this.addon = addon; }
+  loadAddon(addon) { this.addon = addon; addon.term = this; }
   open(host) { this.host = host; }
   resize(cols, rows) { this.cols = cols; this.rows = rows; }
   onData(handler) { this.dataHandler = handler; }
@@ -77,9 +84,12 @@ function createFixture(options = {}) {
   const hosts = [];
   const writes = [];
   const killed = [];
+  const resizes = [];
   const statuses = [];
   const clipboardReads = [];
   const clipboardWrites = [];
+  const frames = [];
+  const termOptions = createTermOptions();
   const documentRef = {
     documentElement: { style: { setProperty() {} } },
   };
@@ -88,7 +98,7 @@ function createFixture(options = {}) {
     state,
     backend: {
       TermWrite: (token, b64) => writes.push({ token, b64 }),
-      TermResize: () => {},
+      TermResize: (token, cols, rows) => resizes.push({ token, cols, rows }),
       TermKill: (token) => {
         assert.equal(state.closedTokens.has(token), true);
         killed.push(token);
@@ -96,7 +106,7 @@ function createFixture(options = {}) {
     },
     TerminalCtor: FakeTerm,
     FitAddonCtor: FakeFit,
-    termOptions: createTermOptions(),
+    termOptions,
     themes: THEMES,
     setStatus: (message, kind) => statuses.push({ message, kind }),
     hostFactory: () => {
@@ -115,9 +125,24 @@ function createFixture(options = {}) {
     writeClipboard: options.writeClipboard || (async (text) => {
       clipboardWrites.push(text);
     }),
+    requestFrame: (callback) => {
+      frames.push(callback);
+      return frames.length;
+    },
   });
   return {
-    state, controller, hosts, writes, killed, statuses, clipboardReads, clipboardWrites,
+    state,
+    controller,
+    hosts,
+    writes,
+    killed,
+    resizes,
+    statuses,
+    clipboardReads,
+    clipboardWrites,
+    frames,
+    termOptions,
+    flushFrame: () => frames.shift()?.(),
   };
 }
 
@@ -194,6 +219,84 @@ test('applyTheme updates options on existing terminals', () => {
   fixture.controller.applyTheme('dracula');
   assert.equal(fixture.state.currentTheme, 'dracula');
   assert.equal(session.term.options.theme, THEMES.dracula);
+});
+
+test('applyFontSize updates active and hidden terminals while new terminals inherit it', () => {
+  const fixture = createFixture();
+  const active = openAndActivate(fixture, 'active');
+  const hidden = fixture.controller.openTab('hidden', 'hidden');
+  fixture.controller.makeTerminal(hidden);
+  const activeFits = active.fit.fitCalls;
+  const hiddenFits = hidden.fit.fitCalls;
+  const resizeCount = fixture.resizes.length;
+
+  assert.equal(fixture.controller.applyFontSize(18.4), 18);
+  assert.equal(fixture.controller.getFontSize(), 18);
+  assert.equal(fixture.state.terminalFontSize, 18);
+  assert.equal(fixture.termOptions.fontSize, 18);
+  assert.equal(active.term.options.fontSize, 18);
+  assert.equal(hidden.term.options.fontSize, 18);
+  assert.equal(fixture.frames.length, 1);
+  assert.equal(active.fit.fitCalls, activeFits);
+  assert.equal(hidden.fit.fitCalls, hiddenFits);
+
+  fixture.flushFrame();
+  assert.equal(active.fit.fitCalls, activeFits + 1);
+  assert.equal(hidden.fit.fitCalls, hiddenFits);
+  assert.equal(fixture.resizes.length, resizeCount + 1);
+  assert.deepEqual(fixture.resizes.at(-1), { token: 'active', cols: 79, rows: 24 });
+
+  const future = fixture.controller.openTab('future', 'future');
+  fixture.controller.makeTerminal(future);
+  assert.equal(future.term.options.fontSize, 18);
+  assert.match(fixture.statuses.at(-1).message, /18px/);
+});
+
+test('applyFontSize normalizes values and coalesces active fits within one frame', () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture, 'active');
+  const fitCalls = session.fit.fitCalls;
+  const focusState = session.term.focused;
+
+  assert.equal(fixture.controller.getFontSize(), 14);
+  fixture.controller.applyFontSize(Number.NaN, false);
+  fixture.controller.applyFontSize(100, false);
+  fixture.controller.applyFontSize(19.6, false);
+  assert.equal(fixture.controller.getFontSize(), 20);
+  assert.equal(fixture.frames.length, 1);
+
+  fixture.flushFrame();
+  assert.equal(session.fit.fitCalls, fitCalls + 1);
+  assert.equal(session.term.focused, focusState);
+});
+
+test('scheduled font fit ignores stale sessions after switching or closing', () => {
+  const switched = createFixture();
+  const first = openAndActivate(switched, 'first');
+  const second = switched.controller.openTab('second', 'second');
+  switched.controller.makeTerminal(second);
+  switched.controller.applyFontSize(18, false);
+  const firstFits = first.fit.fitCalls;
+  switched.controller.activate('second');
+  const secondFits = second.fit.fitCalls;
+  switched.flushFrame();
+  assert.equal(first.fit.fitCalls, firstFits);
+  assert.equal(second.fit.fitCalls, secondFits);
+
+  switched.controller.applyFontSize(19, false);
+  switched.controller.applyFontSize(20, false);
+  assert.equal(switched.frames.length, 1);
+  switched.flushFrame();
+  assert.equal(first.fit.fitCalls, firstFits);
+  assert.equal(second.fit.fitCalls, secondFits + 1);
+
+  const closed = createFixture();
+  const session = openAndActivate(closed, 'closing');
+  closed.controller.applyFontSize(17, false);
+  const fits = session.fit.fitCalls;
+  closed.controller.closeTab('closing');
+  assert.doesNotThrow(() => closed.flushFrame());
+  assert.equal(session.fit.fitCalls, fits);
 });
 
 test('terminal input preserves UTF-8 and shortcut semantics', async () => {
