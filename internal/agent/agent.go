@@ -1,6 +1,7 @@
 // Package agent 运行状态查询：claude agents --json（与 fyne-sidebar 同源）
 // 徽标语义：kind=interactive -> 已打开（绿）；kind=background -> 后台运行中（橙）；
-//           未出现 -> 未运行（灰）。
+//
+//	未出现 -> 未运行（灰）。
 package agent
 
 import (
@@ -43,7 +44,8 @@ func DebugLog(msg string) {
 }
 
 // AgentInfo claude agents --json 的条目（实测字段：
-//   state: working|done|blocked|queued?；status: busy|idle|waiting）
+//
+//	state: working|done|blocked|queued?；status: busy|idle|waiting）
 type AgentInfo struct {
 	SessionID  string `json:"sessionId"`
 	Kind       string `json:"kind"`
@@ -83,19 +85,6 @@ func FetchFull() ([]AgentInfo, string) {
 	return list, string(out)
 }
 
-// —— 常驻状态监视器（实时方案，替代前端轮询） ——
-// claude CLI 的 agents --json 是一次性快照、无 watch 模式；
-// agent 状态（尤其 interactive 的 busy/idle）在 claude daemon 内存里
-// 不落盘，文件监听也覆盖不全。所以由 App 层起常驻 goroutine：每 1~2s
-// 拉一次快照，对比变化后立即以 agents:update 事件推给前端。
-// 缓存变量由 App 层读写（Mu 保护）。
-var (
-	Mu     sync.RWMutex
-	Cache  []AgentInfo
-	Sig    string // 上次推送时活跃集合的签名（变化检测）
-	Active bool   // 上次快照是否有活跃会话（决定下一次检测间隔）
-)
-
 // Signature 活跃集合签名：sessionId+state+status+kind 排序拼接，
 // 避免 JSON 字段顺序/时间戳噪声触发误判变化。
 func Signature(list []AgentInfo) string {
@@ -105,4 +94,89 @@ func Signature(list []AgentInfo) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ";")
+}
+
+// Watcher owns polling state and its cancellation lifecycle. Callers receive
+// snapshots through Emit; no Wails/runtime dependency leaks into this package.
+type Watcher struct {
+	mu     sync.RWMutex
+	cache  []AgentInfo
+	sig    string
+	active bool
+	fetch  func() ([]AgentInfo, string)
+	emit   func([]AgentInfo)
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func NewWatcher(emit func([]AgentInfo)) *Watcher {
+	return &Watcher{fetch: FetchFull, emit: emit, done: make(chan struct{})}
+}
+
+func (w *Watcher) Start(ctx context.Context) {
+	if w.cancel != nil {
+		return
+	}
+	ctx, w.cancel = context.WithCancel(ctx)
+	go func() {
+		defer close(w.done)
+		fail := 0
+		for {
+			list, raw := w.fetch()
+			interval := 2 * time.Second
+			if list == nil {
+				fail++
+				if fail >= 3 {
+					interval = 5 * time.Second
+				}
+			} else {
+				fail = 0
+				sig := Signature(list)
+				w.mu.Lock()
+				changed := sig != w.sig
+				w.cache, w.sig, w.active = list, sig, len(list) > 0
+				active := w.active
+				w.mu.Unlock()
+				if len(list) > 0 {
+					DebugLog("watch raw=" + raw)
+				}
+				if changed && w.emit != nil {
+					DebugLog("状态变化，push agents:update n=" + fmt.Sprint(len(list)))
+					w.emit(list)
+				}
+				if active {
+					interval = time.Second
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+			}
+		}
+	}()
+}
+
+func (w *Watcher) Stop() {
+	if w.cancel == nil {
+		return
+	}
+	w.cancel()
+	<-w.done
+	w.cancel = nil
+}
+
+func (w *Watcher) Get() []AgentInfo {
+	w.mu.RLock()
+	c, sig := append([]AgentInfo(nil), w.cache...), w.sig
+	w.mu.RUnlock()
+	if sig != "" {
+		return c
+	}
+	list, raw := w.fetch()
+	w.mu.Lock()
+	w.cache, w.sig, w.active = list, Signature(list), len(list) > 0
+	w.mu.Unlock()
+	DebugLog("GetAgents 首次拉取 len=" + fmt.Sprint(len(list)) + " raw=" + raw)
+	return list
 }

@@ -1,3 +1,5 @@
+//go:build windows && integration
+
 package agent
 
 // 验证：CREATE_NO_WINDOW 静默执行 claude agents --json 的调用链正常。
