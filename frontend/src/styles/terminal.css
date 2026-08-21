@@ -1,0 +1,26 @@
+/* Terminal pane and status surface. */
+#terminal-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+#status-bar {
+  padding: 7px 14px;
+  font-size: 12px;
+  color: var(--text-faint);
+  background: var(--bar-bg);
+  border-bottom: 1px solid var(--border);
+}
+#status-bar.ok { color: var(--ok); }
+#status-bar.warn { color: var(--warn); }
+#terminal { flex: 1; position: relative; padding: 0; }
+.term-host {
+  position: absolute;
+  inset: 0;
+  display: none;
+  padding: 0;
+  /* Transparent border keeps fit measurements precise. */
+  border: 10px solid transparent;
+  /* Background follows the current theme (set by the terminal controller). */
+  background: var(--term-bg, #141412);
+  overflow: hidden;
+}
+.term-host.active { display: block; }
+.term-host .xterm-viewport { scrollbar-width: thin; }
+.term-host .xterm .xterm-viewport { background-color: transparent !important; }

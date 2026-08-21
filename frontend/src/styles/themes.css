@@ -1,2 +1,85 @@
-/* Theme tokens are kept separate so the shell layout can evolve independently. */
-:root { --accent: #d97757; --panel-radius: 8px; }
+/* Claude 官网风格皮肤：暖黑底 + 陶土橙强调 + 大圆角 + 细边框。 */
+:root {
+  --bg: #0f0f0f;
+  --panel: #171717;
+  --panel-2: #1e1e1e;
+  --panel-3: #262625;
+  --border: rgba(255,255,255,.09);
+  --border-strong: rgba(255,255,255,.16);
+  --border-faint: rgba(255,255,255,.05);
+  --text: #e8e6e1;
+  --text-dim: #9d9a94;
+  --text-faint: #6f6c66;
+  --accent: #d97757;
+  --accent-hover: #e08665;
+  --accent-soft: rgba(217,119,87,.13);
+  --accent-glow: rgba(217,119,87,.55);
+  --ok: #8fb996;
+  --ok-strong: #b7d9bd;
+  --warn: #e0a458;
+  --danger: #e58a8a;
+  --danger-soft: rgba(229,138,138,.12);
+  --idle: #63605a;
+  --live-green: #7fd97f;
+  --live-orange: #ffb347;
+  --glow-green: rgba(127,217,127,.5);
+  --glow-orange: rgba(255,179,71,.45);
+  --btn-bg: rgba(255,255,255,.06);
+  --btn-bg-hover: rgba(255,255,255,.11);
+  --hover-bg: rgba(255,255,255,.05);
+  --active-bg: rgba(255,255,255,.08);
+  --menu-bg: #20201e;
+  --menu-hover: rgba(255,255,255,.08);
+  --bar-bg: #121212;
+  --toast-bg: #1c2a21;
+  --toast-text: #cde8d2;
+  --toast-border: rgba(143,185,150,.35);
+  --dot-border: rgba(255,255,255,.25);
+  --scroll-thumb: rgba(255,255,255,.14);
+  --scroll-thumb-hover: rgba(255,255,255,.25);
+  --shadow-lg: rgba(0,0,0,.55);
+  --radius: 10px;
+  --radius-sm: 7px;
+}
+
+/* 日间模式（默认）：暖白底，陶土橙强调保持品牌色。 */
+html[data-theme="light"] {
+  --bg: #f4f2ee;
+  --panel: #fbfaf7;
+  --panel-2: #f0efea;
+  --panel-3: #e7e5df;
+  --border: rgba(15,15,15,.10);
+  --border-strong: rgba(15,15,15,.20);
+  --border-faint: rgba(15,15,15,.05);
+  --text: #2b2926;
+  --text-dim: #5f5c56;
+  --text-faint: #8a867e;
+  --accent: #c96a4b;
+  --accent-hover: #b85e42;
+  --accent-soft: rgba(201,106,75,.13);
+  --accent-glow: rgba(201,106,75,.5);
+  --ok: #3d7a4f;
+  --ok-strong: #2e6b40;
+  --warn: #b0702f;
+  --danger: #b3412f;
+  --danger-soft: rgba(179,65,47,.12);
+  --idle: #b3afa7;
+  --live-green: #2e8b4e;
+  --live-orange: #c06f1a;
+  --glow-green: rgba(46,139,78,.4);
+  --glow-orange: rgba(192,111,26,.4);
+  --btn-bg: rgba(0,0,0,.05);
+  --btn-bg-hover: rgba(0,0,0,.09);
+  --hover-bg: rgba(0,0,0,.045);
+  --active-bg: rgba(0,0,0,.07);
+  --menu-bg: #ffffff;
+  --menu-hover: rgba(0,0,0,.06);
+  --bar-bg: #ffffff;
+  --toast-bg: #e9f5ec;
+  --toast-text: #2c5c3a;
+  --toast-border: rgba(61,122,79,.35);
+  --dot-border: rgba(0,0,0,.2);
+  --scroll-thumb: rgba(0,0,0,.16);
+  --scroll-thumb-hover: rgba(0,0,0,.28);
+  --shadow-lg: rgba(60,50,40,.3);
+}

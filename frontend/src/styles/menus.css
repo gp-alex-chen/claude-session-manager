@@ -1,0 +1,122 @@
+/* Completion toast. */
+#toast {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translate(-50%, -10px);
+  background: var(--toast-bg);
+  border: 1px solid var(--toast-border);
+  color: var(--toast-text);
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  box-shadow: 0 14px 34px var(--shadow-lg);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1000;
+  max-width: 70vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity .3s, transform .3s;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* Settings and update menu. */
+.settings-group-label {
+  padding: 6px 12px 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+#settings-menu .settings-item::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--dot, #888);
+  border: 1px solid var(--dot-border);
+}
+#settings-menu .settings-item[data-mode]::before { display: none; }
+#settings-menu .settings-note {
+  padding: 6px 12px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--warn);
+}
+#settings-menu {
+  position: fixed;
+  z-index: 998;
+  min-width: 160px;
+  background: var(--menu-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px var(--shadow-lg);
+  padding: 5px;
+  display: none;
+}
+#settings-menu .settings-item {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .1s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#settings-menu .settings-item:hover { background: var(--menu-hover); }
+#settings-menu .settings-item.cur { color: var(--accent); }
+#settings-menu .settings-item.cur::after { content: '✓'; margin-left: auto; }
+#settings-menu .settings-item.upd-run::before { display: none; }
+#settings-menu .settings-item.upd-run.has-update { color: var(--accent); font-weight: 600; }
+#settings-menu .settings-item.upd-run.disabled { opacity: .55; cursor: default; }
+#settings-menu .settings-item.upd-run .upd-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  margin-left: auto;
+}
+#settings-menu .upd-progress {
+  width: 110px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--panel-3);
+  overflow: hidden;
+}
+#settings-menu .upd-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width .15s linear;
+}
+#settings-menu .upd-hint { font-size: 10.5px; color: var(--text-faint); }
+#settings-menu .upd-note-ver { color: var(--text-faint); }
+
+/* Right-click context menu. */
+#ctx-menu {
+  position: fixed;
+  z-index: 999;
+  min-width: 150px;
+  background: var(--menu-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px var(--shadow-lg);
+  padding: 5px;
+  display: none;
+}
+#ctx-menu .ctx-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .1s;
+}
+#ctx-menu .ctx-item:hover { background: var(--menu-hover); }
+#ctx-menu .ctx-item.danger { color: var(--danger); }
+#ctx-menu .ctx-item.danger:hover { background: var(--danger-soft); }
