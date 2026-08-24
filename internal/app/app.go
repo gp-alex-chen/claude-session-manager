@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +15,7 @@ import (
 	"github.com/gp-alex-chen/claude-session-manager/internal/session"
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 	"github.com/gp-alex-chen/claude-session-manager/internal/terminal"
+	"github.com/gp-alex-chen/claude-session-manager/internal/usage"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -23,15 +26,16 @@ type SessionInfo struct {
 	Time string `json:"time"`
 }
 type App struct {
-	lifecycleMu sync.Mutex
-	ctx         context.Context
-	terms       *terminal.Manager
-	store       *state.Store
-	watcher     *agent.Watcher
-	lifecycleID uint64
-	lookPath    func(string) (string, error)
-	debugLog    func(string)
-	startPTYFn  func(string, string, string) error
+	lifecycleMu  sync.Mutex
+	ctx          context.Context
+	terms        *terminal.Manager
+	store        *state.Store
+	watcher      *agent.Watcher
+	lifecycleID  uint64
+	lookPath     func(string) (string, error)
+	debugLog     func(string)
+	startPTYFn   func(string, string, string) error
+	usageScanner *usage.Scanner
 }
 
 func NewApp() *App {
@@ -42,12 +46,22 @@ func NewAppWithStore(store *state.Store) *App {
 	if store == nil {
 		store = state.Default()
 	}
-	a := &App{store: store, lookPath: exec.LookPath, debugLog: agent.DebugLog}
+	a := &App{store: store, lookPath: exec.LookPath, debugLog: agent.DebugLog, usageScanner: defaultUsageScanner()}
 	a.terms = terminal.NewManager(terminal.Callbacks{}, func(ids []string) error {
 		return a.store.SaveOpen(ids)
 	})
 	a.terms.SetPersistErrorHandler(func(err error) { a.log("持久化打开会话失败: " + err.Error()) })
 	return a
+}
+
+var userHomeDir = os.UserHomeDir
+
+func defaultUsageScanner() *usage.Scanner {
+	home, err := userHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return nil
+	}
+	return usage.NewScanner(filepath.Join(home, ".claude", "projects"))
 }
 func (a *App) startup(ctx context.Context) {
 	if ctx == nil {
@@ -213,3 +227,13 @@ func (a *App) GetAgents() []agent.AgentInfo {
 	return watcher.GetContext(ctx)
 }
 func (a *App) GetVersion() string { return Version }
+
+// GetUsageSummary returns token usage for a session and its project. When the
+// user home cannot be resolved, the scanner is unavailable rather than
+// falling back to a relative path that could scan the current directory.
+func (a *App) GetUsageSummary(sessionID, projectDir string) usage.Summary {
+	if a.usageScanner == nil {
+		return usage.Summary{Warnings: []string{"usage scanner unavailable"}}
+	}
+	return a.usageScanner.Scan(sessionID, projectDir)
+}

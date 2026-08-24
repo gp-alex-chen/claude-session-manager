@@ -4,5 +4,5 @@ export {
   GetAgents, GetOpenSessions, GetShell, ShellInstalled, SetShell, NotifyBeep,
   DebugLog, ListSessions, ListHiddenSessions, RenameSession, DeleteSession,
   UnhideSession, StartSession, StartNew, TermWrite, TermResize, TermKill,
-  GetVersion, CheckForUpdate, UpdateToLatest,
+  GetVersion, GetUsageSummary, CheckForUpdate, UpdateToLatest,
 } from '../../wailsjs/go/app/App';

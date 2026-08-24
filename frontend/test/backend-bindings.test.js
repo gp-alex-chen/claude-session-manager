@@ -11,7 +11,7 @@ const expected = [
   'GetAgents', 'GetOpenSessions', 'GetShell', 'ShellInstalled', 'SetShell',
   'NotifyBeep', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
   'DeleteSession', 'UnhideSession', 'StartSession', 'StartNew', 'TermWrite',
-  'TermResize', 'TermKill', 'GetVersion', 'CheckForUpdate', 'UpdateToLatest',
+  'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
@@ -28,7 +28,7 @@ function extractBackendExports(source) {
 
 const backendNames = extractBackendExports(backend);
 
-test('Wails wrapper and backend boundary expose the same 20 methods', () => {
+test('Wails wrapper and backend boundary expose the same 21 methods', () => {
   assert.equal(new Set(backendNames).size, backendNames.length);
   assert.deepEqual(new Set(wrapperNames), new Set(expected));
   assert.deepEqual(new Set(backendNames), new Set(expected));
@@ -47,4 +47,11 @@ test('every wrapper forwards to the matching Wails App method', () => {
     );
     assert.match(binding, pattern, name);
   }
+});
+
+test('usage wrapper forwards both arguments unchanged', () => {
+  assert.match(
+    binding,
+    /export function GetUsageSummary\(sessionID, projectDir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetUsageSummary'\]\(sessionID, projectDir\);\s*\}/,
+  );
 });

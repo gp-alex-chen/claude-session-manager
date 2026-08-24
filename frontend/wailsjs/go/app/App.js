@@ -19,5 +19,6 @@ export function TermKill(token) { return window['go']['app']['App']['TermKill'](
 export function TermResize(token, cols, rows) { return window['go']['app']['App']['TermResize'](token, cols, rows); }
 export function TermWrite(token, b64) { return window['go']['app']['App']['TermWrite'](token, b64); }
 export function GetVersion() { return window['go']['app']['App']['GetVersion'](); }
+export function GetUsageSummary(sessionID, projectDir) { return window['go']['app']['App']['GetUsageSummary'](sessionID, projectDir); }
 export function CheckForUpdate() { return window['go']['app']['App']['CheckForUpdate'](); }
 export function UpdateToLatest() { return window['go']['app']['App']['UpdateToLatest'](); }

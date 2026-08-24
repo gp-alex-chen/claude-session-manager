@@ -13,6 +13,7 @@ import (
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 	"github.com/gp-alex-chen/claude-session-manager/internal/terminal"
+	"github.com/gp-alex-chen/claude-session-manager/internal/usage"
 )
 
 func testApp(t *testing.T) (*App, *state.Store, *[]string, string) {
@@ -197,12 +198,81 @@ func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 		"CheckForUpdate", "UpdateToLatest", "RenameSession", "DeleteSession", "UnhideSession",
 		"GetOpenSessions", "GetShell", "ShellInstalled", "SetShell", "ListSessions", "ListHiddenSessions",
 		"StartSession", "StartNew", "TermWrite", "TermResize", "TermKill", "NotifyBeep", "DebugLog",
-		"GetAgents", "GetVersion",
+		"GetAgents", "GetVersion", "GetUsageSummary",
 	}
 	for _, name := range want {
 		if _, ok := typ.MethodByName(name); !ok {
 			t.Errorf("missing binding method %s", name)
 		}
+	}
+}
+
+func TestGetUsageSummaryUsesInjectedProjectsRoot(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	root := t.TempDir()
+	project := filepath.Join(root, "project-a")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"assistant","message":{"id":"request-1","usage":{"input_tokens":12,"output_tokens":3,"cache_read_input_tokens":5}}}`
+	if err := os.WriteFile(filepath.Join(project, "session-1.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.usageScanner = usage.NewScanner(root)
+
+	got := a.GetUsageSummary("session-1", "project-a")
+	if !got.ProjectFound || !got.SessionFound {
+		t.Fatalf("found = project:%v session:%v, want both", got.ProjectFound, got.SessionFound)
+	}
+	if got.SessionTotal.InputTokens != 12 || got.SessionTotal.OutputTokens != 3 || got.ProjectTotal.CacheReadInputTokens != 5 {
+		t.Fatalf("summary = %+v, want injected project data", got)
+	}
+}
+
+func TestGetUsageSummaryUnknownRootIsUnavailableWithoutPanic(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	a.usageScanner = usage.NewScanner(filepath.Join(t.TempDir(), "does-not-exist"))
+
+	got := a.GetUsageSummary("missing", "project-a")
+	if got.ProjectFound || got.SessionFound || got.ProjectRequestCount != 0 || got.SessionRequestCount != 0 {
+		t.Fatalf("summary = %+v, want unavailable root with no found data", got)
+	}
+}
+
+func TestDefaultUsageScannerUsesUserHomeProjectsRoot(t *testing.T) {
+	previous := userHomeDir
+	home := t.TempDir()
+	userHomeDir = func() (string, error) { return home, nil }
+	defer func() { userHomeDir = previous }()
+
+	project := filepath.Join(home, ".claude", "projects", "project-a")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"assistant","message":{"id":"request-1","usage":{"input_tokens":7}}}`
+	if err := os.WriteFile(filepath.Join(project, "session-1.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewAppWithStore(state.NewStore(t.TempDir()))
+	got := a.GetUsageSummary("session-1", "project-a")
+	if !got.ProjectFound || !got.SessionFound || got.ProjectTotal.InputTokens != 7 {
+		t.Fatalf("summary = %+v, want user-home projects data", got)
+	}
+}
+
+func TestDefaultUsageScannerDoesNotFallbackToCurrentDirectory(t *testing.T) {
+	previous := userHomeDir
+	userHomeDir = func() (string, error) { return "", errors.New("home unavailable") }
+	defer func() { userHomeDir = previous }()
+
+	a := NewAppWithStore(state.NewStore(t.TempDir()))
+	got := a.GetUsageSummary("session", "project")
+	if got.ProjectFound || got.SessionFound {
+		t.Fatalf("summary = %+v, want unavailable scanner", got)
+	}
+	if len(got.Warnings) != 1 || got.Warnings[0] != "usage scanner unavailable" {
+		t.Fatalf("warnings = %v, want explicit unavailable warning", got.Warnings)
 	}
 }
 

@@ -22,6 +22,7 @@ main.go
 - `internal/state`：兼容 `favorites.json`、`open-sessions.json`、`settings.json` 的 Store。所有读写共用互斥锁，更新在同一锁内完成，写入采用临时文件和原子替换。
 - `internal/agent`：可启动/取消的 Watcher。后端通常约 1~2 秒拉取 `claude agents --json` 并推送 `agents:update`；前端每 30 秒调用 GetAgents 作为 watcher 缓存兜底，不是每 10 秒直接轮询。
 - `internal/session`：扫描和解析 `~/.claude/projects/**/*.jsonl`。
+- `internal/usage`：解析 Claude usage、按 message ID 去重，并缓存会话/项目 token 汇总；由 App 的 `GetUsageSummary` 暴露只读查询。
 - `internal/notify`：Windows 提示音。
 - `internal/updater`：`v*-wails` Release 检查、下载和自替换。
 
