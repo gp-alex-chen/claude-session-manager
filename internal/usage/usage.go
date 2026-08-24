@@ -40,6 +40,10 @@ type Report struct {
 	Latest       *Usage `json:"latest,omitempty"`
 	Total        Usage  `json:"total"`
 	RequestCount int    `json:"request_count"`
+
+	// entries is retained for Scanner's project-wide deduplication. The key is
+	// message:<id>, uuid:<id>, or line:<n> for a record without either ID.
+	entries map[string]Usage
 }
 
 type rawRecord struct {
@@ -114,6 +118,7 @@ func ParseReader(r io.Reader) (Report, error) {
 	if err := scanner.Err(); err != nil {
 		return report, fmt.Errorf("read usage JSONL: %w", err)
 	}
+	report.entries = values
 	return report, nil
 }
 
