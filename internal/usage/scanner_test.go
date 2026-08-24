@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -65,18 +66,24 @@ func TestScannerLocatesRealSessionAndReportsUnknownSession(t *testing.T) {
 
 func TestScannerAcceptsAbsoluteProjectPathWithoutBasenameCollision(t *testing.T) {
 	root := t.TempDir()
-	projectOne := filepath.Join(root, "one", "app")
-	projectTwo := filepath.Join(root, "two", "app")
-	// Only direct children are projects; this test uses distinct names to
-	// ensure an absolute path is matched by its encoded/direct identity.
-	projectOne = filepath.Join(root, "project-one")
-	projectTwo = filepath.Join(root, "app")
-	writeSession(t, root, filepath.Base(projectOne), "one", assistantLine("one", "", usageJSON(11, 0, 0, 0, 0, 0, 0)))
-	writeSession(t, root, filepath.Base(projectTwo), "two", assistantLine("two", "", usageJSON(22, 0, 0, 0, 0, 0, 0)))
+	// Claude encodes a Windows project path by replacing its drive/path
+	// separators with hyphens, e.g. D:\plug\fyne-sidebar becomes
+	// D--plug-fyne-sidebar. The other project has the same leaf directory but
+	// must not be selected when the absolute path is supplied.
+	absoluteProject := `D:\plug\fyne-sidebar`
+	encodedProject := encodeClaudeProjectPath(absoluteProject)
+	otherProject := encodeClaudeProjectPath(`D:\other\fyne-sidebar`)
+	writeSession(t, root, otherProject, "same-session", assistantLine("other", "", usageJSON(22, 0, 0, 0, 0, 0, 0)))
+	writeSession(t, root, encodedProject, "same-session", assistantLine("target", "", usageJSON(11, 0, 0, 0, 0, 0, 0)))
 
-	result := NewScanner(root).Scan("two", projectTwo)
-	if result.ProjectTotal.InputTokens != 22 {
-		t.Fatalf("absolute project selection = %+v, want app project only", result.ProjectTotal)
+	scanner := NewScanner(root)
+	absolute := scanner.Scan("same-session", absoluteProject)
+	if absolute.ProjectTotal.InputTokens != 11 || absolute.SessionTotal.InputTokens != 11 {
+		t.Fatalf("absolute project selection = %+v, want encoded target project", absolute)
+	}
+	encoded := scanner.Scan("same-session", encodedProject)
+	if encoded.ProjectTotal.InputTokens != 11 || encoded.SessionTotal.InputTokens != 11 {
+		t.Fatalf("encoded project selection = %+v, want encoded target project", encoded)
 	}
 }
 
@@ -230,4 +237,8 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func encodeClaudeProjectPath(path string) string {
+	return strings.NewReplacer(":", "-", "\\", "-", "/", "-").Replace(path)
 }
