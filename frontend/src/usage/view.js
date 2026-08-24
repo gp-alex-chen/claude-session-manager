@@ -25,6 +25,18 @@ function detailRow(documentRef, parent, label, value) {
   parent.appendChild(row);
 }
 
+function usageDetailRows(documentRef, section, numbers, includeCacheTiers = false) {
+  detailRow(documentRef, section, '新输入', valueOrDash(numbers?.input));
+  detailRow(documentRef, section, '输出', valueOrDash(numbers?.output));
+  detailRow(documentRef, section, 'Thinking（输出明细）', valueOrDash(numbers?.thinking));
+  detailRow(documentRef, section, '缓存读取', valueOrDash(numbers?.cacheRead));
+  detailRow(documentRef, section, '缓存写入', valueOrDash(numbers?.cacheCreation));
+  if (includeCacheTiers) {
+    detailRow(documentRef, section, '缓存写入 5m', valueOrDash(numbers?.cache5m));
+    detailRow(documentRef, section, '缓存写入 1h', valueOrDash(numbers?.cache1h));
+  }
+}
+
 function summaryChips(documentRef, button, state) {
   button.replaceChildren();
   const project = usageTotal(state.usageSummary, 'project');
@@ -63,6 +75,7 @@ function renderDetails(documentRef, details, state) {
   detailRow(documentRef, projectSection, '总 token', project ? formatTokenCount(project.total) : '—');
   detailRow(documentRef, projectSection, '请求数', summary?.project_found ? String(summary.project_request_count ?? 0) : '—');
   detailRow(documentRef, projectSection, '缓存命中率', project ? formatPercent(project.cacheHitRate) : '—');
+  usageDetailRows(documentRef, projectSection, project, true);
   details.appendChild(projectSection);
 
   const sessionSection = documentRef.createElement('section');
@@ -70,6 +83,8 @@ function renderDetails(documentRef, details, state) {
   addText(documentRef, sessionSection, 'h3', 'usage-details-heading', '当前会话');
   detailRow(documentRef, sessionSection, '累计 token', session ? formatTokenCount(session.total) : '—');
   detailRow(documentRef, sessionSection, '请求数', summary?.session_found ? String(summary.session_request_count ?? 0) : '—');
+  detailRow(documentRef, sessionSection, '缓存命中率', session ? formatPercent(session.cacheHitRate) : '—');
+  usageDetailRows(documentRef, sessionSection, session);
   details.appendChild(sessionSection);
 
   const requestSection = documentRef.createElement('section');

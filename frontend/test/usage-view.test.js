@@ -49,8 +49,17 @@ const complete = {
     output_tokens: 200,
     cache_creation_input_tokens: 300,
     cache_read_input_tokens: 500,
+    thinking_tokens: 7,
+    cache_creation_5m_input_tokens: 13,
+    cache_creation_1h_input_tokens: 17,
   },
-  session_total: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30 },
+  session_total: {
+    input_tokens: 10,
+    output_tokens: 20,
+    cache_creation_input_tokens: 40,
+    cache_read_input_tokens: 30,
+    thinking_tokens: 6,
+  },
   latest: {
     input_tokens: 10,
     output_tokens: 20,
@@ -66,12 +75,19 @@ test('complete summary renders compact chips and detail fields', () => {
   const fixture = makeFixture();
   fixture.view.render({ usageSummary: complete, usageLoading: false, usageStale: false });
   assert.deepEqual(fixture.summaryButton.children.map((child) => child.textContent), [
-    '项目 2K', '缓存 27.8%', '会话 60',
+    '项目 2K', '缓存 27.8%', '会话 100',
   ]);
   const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join(' ');
   const detailText = textOf(fixture.details);
   assert.match(detailText, /Thinking（输出明细）/);
   assert.match(detailText, /缓存写入 5m/);
+  const sections = fixture.details.children.filter((node) => node.className === 'usage-details-section');
+  const sectionText = (node) => [node.textContent, ...(node.children || []).map(sectionText)].join(' ');
+  assert.match(sectionText(sections[0]), /新输入\s+1K/);
+  assert.match(sectionText(sections[0]), /Thinking（输出明细）\s+7/);
+  assert.match(sectionText(sections[1]), /缓存写入\s+40/);
+  assert.match(sectionText(sections[1]), /Thinking（输出明细）\s+6/);
+  assert.match(sectionText(sections[2]), /输出\s+20/);
 });
 
 test('missing session and latest fields render dashes without fake zeros', () => {

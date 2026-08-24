@@ -92,6 +92,7 @@ function makeFixture(options = {}) {
   const statuses = [];
   let listIndex = 0;
   const listCalls = [];
+  const projectCalls = [];
   const listResults = options.listResults || [[]];
   const backend = {
     ListSessions: async () => {
@@ -130,6 +131,7 @@ function makeFixture(options = {}) {
       return node;
     },
     setStatus: (message, kind) => statuses.push({ message, kind }),
+    onProjects: (list) => projectCalls.push(list),
     setIntervalFn: (callback, delay) => {
       const timer = { callback, delay };
       intervals.push(timer);
@@ -139,7 +141,7 @@ function makeFixture(options = {}) {
   });
   return {
     state, controller, backend, terminals, statuses, intervals, cleared, listCalls,
-    listRoot, terminalController, get renderCount() { return renderCount; },
+    listRoot, terminalController, projectCalls, get renderCount() { return renderCount; },
   };
 }
 
@@ -218,6 +220,13 @@ test('group heads place compact project usage before the plus button', () => {
   assert.equal(head.children[2].textContent, '1.02K');
   assert.equal(head.children[3].className, 'plus');
   assert.match(head.children[2].title, /项目累计 1.02K/);
+});
+
+test('rendering a session list invokes the single project prefetch entry point', () => {
+  const fixture = makeFixture();
+  const sessions = [session('one', 'work'), session('two', 'other')];
+  fixture.controller.renderSessions(sessions);
+  assert.deepEqual(fixture.projectCalls, [sessions]);
 });
 
 test('pairPendingSessions maps same-directory pending entries FIFO', () => {
