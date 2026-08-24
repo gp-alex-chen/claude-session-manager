@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,8 +70,8 @@ func TestScannerAcceptsAbsoluteProjectPathWithoutBasenameCollision(t *testing.T)
 	// D--plug-fyne-sidebar. The other project has the same leaf directory but
 	// must not be selected when the absolute path is supplied.
 	absoluteProject := `D:\plug\fyne-sidebar`
-	encodedProject := encodeClaudeProjectPath(absoluteProject)
-	otherProject := encodeClaudeProjectPath(`D:\other\fyne-sidebar`)
+	encodedProject := "D--plug-fyne-sidebar"
+	otherProject := "D--other-fyne-sidebar"
 	writeSession(t, root, otherProject, "same-session", assistantLine("other", "", usageJSON(22, 0, 0, 0, 0, 0, 0)))
 	writeSession(t, root, encodedProject, "same-session", assistantLine("target", "", usageJSON(11, 0, 0, 0, 0, 0, 0)))
 
@@ -237,8 +236,4 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
-}
-
-func encodeClaudeProjectPath(path string) string {
-	return strings.NewReplacer(":", "-", "\\", "-", "/", "-").Replace(path)
 }
