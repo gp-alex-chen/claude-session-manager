@@ -190,6 +190,36 @@ test('session rows keep their custom context menu and prevent the native menu', 
   });
 });
 
+test('group heads place compact project usage before the plus button', () => {
+  const listRoot = new FakeNode();
+  renderSessionList({
+    listRoot,
+    list: [session('session-1', 'work')],
+    state: createAppState(),
+    agentController: { classifyAgent: () => 'idle' },
+    usageByProject: new Map([['work', {
+      project_found: true,
+      project_total: { input_tokens: 1000, output_tokens: 20 },
+    }]]),
+    el: (tag, className, text) => {
+      const node = new FakeNode();
+      node.className = className;
+      node.textContent = text || '';
+      return node;
+    },
+    onStartNew() {},
+    onToggleGroup() {},
+    onOpen() {},
+    onClose() {},
+    onContextMenu() {},
+  });
+  const head = listRoot.children[0].children[0];
+  assert.equal(head.children[2].className, 'group-usage');
+  assert.equal(head.children[2].textContent, '1.02K');
+  assert.equal(head.children[3].className, 'plus');
+  assert.match(head.children[2].title, /项目累计 1.02K/);
+});
+
 test('pairPendingSessions maps same-directory pending entries FIFO', () => {
   const realToNew = new Map([['existing', 'new-existing']]);
   const newToReal = new Map();

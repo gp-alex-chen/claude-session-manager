@@ -12,6 +12,8 @@ export function createUsageController(deps) {
   const {
     state,
     GetUsageSummary,
+    render = () => {},
+    view = null,
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
   } = deps;
@@ -20,6 +22,18 @@ export function createUsageController(deps) {
   let refreshTimer = null;
   let sequence = 0;
   let lifecycle = 0;
+  const projectVersions = new Map();
+  const projectRequests = new Map();
+
+  function notify() {
+    render(state);
+  }
+
+  function nextProjectVersion(projectDir) {
+    const version = (projectVersions.get(projectDir) || 0) + 1;
+    projectVersions.set(projectDir, version);
+    return version;
+  }
 
   function pendingDir(token, sessionID) {
     const pending = state.pendingNew.find((item) => item.token === token);
@@ -48,6 +62,7 @@ export function createUsageController(deps) {
     state.usageLoading = false;
     state.usageError = null;
     state.usageStale = false;
+    notify();
   }
 
   function isCurrent(identity, requestID, lifecycleID) {
@@ -81,6 +96,8 @@ export function createUsageController(deps) {
     state.usageSessionID = identity.sessionID;
     state.usageProjectDir = identity.projectDir;
     state.usageLoading = true;
+    const projectVersion = nextProjectVersion(identity.projectDir);
+    notify();
     const requestID = ++sequence;
     const lifecycleID = lifecycle;
     let request;
@@ -93,18 +110,60 @@ export function createUsageController(deps) {
       if (!isCurrent(identity, requestID, lifecycleID)) return null;
       if (!summary || typeof summary !== 'object') throw new Error('usage summary unavailable');
       state.usageSummary = summary;
-      state.usageByProject.set(identity.projectDir, summary);
+      if (projectVersions.get(identity.projectDir) === projectVersion) {
+        state.usageByProject.set(identity.projectDir, summary);
+      }
       state.usageLoading = false;
       state.usageError = null;
       state.usageStale = false;
+      notify();
       return summary;
     }).catch((error) => {
       if (!isCurrent(identity, requestID, lifecycleID)) return null;
       state.usageLoading = false;
       state.usageError = errorMessage(error);
       state.usageStale = true;
+      notify();
       return null;
     });
+  }
+
+  function prefetchProjects(list) {
+    if (!started || !Array.isArray(list)) return Promise.resolve([]);
+    const representatives = new Map();
+    for (const session of list) {
+      if (session?.dir && session?.id && !representatives.has(session.dir)) {
+        representatives.set(session.dir, session.id);
+      }
+    }
+    const requests = [];
+    for (const [projectDir, sessionID] of representatives) {
+      if (projectRequests.has(projectDir)) continue;
+      const projectVersion = nextProjectVersion(projectDir);
+      const lifecycleID = lifecycle;
+      const requestID = Symbol(projectDir);
+      projectRequests.set(projectDir, requestID);
+      let request;
+      try {
+        request = Promise.resolve(GetUsageSummary(sessionID, projectDir));
+      } catch (error) {
+        request = Promise.reject(error);
+      }
+      requests.push(request.then((summary) => {
+        if (
+          lifecycle !== lifecycleID
+          || projectRequests.get(projectDir) !== requestID
+          || projectVersions.get(projectDir) !== projectVersion
+          || !summary
+        ) return null;
+        state.usageByProject.set(projectDir, summary);
+        notify();
+        return summary;
+      }).catch(() => null).finally(() => {
+        if (projectRequests.get(projectDir) === requestID) projectRequests.delete(projectDir);
+      }));
+    }
+    return Promise.all(requests);
   }
 
   function onActivate(token) {
@@ -116,6 +175,7 @@ export function createUsageController(deps) {
     if (started) return;
     started = true;
     lifecycle += 1;
+    view?.start?.();
     refreshTimer = setIntervalFn(() => { void refreshActive(); }, 5000);
     if (state.activeToken) void refreshActive();
   }
@@ -128,12 +188,16 @@ export function createUsageController(deps) {
     }
     lifecycle += 1;
     sequence += 1;
+    projectRequests.clear();
     state.usageLoading = false;
+    view?.stop?.();
+    notify();
   }
 
   return {
     currentIdentity,
     onActivate,
+    prefetchProjects,
     refreshActive,
     start,
     stop,

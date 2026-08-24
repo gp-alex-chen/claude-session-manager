@@ -1,4 +1,5 @@
 import { leafOf } from '../utils.js';
+import { formatProjectUsage, formatProjectUsageTitle } from '../usage/format.js';
 
 export function renderSessionList({
   listRoot,
@@ -11,6 +12,7 @@ export function renderSessionList({
   onOpen,
   onClose,
   onContextMenu,
+  usageByProject = new Map(),
 }) {
   const groups = new Map();
   for (const session of list) {
@@ -24,10 +26,13 @@ export function renderSessionList({
     const group = el('div', 'group');
     if (state.collapsedDirs.has(dir)) group.classList.add('collapsed');
     const head = el('div', 'group-head');
+    head.dataset.dir = dir;
     const chevron = el('span', 'chevron');
     chevron.title = '点击折叠/展开';
     const name = el('span', 'group-name', leafOf(dir));
     name.title = dir;
+    const usage = el('span', 'group-usage', formatProjectUsage(usageByProject.get(dir)));
+    usage.title = formatProjectUsageTitle(usageByProject.get(dir));
     const plus = el('button', 'plus', '+');
     plus.title = '在 ' + dir + ' 新建会话';
     plus.addEventListener('click', (event) => {
@@ -35,7 +40,7 @@ export function renderSessionList({
       onStartNew(dir);
     });
     head.addEventListener('click', () => onToggleGroup(dir, group, chevron));
-    head.append(chevron, name, plus);
+    head.append(chevron, name, usage, plus);
     group.appendChild(head);
 
     const body = el('div', 'group-body');
@@ -52,6 +57,17 @@ export function renderSessionList({
     }
     group.appendChild(body);
     listRoot.appendChild(group);
+  }
+}
+
+export function updateProjectUsageLabels({ listRoot, usageByProject }) {
+  for (const head of listRoot.querySelectorAll('.group-head')) {
+    const dir = head.dataset.dir || '';
+    const usage = head.querySelector?.('.group-usage');
+    const summary = usageByProject.get(dir);
+    if (!usage) continue;
+    usage.textContent = formatProjectUsage(summary);
+    usage.title = formatProjectUsageTitle(summary);
   }
 }
 

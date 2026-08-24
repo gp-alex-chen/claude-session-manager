@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createApplication } from '../src/app/bootstrap.js';
 
 const REQUIRED_IDS = [
-  'terminal', 'status-bar', 'session-list', 'hidden-panel', 'hidden-count',
+  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'session-list', 'hidden-panel', 'hidden-count',
   'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
@@ -21,12 +21,17 @@ class FakeNode {
     this.className = '';
     this.textContent = '';
     this.innerHTML = '';
+    this.hidden = false;
+    this.attributes = new Map();
   }
   appendChild(child) { this.children.push(child); return child; }
+  replaceChildren(...children) { this.children = children; }
   addEventListener(name, callback) { this.listeners.set(name, callback); }
   removeEventListener(name, callback) {
     if (this.listeners.get(name) === callback) this.listeners.delete(name);
   }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name); }
 }
 
 function makeDocument(missing) {
@@ -176,6 +181,9 @@ test('bootstrap creates controllers around one shared state and wires callbacks'
   assert.equal(fixture.calls.factories.usage.state, fixture.app.state);
   assert.equal(typeof fixture.calls.factories.usage.GetUsageSummary, 'function');
   assert.equal(typeof fixture.calls.factories.session.onPair, 'function');
+  const usageChildren = fixture.elements.get('usage-summary').children;
+  fixture.calls.factories.agent.setStatus('临时消息', 'ok');
+  assert.equal(fixture.elements.get('usage-summary').children, usageChildren);
   fixture.calls.factories.agent.refreshFoldState();
   fixture.calls.factories.terminal.onActivate();
   await fixture.calls.factories.terminal.writeClipboard('复制内容');
@@ -262,10 +270,9 @@ test('missing required DOM ids fail fast with the missing id', () => {
 test('status messages are inserted as text, not HTML', async () => {
   const fixture = makeFixture({ rejectInitialize: 'session' });
   await fixture.app.start();
-  const status = fixture.elements.get('status-bar');
+  const status = fixture.elements.get('status-message');
   assert.equal(status.innerHTML, '');
-  assert.equal(status.children[0].nodeType, 3);
-  assert.match(status.children[0].textContent, /初始化失败/);
+  assert.match(status.textContent, /初始化失败/);
 });
 
 test('storage access errors do not prevent settings construction', async () => {

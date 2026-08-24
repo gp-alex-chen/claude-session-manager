@@ -1,6 +1,6 @@
 import { leafOf } from '../utils.js';
 import { listSig, pairPendingSessions } from './pairing.js';
-import { renderHiddenSessions, renderSessionList } from './view.js';
+import { renderHiddenSessions, renderSessionList, updateProjectUsageLabels } from './view.js';
 
 export function createSessionController(deps) {
   const {
@@ -18,6 +18,7 @@ export function createSessionController(deps) {
     el,
     setStatus,
     onPair,
+    onProjects,
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
   } = deps;
@@ -40,6 +41,10 @@ export function createSessionController(deps) {
       const token = state.realToNew.get(item.dataset.id) || item.dataset.id;
       item.classList.toggle('active', token === state.activeToken);
     }
+  }
+
+  function refreshUsageLabels() {
+    updateProjectUsageLabels({ listRoot, usageByProject: state.usageByProject });
   }
 
   function refreshFoldState() {
@@ -164,7 +169,9 @@ export function createSessionController(deps) {
       onOpen: openFromList,
       onClose: closeRealSession,
       onContextMenu: showContextMenu,
+      usageByProject: state.usageByProject,
     });
+    onProjects?.(list);
     refreshHidden(true);
     agentController.refreshAgents();
     refreshFoldState();
@@ -365,6 +372,7 @@ export function createSessionController(deps) {
     refreshFoldState,
     refreshHidden,
     renderSessions,
+    refreshUsageLabels,
     renameSession,
     start,
     startNew,

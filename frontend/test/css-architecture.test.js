@@ -150,6 +150,17 @@ test('settings layout adapts and update progress includes a track', () => {
   assert.match(menus, /@media\s*\(max-width:\s*480px\)[\s\S]*settings-font-size-control/);
 });
 
+test('token usage surface owns accessible popover, compact groups, and responsive motion rules', () => {
+  const terminal = read('terminal.css');
+  const sidebar = read('sidebar.css');
+  assert.match(terminal, /#status-message/);
+  assert.match(terminal, /#usage-summary[^{}]*\{[\s\S]*?transition:[^;]*90ms/);
+  assert.match(terminal, /#usage-details[^{}]*\{[\s\S]*?transition:[^;]*180ms[^;]*cubic-bezier\(\.2,0,0,1\)/);
+  assert.match(terminal, /@media\s*\(max-width:\s*700px\)[\s\S]*?\.usage-session-chip\s*\{\s*display:\s*none/);
+  assert.match(terminal, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition:\s*none/);
+  assert.match(sidebar, /\.group-usage/);
+});
+
 test('obsolete settings menu selectors are gone from production sources', () => {
   const sourceDir = path.resolve(stylesDir, '..');
   const production = fs.readdirSync(sourceDir, { recursive: true })

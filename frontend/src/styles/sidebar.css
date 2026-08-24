@@ -122,6 +122,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.group-usage {
+  flex: 0 1 auto;
+  max-width: 52px;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .plus {
   background: transparent;
   border: none;

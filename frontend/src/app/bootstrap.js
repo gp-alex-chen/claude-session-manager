@@ -6,10 +6,11 @@ import { createSessionController } from '../sessions/controller.js';
 import { createSettingsController } from '../settings/controller.js';
 import { createUpdateController } from '../updates/controller.js';
 import { createUsageController } from '../usage/controller.js';
+import { createUsageView } from '../usage/view.js';
 import { clampProgress } from '../utils.js';
 
 const REQUIRED_IDS = [
-  'terminal', 'status-bar', 'session-list', 'hidden-panel', 'hidden-count',
+  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'session-list', 'hidden-panel', 'hidden-count',
   'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
@@ -49,15 +50,26 @@ export function createApplication(deps) {
   const createUsage = controllerFactories.usage || createUsageController;
   const nodes = Object.fromEntries(REQUIRED_IDS.map((id) => [id, requiredElement(documentRef, id)]));
   const state = createState();
+  const usageView = createUsageView({
+    summaryButton: nodes['usage-summary'],
+    details: nodes['usage-details'],
+    documentRef,
+    windowRef,
+  });
   const usageController = createUsage({
     state,
     GetUsageSummary: backend.GetUsageSummary,
+    view: usageView,
+    render: (nextState) => {
+      usageView.render(nextState);
+      sessionController?.refreshUsageLabels();
+    },
   });
+  usageView.render(state);
   const termOptions = createTermOptionsFn();
   const setStatus = (message, className) => {
-    nodes['status-bar'].textContent = '';
-    nodes['status-bar'].appendChild(documentRef.createTextNode(String(message)));
-    nodes['status-bar'].className = className || '';
+    nodes['status-message'].textContent = String(message);
+    nodes['status-message'].className = className || '';
   };
   const el = (tag, className, text) => {
     const element = documentRef.createElement(tag);
@@ -123,6 +135,7 @@ export function createApplication(deps) {
     windowRef,
     el,
     setStatus,
+    onProjects: usageController.prefetchProjects,
     onPair: (pendingItem) => {
       if (state.activeToken === pendingItem.token) usageController.refreshActive();
     },

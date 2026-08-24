@@ -181,6 +181,56 @@ test('no active token or directory becomes unavailable without a backend call', 
   assert.equal(fixture.state.usageLoading, false);
 });
 
+test('prefetches one representative per project and populates the project cache', async () => {
+  const first = deferred();
+  const second = deferred();
+  const fixture = makeFixture([first, second]);
+  fixture.controller.start();
+  const pending = fixture.controller.prefetchProjects([
+    { id: 'a-1', dir: 'dir-a' },
+    { id: 'a-2', dir: 'dir-a' },
+    { id: 'b-1', dir: 'dir-b' },
+  ]);
+  assert.deepEqual(fixture.calls, [
+    { sessionID: 'a-1', projectDir: 'dir-a' },
+    { sessionID: 'b-1', projectDir: 'dir-b' },
+  ]);
+  first.resolve({ project_found: true, project_total: { input_tokens: 10 } });
+  second.resolve({ project_found: true, project_total: { input_tokens: 20 } });
+  await pending;
+  assert.equal(fixture.state.usageByProject.get('dir-a').project_total.input_tokens, 10);
+  assert.equal(fixture.state.usageByProject.get('dir-b').project_total.input_tokens, 20);
+});
+
+test('active refresh wins over an older prefetch for the same project', async () => {
+  const prefetch = deferred();
+  const active = deferred();
+  const fixture = makeFixture([prefetch, active]);
+  realTerminal(fixture.state, 'active', 'dir-a');
+  fixture.controller.start();
+  fixture.controller.prefetchProjects([{ id: 'representative', dir: 'dir-a' }]);
+  fixture.controller.onActivate('active');
+
+  active.resolve({ project_found: true, session_found: true, project_total: { input_tokens: 20 } });
+  await settle();
+  prefetch.resolve({ project_found: true, project_total: { input_tokens: 10 } });
+  await settle();
+  assert.equal(fixture.state.usageByProject.get('dir-a').project_total.input_tokens, 20);
+  assert.equal(fixture.state.usageSummary.project_total.input_tokens, 20);
+});
+
+test('prefetch failure keeps the existing project cache and stop blocks late writes', async () => {
+  const failed = deferred();
+  const fixture = makeFixture([failed]);
+  fixture.state.usageByProject.set('dir-a', { project_found: true, project_total: { input_tokens: 8 } });
+  fixture.controller.start();
+  fixture.controller.prefetchProjects([{ id: 'a-1', dir: 'dir-a' }]);
+  fixture.controller.stop();
+  failed.resolve({ project_found: true, project_total: { input_tokens: 99 } });
+  await settle();
+  assert.equal(fixture.state.usageByProject.get('dir-a').project_total.input_tokens, 8);
+});
+
 test('state usage containers are independent', () => {
   const first = createAppState();
   const second = createAppState();
