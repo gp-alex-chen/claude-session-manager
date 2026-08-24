@@ -10,6 +10,7 @@ export function createAppState() {
     pendingNew: [],
     realToNew: new Map(),
     newToReal: new Map(),
+    sessionDirs: new Map(),
     runningAgents: new Map(),
     unreadSessions: new Set(),
     endedAgents: new Set(),
@@ -19,5 +20,13 @@ export function createAppState() {
     currentTheme: 'claude',
     terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
     uiTheme: 'light',
+    usageSummary: null,
+    usageToken: null,
+    usageSessionID: '',
+    usageProjectDir: '',
+    usageLoading: false,
+    usageError: null,
+    usageStale: false,
+    usageByProject: new Map(),
   };
 }

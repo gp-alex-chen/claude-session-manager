@@ -174,6 +174,7 @@ export function createTerminalController(deps) {
       activate(remaining[remaining.length - 1]);
     } else {
       state.activeToken = null;
+      onActivate?.(null);
       setStatus?.('未运行 — 点击左侧会话恢复，或点分组行 + 新建会话', '');
     }
   }

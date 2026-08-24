@@ -5,6 +5,7 @@ import { createTerminalController } from '../terminal/controller.js';
 import { createSessionController } from '../sessions/controller.js';
 import { createSettingsController } from '../settings/controller.js';
 import { createUpdateController } from '../updates/controller.js';
+import { createUsageController } from '../usage/controller.js';
 import { clampProgress } from '../utils.js';
 
 const REQUIRED_IDS = [
@@ -45,8 +46,13 @@ export function createApplication(deps) {
   const createSession = controllerFactories.session || createSessionController;
   const createSettings = controllerFactories.settings || createSettingsController;
   const createUpdate = controllerFactories.update || createUpdateController;
+  const createUsage = controllerFactories.usage || createUsageController;
   const nodes = Object.fromEntries(REQUIRED_IDS.map((id) => [id, requiredElement(documentRef, id)]));
   const state = createState();
+  const usageController = createUsage({
+    state,
+    GetUsageSummary: backend.GetUsageSummary,
+  });
   const termOptions = createTermOptionsFn();
   const setStatus = (message, className) => {
     nodes['status-bar'].textContent = '';
@@ -88,7 +94,8 @@ export function createApplication(deps) {
       ? (callback) => windowRef.requestAnimationFrame(callback)
       : undefined,
     storageRef: safeStorage(windowRef),
-    onActivate: () => {
+    onActivate: (token) => {
+      usageController.onActivate(token ?? state.activeToken);
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
     },
@@ -116,6 +123,9 @@ export function createApplication(deps) {
     windowRef,
     el,
     setStatus,
+    onPair: (pendingItem) => {
+      if (state.activeToken === pendingItem.token) usageController.refreshActive();
+    },
   });
   const updateController = createUpdate({
     backend: { CheckForUpdate: backend.CheckForUpdate, UpdateToLatest: backend.UpdateToLatest },
@@ -159,7 +169,7 @@ export function createApplication(deps) {
   });
 
   const controllers = { agent: agentController, terminal: terminalController, session: sessionController,
-    settings: settingsController, update: updateController };
+    settings: settingsController, update: updateController, usage: usageController };
   const subscriptions = [];
   let resizeHandler = null;
   let started = false;
@@ -198,6 +208,7 @@ export function createApplication(deps) {
     subscribe('update:state', (phase) => updateController.handleState(phase));
     subscribe('update:progress', (progress) => updateController.handleProgress(progress));
     agentController.start();
+    usageController.start();
     sessionController.start();
     settingsController.start();
     readyPromise = Promise.all([initialize(sessionController), initialize(settingsController)]);
@@ -216,6 +227,7 @@ export function createApplication(deps) {
     }
     settingsController.stop();
     sessionController.stop();
+    usageController.stop();
     agentController.stop();
     readyPromise = null;
   }

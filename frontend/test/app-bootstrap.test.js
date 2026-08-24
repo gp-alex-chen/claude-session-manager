@@ -137,6 +137,13 @@ function makeFixture(options = {}) {
         handleProgress: (value) => calls.routed.push(['update-progress', value]),
       };
     },
+    usage: (deps) => {
+      calls.factories.usage = deps;
+      return makeController('usage', {
+        onActivate: (token) => calls.routed.push(['usage-activate', token]),
+        refreshActive: () => calls.routed.push(['usage-refresh']),
+      });
+    },
   };
   const backend = new Proxy({}, { get: () => () => {} });
   const app = createApplication({
@@ -163,9 +170,12 @@ function makeFixture(options = {}) {
 
 test('bootstrap creates controllers around one shared state and wires callbacks', async () => {
   const fixture = makeFixture();
-  assert.equal(Object.keys(fixture.calls.factories).length, 5);
+  assert.equal(Object.keys(fixture.calls.factories).length, 6);
   assert.equal(fixture.calls.factories.agent.state, fixture.app.state);
   assert.equal(fixture.calls.factories.session.state, fixture.app.state);
+  assert.equal(fixture.calls.factories.usage.state, fixture.app.state);
+  assert.equal(typeof fixture.calls.factories.usage.GetUsageSummary, 'function');
+  assert.equal(typeof fixture.calls.factories.session.onPair, 'function');
   fixture.calls.factories.agent.refreshFoldState();
   fixture.calls.factories.terminal.onActivate();
   await fixture.calls.factories.terminal.writeClipboard('复制内容');
@@ -173,21 +183,21 @@ test('bootstrap creates controllers around one shared state and wires callbacks'
   fixture.calls.factories.terminal.requestFrame(() => fixture.calls.routed.push(['frame']));
   fixture.animationFrames.shift()();
   fixture.calls.factories.update.showToast('hello');
-  assert.deepEqual(fixture.calls.routed, [['fold'], ['active'], ['frame'], ['toast', 'hello']]);
+  assert.deepEqual(fixture.calls.routed, [['fold'], ['usage-activate', null], ['active'], ['frame'], ['toast', 'hello']]);
   assert.deepEqual(fixture.calls.clipboardWrites, ['复制内容']);
   assert.equal(fixture.calls.clipboardReads, 1);
 });
 
-test('start is idempotent and initializes both controllers once', async () => {
+test('start is idempotent and initializes session/settings once', async () => {
   const fixture = makeFixture();
   const first = fixture.app.start();
   const second = fixture.app.start();
   assert.equal(first, second);
   assert.equal(fixture.runtimeListeners.size, 5);
   assert.equal(fixture.windowListeners.size, 1);
-  assert.deepEqual(fixture.calls.starts, { agent: 1, terminal: 0, session: 1, settings: 1 });
+  assert.deepEqual(fixture.calls.starts, { agent: 1, terminal: 0, session: 1, settings: 1, usage: 1 });
   await first;
-  assert.deepEqual(fixture.calls.initializes, { agent: 0, terminal: 0, session: 1, settings: 1 });
+  assert.deepEqual(fixture.calls.initializes, { agent: 0, terminal: 0, session: 1, settings: 1, usage: 0 });
 });
 
 test('runtime and resize events route to the matching controllers', () => {
@@ -211,7 +221,7 @@ test('stop is idempotent and uses returned event cancellation functions', () => 
   fixture.app.start();
   fixture.app.stop();
   fixture.app.stop();
-  assert.deepEqual(fixture.calls.stops, { agent: 1, terminal: 0, session: 1, settings: 1 });
+  assert.deepEqual(fixture.calls.stops, { agent: 1, terminal: 0, session: 1, settings: 1, usage: 1 });
   assert.equal(fixture.windowListeners.size, 0);
   assert.equal(fixture.runtimeListeners.size, 0);
   assert.deepEqual(fixture.eventsOff, []);
@@ -232,15 +242,15 @@ test('stop permits a clean second start and fresh initialization', async () => {
   fixture.app.stop();
   const ready = fixture.app.start();
   await ready;
-  assert.deepEqual(fixture.calls.starts, { agent: 2, terminal: 0, session: 2, settings: 2 });
-  assert.deepEqual(fixture.calls.initializes, { agent: 0, terminal: 0, session: 2, settings: 2 });
+  assert.deepEqual(fixture.calls.starts, { agent: 2, terminal: 0, session: 2, settings: 2, usage: 2 });
+  assert.deepEqual(fixture.calls.initializes, { agent: 0, terminal: 0, session: 2, settings: 2, usage: 0 });
   assert.equal(fixture.runtimeListeners.size, 5);
 });
 
 test('initializer failure is contained while the other initializer still runs', async () => {
   const fixture = makeFixture({ rejectInitialize: 'session' });
   await assert.doesNotReject(fixture.app.start());
-  assert.deepEqual(fixture.calls.initializes, { agent: 0, terminal: 0, session: 1, settings: 1 });
+  assert.deepEqual(fixture.calls.initializes, { agent: 0, terminal: 0, session: 1, settings: 1, usage: 0 });
 });
 
 test('missing required DOM ids fail fast with the missing id', () => {

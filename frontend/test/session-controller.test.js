@@ -219,6 +219,7 @@ test('openFromList activates existing, rebuilds exited, and cleans failed starts
   fixture.terminalController.openTab('running', 'Running');
   await fixture.controller.openFromList(session('running'));
   assert.deepEqual(fixture.terminalController.activations, ['running']);
+  assert.equal(fixture.state.terminals.get('running').dir, 'work');
   assert.equal(fixture.state.unreadSessions.has('running'), false);
 
   const exited = fixture.terminalController.openTab('bad', 'Bad');
@@ -229,6 +230,7 @@ test('openFromList activates existing, rebuilds exited, and cleans failed starts
 
   await fixture.controller.openFromList(session('good'));
   assert.equal(fixture.state.terminals.has('good'), true);
+  assert.equal(fixture.state.terminals.get('good').dir, 'work');
 });
 
 test('startNew only records pending state after successful backend start', async () => {

@@ -17,6 +17,7 @@ export function createSessionController(deps) {
     windowRef = typeof window === 'undefined' ? null : window,
     el,
     setStatus,
+    onPair,
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
   } = deps;
@@ -53,7 +54,10 @@ export function createSessionController(deps) {
 
   async function openFromList(sessionInfo) {
     const token = state.realToNew.get(sessionInfo.id) || sessionInfo.id;
-    const existing = state.terminals.get(token);
+    state.sessionDirs.set(sessionInfo.id, sessionInfo.dir);
+    const existingSession = state.terminals.get(token);
+    if (existingSession) existingSession.dir = sessionInfo.dir;
+    const existing = existingSession;
     if (existing && !existing.exited) {
       terminalController.activate(token);
       state.unreadSessions.delete(sessionInfo.id);
@@ -62,6 +66,8 @@ export function createSessionController(deps) {
     }
     if (existing) terminalController.disposeSession(token);
     terminalController.openTab(token, sessionInfo.name);
+    const opened = state.terminals.get(token);
+    if (opened) opened.dir = sessionInfo.dir;
     try {
       await backend.StartSession(sessionInfo.id, sessionInfo.dir);
       setStatus('已恢复: ' + sessionInfo.name, 'ok');
@@ -94,7 +100,10 @@ export function createSessionController(deps) {
       onPair: (pendingItem, realId, info) => {
         const terminal = state.terminals.get(pendingItem.token);
         if (terminal && info) terminal.labelText = info.name;
+        if (terminal && info) terminal.dir = info.dir;
+        if (info) state.sessionDirs.set(realId, info.dir);
         if (state.activeToken === pendingItem.token) syncActiveHighlight();
+        onPair?.(pendingItem, realId, info);
         return realId;
       },
     });
@@ -132,6 +141,7 @@ export function createSessionController(deps) {
   function renderSessions(list) {
     lastLoaded = list;
     lastListSignature = listSig(list);
+    for (const session of list) state.sessionDirs.set(session.id, session.dir);
     if (!state.collapseAllDone && list.length) {
       state.collapseAllDone = true;
       for (const session of list) state.collapsedDirs.add(session.dir);
