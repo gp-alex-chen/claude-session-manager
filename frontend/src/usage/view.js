@@ -17,24 +17,13 @@ function valueOrDash(value) {
   return value == null ? '—' : formatTokenCount(value);
 }
 
-function detailRow(documentRef, parent, label, value) {
-  const row = documentRef.createElement('div');
-  row.className = 'usage-detail-row';
-  addText(documentRef, row, 'span', 'usage-detail-label', label);
-  addText(documentRef, row, 'span', 'usage-detail-value', value);
-  parent.appendChild(row);
-}
-
-function usageDetailRows(documentRef, section, numbers, includeCacheTiers = false) {
-  detailRow(documentRef, section, '新输入', valueOrDash(numbers?.input));
-  detailRow(documentRef, section, '输出', valueOrDash(numbers?.output));
-  detailRow(documentRef, section, 'Thinking（输出明细）', valueOrDash(numbers?.thinking));
-  detailRow(documentRef, section, '缓存读取', valueOrDash(numbers?.cacheRead));
-  detailRow(documentRef, section, '缓存写入', valueOrDash(numbers?.cacheCreation));
-  if (includeCacheTiers) {
-    detailRow(documentRef, section, '缓存写入 5m', valueOrDash(numbers?.cache5m));
-    detailRow(documentRef, section, '缓存写入 1h', valueOrDash(numbers?.cache1h));
-  }
+function addMetric(documentRef, parent, label, value, className = '') {
+  const metric = documentRef.createElement('div');
+  metric.className = className ? `usage-metric ${className}` : 'usage-metric';
+  addText(documentRef, metric, 'span', 'usage-metric-label', label);
+  addText(documentRef, metric, 'strong', 'usage-metric-value', value);
+  parent.appendChild(metric);
+  return metric;
 }
 
 function summaryChips(documentRef, button, state) {
@@ -50,9 +39,9 @@ function summaryChips(documentRef, button, state) {
     addText(documentRef, button, 'span', 'usage-unavailable-chip', '用量不可用');
     return;
   }
-  addText(documentRef, button, 'span', 'usage-project-chip', `项目 ${formatTokenCount(project.total)}`);
-  addText(documentRef, button, 'span', 'usage-cache-chip', `缓存 ${cache}`);
-  addText(documentRef, button, 'span', 'usage-session-chip', `会话 ${session ? formatTokenCount(session.total) : '—'}`);
+  addText(documentRef, button, 'span', 'usage-summary-segment usage-project-chip', `项目 ${formatTokenCount(project.total)}`);
+  addText(documentRef, button, 'span', 'usage-summary-segment usage-cache-chip', `缓存 ${cache}`);
+  addText(documentRef, button, 'span', 'usage-summary-segment usage-session-chip', `会话 ${session ? formatTokenCount(session.total) : '—'}`);
   if (state.usageLoading) addText(documentRef, button, 'span', 'usage-loading-chip', '更新中…');
   if (state.usageStale) addText(documentRef, button, 'span', 'usage-stale-chip', '数据较旧');
 }
@@ -66,38 +55,64 @@ function renderDetails(documentRef, details, state) {
 
   const title = documentRef.createElement('div');
   title.className = 'usage-details-title';
-  title.textContent = state.usageStale ? '用量详情 · 数据较旧' : '用量详情';
+  addText(documentRef, title, 'span', 'usage-details-title-text', 'Token 用量');
+  if (state.usageStale) addText(documentRef, title, 'span', 'usage-details-stale', '数据较旧');
   details.appendChild(title);
 
-  const projectSection = documentRef.createElement('section');
-  projectSection.className = 'usage-details-section';
-  addText(documentRef, projectSection, 'h3', 'usage-details-heading', '项目累计');
-  detailRow(documentRef, projectSection, '总 token', project ? formatTokenCount(project.total) : '—');
-  detailRow(documentRef, projectSection, '请求数', summary?.project_found ? String(summary.project_request_count ?? 0) : '—');
-  detailRow(documentRef, projectSection, '缓存命中率', project ? formatPercent(project.cacheHitRate) : '—');
-  usageDetailRows(documentRef, projectSection, project, true);
-  details.appendChild(projectSection);
+  const hero = documentRef.createElement('div');
+  hero.className = 'usage-hero-grid';
+  addMetric(documentRef, hero, '项目总量', project ? formatTokenCount(project.total) : '—', 'usage-hero-metric');
+  addMetric(documentRef, hero, '当前会话', session ? formatTokenCount(session.total) : '—', 'usage-hero-metric');
+  addMetric(documentRef, hero, '缓存命中', project ? formatPercent(project.cacheHitRate) : '—', 'usage-hero-metric');
+  details.appendChild(hero);
 
-  const sessionSection = documentRef.createElement('section');
-  sessionSection.className = 'usage-details-section';
-  addText(documentRef, sessionSection, 'h3', 'usage-details-heading', '当前会话');
-  detailRow(documentRef, sessionSection, '累计 token', session ? formatTokenCount(session.total) : '—');
-  detailRow(documentRef, sessionSection, '请求数', summary?.session_found ? String(summary.session_request_count ?? 0) : '—');
-  detailRow(documentRef, sessionSection, '缓存命中率', session ? formatPercent(session.cacheHitRate) : '—');
-  usageDetailRows(documentRef, sessionSection, session);
-  details.appendChild(sessionSection);
+  const compare = documentRef.createElement('table');
+  compare.className = 'usage-compare-table';
+  const head = documentRef.createElement('thead');
+  const headRow = documentRef.createElement('tr');
+  addText(documentRef, headRow, 'th', 'usage-compare-label', '累计指标');
+  addText(documentRef, headRow, 'th', '', '项目');
+  addText(documentRef, headRow, 'th', '', '会话');
+  head.appendChild(headRow);
+  compare.appendChild(head);
+  const body = documentRef.createElement('tbody');
+  const projectRequests = summary?.project_found ? String(summary.project_request_count ?? 0) : '—';
+  const sessionRequests = summary?.session_found ? String(summary.session_request_count ?? 0) : '—';
+  const rows = [
+    ['请求数', projectRequests, sessionRequests],
+    ['新输入', valueOrDash(project?.input), valueOrDash(session?.input)],
+    ['输出', valueOrDash(project?.output), valueOrDash(session?.output)],
+    ['缓存读取', valueOrDash(project?.cacheRead), valueOrDash(session?.cacheRead)],
+    ['缓存写入', valueOrDash(project?.cacheCreation), valueOrDash(session?.cacheCreation)],
+    ['思考 Token', valueOrDash(project?.thinking), valueOrDash(session?.thinking)],
+  ];
+  for (const [label, projectValue, sessionValue] of rows) {
+    const row = documentRef.createElement('tr');
+    addText(documentRef, row, 'th', 'usage-compare-label', label);
+    addText(documentRef, row, 'td', 'usage-compare-value', projectValue);
+    addText(documentRef, row, 'td', 'usage-compare-value', sessionValue);
+    body.appendChild(row);
+  }
+  compare.appendChild(body);
+  details.appendChild(compare);
+  addText(documentRef, details, 'p', 'usage-details-note', '思考 Token 已包含在输出中');
 
   const requestSection = documentRef.createElement('section');
-  requestSection.className = 'usage-details-section';
+  requestSection.className = 'usage-request-section';
   addText(documentRef, requestSection, 'h3', 'usage-details-heading', '本轮请求');
-  detailRow(documentRef, requestSection, '总 token', valueOrDash(latest?.total));
-  detailRow(documentRef, requestSection, '新输入', valueOrDash(latest?.input));
-  detailRow(documentRef, requestSection, '输出', valueOrDash(latest?.output));
-  detailRow(documentRef, requestSection, '缓存读取', valueOrDash(latest?.cacheRead));
-  detailRow(documentRef, requestSection, '缓存写入', valueOrDash(latest?.cacheCreation));
-  detailRow(documentRef, requestSection, '缓存写入 5m', valueOrDash(latest?.cache5m));
-  detailRow(documentRef, requestSection, '缓存写入 1h', valueOrDash(latest?.cache1h));
-  detailRow(documentRef, requestSection, 'Thinking（输出明细）', valueOrDash(latest?.thinking));
+  const requestGrid = documentRef.createElement('div');
+  requestGrid.className = 'usage-request-grid';
+  for (const [label, value] of [
+    ['总量', valueOrDash(latest?.total)],
+    ['新输入', valueOrDash(latest?.input)],
+    ['输出', valueOrDash(latest?.output)],
+    ['缓存读取', valueOrDash(latest?.cacheRead)],
+    ['缓存写入', valueOrDash(latest?.cacheCreation)],
+    ['思考 Token', valueOrDash(latest?.thinking)],
+  ]) addMetric(documentRef, requestGrid, label, value);
+  requestSection.appendChild(requestGrid);
+  const tiers = `缓存层级 · 5m ${valueOrDash(latest?.cache5m)} · 1h ${valueOrDash(latest?.cache1h)}`;
+  addText(documentRef, requestSection, 'p', 'usage-request-tiers', tiers);
   details.appendChild(requestSection);
 }
 

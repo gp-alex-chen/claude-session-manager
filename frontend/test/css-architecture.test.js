@@ -156,6 +156,11 @@ test('token usage surface owns accessible popover, compact groups, and responsiv
   assert.match(terminal, /#status-message/);
   assert.match(terminal, /#usage-summary[^{}]*\{[\s\S]*?transition:[^;]*90ms/);
   assert.match(terminal, /#usage-details[^{}]*\{[\s\S]*?transition:[^;]*180ms[^;]*cubic-bezier\(\.2,0,0,1\)/);
+  assert.match(terminal, /max-height:\s*min\(420px/);
+  assert.match(terminal, /#usage-summary[\s\S]*?border-radius:\s*999px[\s\S]*?background:/);
+  assert.match(terminal, /\.usage-hero-grid[\s\S]*?display:\s*grid/);
+  assert.match(terminal, /\.usage-compare-table/);
+  assert.match(terminal, /\.usage-request-grid[\s\S]*?grid-template-columns/);
   assert.match(terminal, /@keyframes\s+usage-details-in[\s\S]*?opacity:\s*0[\s\S]*?transform:[\s\S]*?opacity:\s*1/);
   assert.match(terminal, /#usage-details:not\(\[hidden\]\)[\s\S]*?animation:\s*usage-details-in\s+180ms/);
   assert.match(terminal, /@media\s*\(max-width:\s*700px\)[\s\S]*?\.usage-session-chip\s*\{\s*display:\s*none/);

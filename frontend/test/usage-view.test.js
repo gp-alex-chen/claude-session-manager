@@ -39,6 +39,19 @@ function makeFixture() {
   return { documentRef, windowRef, summaryButton, details, view };
 }
 
+function textOf(node) {
+  return [node.textContent, ...(node.children || []).map(textOf)].join(' ');
+}
+
+function findByClass(node, className) {
+  if (node.className?.split?.(' ').includes(className)) return node;
+  for (const child of node.children || []) {
+    const match = findByClass(child, className);
+    if (match) return match;
+  }
+  return null;
+}
+
 const complete = {
   project_found: true,
   session_found: true,
@@ -71,23 +84,28 @@ const complete = {
   },
 };
 
-test('complete summary renders compact chips and detail fields', () => {
+test('complete summary renders hero metrics, project/session comparison, and request grid', () => {
   const fixture = makeFixture();
   fixture.view.render({ usageSummary: complete, usageLoading: false, usageStale: false });
   assert.deepEqual(fixture.summaryButton.children.map((child) => child.textContent), [
     '项目 2K', '缓存 27.8%', '会话 100',
   ]);
-  const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join(' ');
   const detailText = textOf(fixture.details);
-  assert.match(detailText, /Thinking（输出明细）/);
-  assert.match(detailText, /缓存写入 5m/);
-  const sections = fixture.details.children.filter((node) => node.className === 'usage-details-section');
-  const sectionText = (node) => [node.textContent, ...(node.children || []).map(sectionText)].join(' ');
-  assert.match(sectionText(sections[0]), /新输入\s+1K/);
-  assert.match(sectionText(sections[0]), /Thinking（输出明细）\s+7/);
-  assert.match(sectionText(sections[1]), /缓存写入\s+40/);
-  assert.match(sectionText(sections[1]), /Thinking（输出明细）\s+6/);
-  assert.match(sectionText(sections[2]), /输出\s+20/);
+  assert.match(detailText, /Token 用量/);
+  assert.match(detailText, /项目总量\s+2K/);
+  assert.match(detailText, /当前会话\s+100/);
+  assert.match(detailText, /缓存命中\s+27.8%/);
+  assert.match(detailText, /累计指标\s+项目\s+会话/);
+  assert.match(detailText, /新输入\s+1K\s+10/);
+  assert.match(detailText, /输出\s+200\s+20/);
+  assert.match(detailText, /思考 Token\s+7\s+6/);
+  assert.match(detailText, /思考 Token 已包含在输出中/);
+  assert.match(detailText, /本轮请求/);
+  assert.match(detailText, /总量\s+100\s+新输入\s+10\s+输出\s+20/);
+  assert.match(detailText, /缓存层级 · 5m 11 · 1h 12/);
+  assert.equal(findByClass(fixture.details, 'usage-hero-grid')?.children.length, 3);
+  assert.equal(findByClass(fixture.details, 'usage-compare-table')?.children.length, 2);
+  assert.equal(findByClass(fixture.details, 'usage-request-grid')?.children.length, 6);
 });
 
 test('missing session and latest fields render dashes without fake zeros', () => {
@@ -98,10 +116,12 @@ test('missing session and latest fields render dashes without fake zeros', () =>
     usageStale: false,
   });
   assert.equal(fixture.summaryButton.children[2].textContent, '会话 —');
-  const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join(' ');
   const detailText = textOf(fixture.details);
-  assert.match(detailText, /累计 token\s+—/);
-  assert.match(detailText, /总 token\s+—/);
+  assert.match(detailText, /当前会话\s+—/);
+  assert.match(detailText, /请求数\s+0\s+—/);
+  assert.match(detailText, /输出\s+0\s+—/);
+  assert.match(detailText, /本轮请求/);
+  assert.match(detailText, /缓存层级 · 5m — · 1h —/);
 });
 
 test('loading, unavailable, and stale states are concise and path-free', () => {
