@@ -1,6 +1,6 @@
 import { leafOf } from '../utils.js';
 import { listSig, pairPendingSessions } from './pairing.js';
-import { renderHiddenSessions, renderSessionList, updateProjectUsageLabels } from './view.js';
+import { renderHiddenSessions, renderProjectBar, renderSessionList, updateProjectUsageLabels } from './view.js';
 
 export function createSessionController(deps) {
   const {
@@ -9,6 +9,8 @@ export function createSessionController(deps) {
     terminalController,
     agentController,
     listRoot,
+    projectRoot = null,
+    addProjectButton = null,
     hiddenPanel,
     hiddenCount,
     hiddenButton,
@@ -31,6 +33,7 @@ export function createSessionController(deps) {
   let refreshTimer = null;
   let started = false;
   let ctxTarget = null;
+  let addProjectBound = false;
 
   const contextMenu = documentRef.createElement('div');
   contextMenu.id = 'ctx-menu';
@@ -194,6 +197,73 @@ export function createSessionController(deps) {
     }
   }
 
+  function renderProjects() {
+    if (!projectRoot) return;
+    renderProjectBar({
+      listRoot: projectRoot,
+      projects: Array.isArray(state.projects) ? state.projects : [],
+      el,
+      onStartNew: startNew,
+      onDeleteProject: deleteProject,
+    });
+  }
+
+  async function loadProjects() {
+    if (typeof backend?.ListProjects !== 'function') {
+      state.projects = [];
+      renderProjects();
+      return true;
+    }
+    try {
+      const projects = await backend.ListProjects();
+      state.projects = Array.isArray(projects) ? projects : [];
+      renderProjects();
+      return true;
+    } catch (error) {
+      state.projects = [];
+      renderProjects();
+      setStatus('加载项目失败: ' + error, 'warn');
+      return false;
+    }
+  }
+
+  async function addProjectFromChooser() {
+    if (typeof backend?.ChooseProjectDir !== 'function') return;
+    let dir;
+    try {
+      dir = await backend.ChooseProjectDir();
+    } catch (error) {
+      setStatus('选择项目目录失败: ' + error, 'warn');
+      return;
+    }
+    if (dir === '' || dir === undefined || dir === null) return;
+    if (typeof backend?.AddProject !== 'function') return;
+    try {
+      await backend.AddProject(dir);
+      await loadProjects();
+    } catch (error) {
+      setStatus('添加项目失败: ' + error, 'warn');
+    }
+  }
+
+  async function deleteProject(dir) {
+    if (typeof windowRef?.confirm === 'function'
+      && !windowRef.confirm('移除项目配置？\n不会删除目录、会话或终端。')) return;
+    if (typeof backend?.DeleteProject !== 'function') return;
+    try {
+      await backend.DeleteProject(dir);
+      await loadProjects();
+    } catch (error) {
+      setStatus('删除项目失败: ' + error, 'warn');
+    }
+  }
+
+  function bindProjectButton() {
+    if (addProjectBound || !addProjectButton || typeof addProjectButton.addEventListener !== 'function') return;
+    addProjectBound = true;
+    addProjectButton.addEventListener('click', addProjectFromChooser);
+  }
+
   function addContextItem(label, callback, danger) {
     const item = el('div', 'ctx-item' + (danger ? ' danger' : ''), label);
     item.addEventListener('click', () => {
@@ -311,6 +381,7 @@ export function createSessionController(deps) {
   }
 
   async function initialize() {
+    await loadProjects();
     await agentController.refreshAgents();
     await loadSessions();
     let open;
@@ -357,6 +428,7 @@ export function createSessionController(deps) {
     refreshFoldState();
   });
   paintEye();
+  bindProjectButton();
   documentRef.addEventListener('click', hideContextMenu);
   windowRef.addEventListener('blur', hideContextMenu);
 
@@ -364,9 +436,11 @@ export function createSessionController(deps) {
     autoRefreshSessions,
     closeRealSession,
     deleteSession,
+    deleteProject,
     initialize,
     listSig,
     loadSessions,
+    loadProjects,
     openFromList,
     pairNewSessions,
     refreshFoldState,

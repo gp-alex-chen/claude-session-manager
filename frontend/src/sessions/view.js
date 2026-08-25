@@ -1,6 +1,40 @@
 import { leafOf } from '../utils.js';
 import { formatProjectUsage, formatProjectUsageTitle } from '../usage/format.js';
 
+export function renderProjectBar({ listRoot, projects = [], el, onStartNew, onDeleteProject }) {
+  listRoot.innerHTML = '';
+  if (!projects.length) {
+    listRoot.appendChild(el('div', 'project-empty', '暂无项目'));
+    return;
+  }
+
+  for (const dir of projects) {
+    const item = el('div', 'project-item');
+    const name = el('span', 'project-name', leafOf(dir));
+    name.title = dir;
+    const plus = el('button', 'project-plus', '+');
+    plus.type = 'button';
+    plus.title = '在 ' + dir + ' 新建会话';
+    if (typeof onStartNew === 'function') {
+      plus.addEventListener('click', (event) => {
+        event.stopPropagation();
+        return onStartNew(dir);
+      });
+    }
+    const deleteButton = el('button', 'project-delete', '×');
+    deleteButton.type = 'button';
+    deleteButton.title = '移除项目';
+    if (typeof onDeleteProject === 'function') {
+      deleteButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        return onDeleteProject(dir);
+      });
+    }
+    item.append(name, plus, deleteButton);
+    listRoot.appendChild(item);
+  }
+}
+
 export function renderSessionList({
   listRoot,
   list,

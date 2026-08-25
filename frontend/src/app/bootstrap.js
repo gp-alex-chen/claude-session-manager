@@ -7,10 +7,12 @@ import { createSettingsController } from '../settings/controller.js';
 import { createUpdateController } from '../updates/controller.js';
 import { createUsageController } from '../usage/controller.js';
 import { createUsageView } from '../usage/view.js';
+import { renderProjectBar } from '../sessions/view.js';
 import { clampProgress } from '../utils.js';
 
 const REQUIRED_IDS = [
-  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'session-list', 'hidden-panel', 'hidden-count',
+  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'project-bar', 'btn-add-project', 'project-list',
+  'session-list', 'hidden-panel', 'hidden-count',
   'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
@@ -77,6 +79,7 @@ export function createApplication(deps) {
     if (text !== undefined) element.textContent = text;
     return element;
   };
+  renderProjectBar({ listRoot: nodes['project-list'], projects: state.projects, el });
 
   let sessionController;
   const agentController = createAgent({
@@ -123,10 +126,16 @@ export function createApplication(deps) {
       StartSession: backend.StartSession,
       StartNew: backend.StartNew,
       GetOpenSessions: backend.GetOpenSessions,
+      ListProjects: backend.ListProjects,
+      ChooseProjectDir: backend.ChooseProjectDir,
+      AddProject: backend.AddProject,
+      DeleteProject: backend.DeleteProject,
     },
     terminalController,
     agentController,
     listRoot: nodes['session-list'],
+    projectRoot: nodes['project-list'],
+    addProjectButton: nodes['btn-add-project'],
     hiddenPanel: nodes['hidden-panel'],
     hiddenCount: nodes['hidden-count'],
     hiddenButton: nodes['btn-hidden'],

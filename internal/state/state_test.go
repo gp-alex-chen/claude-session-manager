@@ -204,3 +204,85 @@ func TestAtomicWritesLeaveNoTemporaryFilesAndReportConflicts(t *testing.T) {
 		t.Fatalf("temporary files remain after atomic replace failure: %v", files)
 	}
 }
+
+func TestProjectsRoundTripAndRestartRead(t *testing.T) {
+	dir := t.TempDir()
+	want := []string{filepath.Join(dir, "demo"), filepath.Join(dir, "docs")}
+	store := NewStore(dir)
+	if err := store.SaveProjects(want); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.LoadProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("projects after round trip = %#v, want %#v", got, want)
+	}
+
+	restarted, err := NewStore(dir).LoadProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(restarted, want) {
+		t.Fatalf("projects after restart = %#v, want %#v", restarted, want)
+	}
+}
+
+func TestMissingAndCorruptProjectsReturnSafeEmptyListsAndErrors(t *testing.T) {
+	store := NewStore(t.TempDir())
+	missing, err := store.LoadProjects()
+	if err != nil || missing == nil || len(missing) != 0 {
+		t.Fatalf("missing projects = %#v, err=%v", missing, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(store.dir, "projects.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	corrupt, err := store.LoadProjects()
+	if err == nil || corrupt == nil || len(corrupt) != 0 {
+		t.Fatalf("corrupt projects = %#v, err=%v", corrupt, err)
+	}
+}
+
+func TestProjectMutationsAreIdempotentAndNormalizeDirectories(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := NewStore(root)
+
+	if err := store.AddProject(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddProject(first + string(os.PathSeparator) + "."); err != nil {
+		t.Fatalf("duplicate AddProject should be idempotent: %v", err)
+	}
+	got, err := store.LoadProjects()
+	if err != nil || !reflect.DeepEqual(got, []string{first}) {
+		t.Fatalf("projects after duplicate add = %#v, err=%v", got, err)
+	}
+
+	if err := store.AddProject(second); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteProject(first + string(os.PathSeparator) + "."); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.LoadProjects()
+	if err != nil || !reflect.DeepEqual(got, []string{second}) {
+		t.Fatalf("projects after deleting first = %#v, err=%v", got, err)
+	}
+	if err := store.DeleteProject(filepath.Join(root, "missing")); err != nil {
+		t.Fatalf("deleting a missing project should be idempotent: %v", err)
+	}
+	got, err = store.LoadProjects()
+	if err != nil || !reflect.DeepEqual(got, []string{second}) {
+		t.Fatalf("projects after deleting missing = %#v, err=%v", got, err)
+	}
+}

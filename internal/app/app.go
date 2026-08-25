@@ -35,6 +35,7 @@ type App struct {
 	lookPath     func(string) (string, error)
 	debugLog     func(string)
 	startPTYFn   func(string, string, string) error
+	chooseDirFn  func(context.Context, runtime.OpenDialogOptions) (string, error)
 	usageScanner *usage.Scanner
 }
 
@@ -46,7 +47,13 @@ func NewAppWithStore(store *state.Store) *App {
 	if store == nil {
 		store = state.Default()
 	}
-	a := &App{store: store, lookPath: exec.LookPath, debugLog: agent.DebugLog, usageScanner: defaultUsageScanner()}
+	a := &App{
+		store:        store,
+		lookPath:     exec.LookPath,
+		debugLog:     agent.DebugLog,
+		chooseDirFn:  runtime.OpenDirectoryDialog,
+		usageScanner: defaultUsageScanner(),
+	}
 	a.terms = terminal.NewManager(terminal.Callbacks{}, func(ids []string) error {
 		return a.store.SaveOpen(ids)
 	})

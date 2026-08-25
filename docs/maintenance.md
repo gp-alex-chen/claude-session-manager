@@ -19,7 +19,7 @@ main.go
 
 - `internal/app`：Wails 公开方法、生命周期、业务编排和更新绑定。
 - `internal/terminal`：ConPTY 启停、读写、resize、close、token 和命令外的进程边界；不依赖 Wails runtime，通过 callbacks 发事件。
-- `internal/state`：兼容 `favorites.json`、`open-sessions.json`、`settings.json` 的 Store。所有读写共用互斥锁，更新在同一锁内完成，写入采用临时文件和原子替换。
+- `internal/state`：兼容 `favorites.json`、`open-sessions.json`、`settings.json` 和 `projects.json` 的 Store。所有读写共用互斥锁，更新在同一锁内完成，写入采用临时文件和原子替换。
 - `internal/agent`：可启动/取消的 Watcher。后端通常约 1~2 秒拉取 `claude agents --json` 并推送 `agents:update`；前端每 30 秒调用 GetAgents 作为 watcher 缓存兜底，不是每 10 秒直接轮询。
 - `internal/session`：扫描和解析 `~/.claude/projects/**/*.jsonl`。
 - `internal/usage`：解析 Claude usage、按 message ID 去重，并缓存会话/项目 token 汇总；由 App 的 `GetUsageSummary` 暴露只读查询。
@@ -31,7 +31,7 @@ main.go
 - `app/bootstrap.js` 统一创建 controller、DOM、事件路由和生命周期。
 - `terminal/` 处理 xterm、输入、粘贴、resize、主题和 terminal token。
 - `agents/` 处理状态分类、完成边沿、未读徽标和提示动画。
-- `sessions/` 处理列表、分组、折叠、归档、恢复、新会话 FIFO 配对；`pairing.js` 和 `view.js` 保持纯逻辑/DOM 边界。
+- `sessions/` 处理项目目录栏、列表、分组、折叠、归档、恢复、新会话 FIFO 配对；`pairing.js` 和 `view.js` 保持纯逻辑/DOM 边界。
 - `settings/` 管理 UI theme、terminal theme、Shell 和设置菜单异步构建。
 - `updates/` 管理检查/可用/应用状态机、进度和更新菜单。
 - `state/` 是共享业务 state 的唯一来源；controller 不复制 active token、pending 或各类 Map/Set。
@@ -76,9 +76,15 @@ JSON 格式必须保持：
 {"ids": []}
 // settings.json
 {"shell": "cmd"}
+// projects.json
+{"dirs": ["C:\\work\\project"]}
 ```
 
-默认目录是 exe 同目录；测试通过 TempDir/注入目录隔离用户数据。临时文件替换失败也必须向上返回并清理残留。
+项目配置中的每个元素就是用户选择并保存的工作目录字符串，不是独立的运行时对象。默认文件目录是 exe 同目录；测试通过 TempDir/注入目录隔离用户数据。临时文件替换失败也必须向上返回并清理残留。
+
+项目存储和 App 边界必须保持以下语义：缺失 `projects.json` 返回安全空列表，损坏文件返回安全空列表并保留错误；添加使用规范化目录，重复目录幂等成功；删除不存在的目录也幂等成功。App 的 `ListProjects`、`ChooseProjectDir`、`AddProject`、`DeleteProject` 分别负责读取、打开原生目录选择器、校验并保存目录、移除配置。选择取消不保存；删除只移除配置，不删除真实目录、历史会话或终端。
+
+前端启动时先加载项目目录并渲染项目栏，因此没有会话的目录仍可见；已保存但后来不存在的目录也保持可见。项目 `+` 直接复用 `StartNew(dir)`，失败时不写入 pending 会话。应用重启后项目栏从 `projects.json` 恢复，而会话恢复使用会话记录自身的 `dir`，不从项目目录列表推导。
 
 ### Update 状态机
 
@@ -111,6 +117,21 @@ go test -tags integration ./internal/agent     # claude agents --json
 ```
 
 普通测试重点覆盖：state TempDir/事务、terminal fake PTY 与锁边界、agent fake Fetcher 取消、App 命令/存储编排、前端 Node 内置测试和 fake DOM。修改前端后必须先 `npm run build`，因为 `frontend/dist` 会被 Go embed。
+
+项目目录相关的最小验证命令：
+
+```powershell
+cd frontend
+node --test test/app-bootstrap.test.js test/backend-bindings.test.js test/projects-controller.test.js test/session-controller.test.js
+node --check src/app/bootstrap.js
+node --check src/sessions/controller.js
+node --check src/sessions/view.js
+cd ..
+go test ./internal/state ./internal/app
+git diff --check
+```
+
+这些测试覆盖项目保存/重启读取、缺失或损坏配置、规范化重复目录、空目录显示、选择取消与添加、删除确认/失败边界、真实目录和已有会话不受删除影响、失效目录新建失败，以及 Wails wrapper 方法集合和参数转发。
 
 ## 扩展流程
 

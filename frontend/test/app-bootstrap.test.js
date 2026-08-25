@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createApplication } from '../src/app/bootstrap.js';
 
 const REQUIRED_IDS = [
-  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'session-list', 'hidden-panel', 'hidden-count',
+  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'project-bar', 'btn-add-project', 'project-list', 'session-list', 'hidden-panel', 'hidden-count',
   'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
@@ -179,6 +179,7 @@ test('bootstrap creates controllers around one shared state and wires callbacks'
   assert.equal(fixture.calls.factories.agent.state, fixture.app.state);
   assert.equal(fixture.calls.factories.session.state, fixture.app.state);
   assert.equal(fixture.calls.factories.usage.state, fixture.app.state);
+  assert.deepEqual(fixture.app.state.projects, []);
   assert.equal(typeof fixture.calls.factories.usage.GetUsageSummary, 'function');
   assert.equal(typeof fixture.calls.factories.session.onPair, 'function');
   const usageChildren = fixture.elements.get('usage-summary').children;
@@ -194,6 +195,17 @@ test('bootstrap creates controllers around one shared state and wires callbacks'
   assert.deepEqual(fixture.calls.routed, [['fold'], ['usage-activate', null], ['active'], ['frame'], ['toast', 'hello']]);
   assert.deepEqual(fixture.calls.clipboardWrites, ['复制内容']);
   assert.equal(fixture.calls.clipboardReads, 1);
+});
+
+test('bootstrap passes project APIs and project nodes to the session controller', () => {
+  const fixture = makeFixture();
+  const sessionDeps = fixture.calls.factories.session;
+
+  assert.equal(sessionDeps.projectRoot, fixture.elements.get('project-list'));
+  assert.equal(sessionDeps.addProjectButton, fixture.elements.get('btn-add-project'));
+  for (const name of ['ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject']) {
+    assert.equal(typeof sessionDeps.backend[name], 'function', name);
+  }
 });
 
 test('start is idempotent and initializes session/settings once', async () => {

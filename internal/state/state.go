@@ -40,9 +40,10 @@ func FavPath() string   { return filepath.Join(defaultStore.dir, "favorites.json
 func OpenPath() string  { return filepath.Join(defaultStore.dir, "open-sessions.json") }
 func ShellPath() string { return filepath.Join(defaultStore.dir, "settings.json") }
 
-func (s *Store) favPath() string   { return filepath.Join(s.dir, "favorites.json") }
-func (s *Store) openPath() string  { return filepath.Join(s.dir, "open-sessions.json") }
-func (s *Store) shellPath() string { return filepath.Join(s.dir, "settings.json") }
+func (s *Store) favPath() string      { return filepath.Join(s.dir, "favorites.json") }
+func (s *Store) openPath() string     { return filepath.Join(s.dir, "open-sessions.json") }
+func (s *Store) shellPath() string    { return filepath.Join(s.dir, "settings.json") }
+func (s *Store) projectsPath() string { return filepath.Join(s.dir, "projects.json") }
 
 func atomicWrite(path string, data []byte) error {
 	dir := filepath.Dir(path)
@@ -210,6 +211,113 @@ func (s *Store) LoadOpen() ([]string, error) {
 		return nil, nil
 	}
 	return doc.Ids, nil
+}
+
+type projectsDocument struct {
+	Dirs []string `json:"dirs"`
+}
+
+func normalizeProjectDir(dir string) (string, error) {
+	return filepath.Abs(filepath.Clean(dir))
+}
+
+func normalizeProjectDirs(dirs []string) ([]string, error) {
+	result := make([]string, 0, len(dirs))
+	seen := make(map[string]struct{}, len(dirs))
+	for _, dir := range dirs {
+		normalized, err := normalizeProjectDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func (s *Store) loadProjectsLocked() ([]string, error) {
+	doc := projectsDocument{Dirs: []string{}}
+	found, err := loadJSON(s.projectsPath(), &doc)
+	if err != nil {
+		return []string{}, err
+	}
+	if !found {
+		return []string{}, nil
+	}
+	return normalizeProjectDirs(doc.Dirs)
+}
+
+func saveProjectsLocked(path string, dirs []string) error {
+	b, err := json.Marshal(projectsDocument{Dirs: dirs})
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, b)
+}
+
+func (s *Store) LoadProjects() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadProjectsLocked()
+}
+
+func (s *Store) SaveProjects(dirs []string) error {
+	normalized, err := normalizeProjectDirs(dirs)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return saveProjectsLocked(s.projectsPath(), normalized)
+}
+
+func (s *Store) AddProject(dir string) error {
+	normalized, err := normalizeProjectDir(dir)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dirs, err := s.loadProjectsLocked()
+	if err != nil {
+		return err
+	}
+	for _, existing := range dirs {
+		if existing == normalized {
+			return nil
+		}
+	}
+	dirs = append(dirs, normalized)
+	return saveProjectsLocked(s.projectsPath(), dirs)
+}
+
+func (s *Store) DeleteProject(dir string) error {
+	normalized, err := normalizeProjectDir(dir)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dirs, err := s.loadProjectsLocked()
+	if err != nil {
+		return err
+	}
+	filtered := dirs[:0]
+	removed := false
+	for _, existing := range dirs {
+		if existing == normalized {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	if !removed {
+		return nil
+	}
+	return saveProjectsLocked(s.projectsPath(), filtered)
 }
 
 func (s *Store) SetShell(name string) error {

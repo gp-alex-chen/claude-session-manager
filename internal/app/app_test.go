@@ -14,6 +14,7 @@ import (
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 	"github.com/gp-alex-chen/claude-session-manager/internal/terminal"
 	"github.com/gp-alex-chen/claude-session-manager/internal/usage"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func testApp(t *testing.T) (*App, *state.Store, *[]string, string) {
@@ -199,11 +200,118 @@ func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 		"GetOpenSessions", "GetShell", "ShellInstalled", "SetShell", "ListSessions", "ListHiddenSessions",
 		"StartSession", "StartNew", "TermWrite", "TermResize", "TermKill", "NotifyBeep", "DebugLog",
 		"GetAgents", "GetVersion", "GetUsageSummary",
+		"ListProjects", "ChooseProjectDir", "AddProject", "DeleteProject",
 	}
 	for _, name := range want {
 		if _, ok := typ.MethodByName(name); !ok {
 			t.Errorf("missing binding method %s", name)
 		}
+	}
+}
+
+func TestProjectDirectoriesNormalizeDuplicatesWithoutSavingTwice(t *testing.T) {
+	a, _, _, root := testApp(t)
+	firstDir := filepath.Join(root, "project")
+	if err := os.MkdirAll(firstDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddProject(firstDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddProject(firstDir + string(os.PathSeparator) + "."); err != nil {
+		t.Fatalf("duplicate AddProject should be idempotent: %v", err)
+	}
+
+	got := a.ListProjects()
+	if !reflect.DeepEqual(got, []string{firstDir}) {
+		t.Fatalf("projects after duplicate add = %#v, want one normalized directory", got)
+	}
+}
+
+func TestChooseProjectDirUsesInjectedChooserAndSupportsCancel(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	called := 0
+	a.chooseDirFn = func(ctx context.Context, dialogOptions runtime.OpenDialogOptions) (string, error) {
+		called++
+		if ctx == nil || dialogOptions.Title == "" {
+			t.Fatal("chooser received incomplete context or options")
+		}
+		return `C:\chosen`, nil
+	}
+	got, err := a.ChooseProjectDir()
+	if err != nil || got != `C:\chosen` || called != 1 {
+		t.Fatalf("chosen dir=%q err=%v calls=%d", got, err, called)
+	}
+
+	a.chooseDirFn = func(context.Context, runtime.OpenDialogOptions) (string, error) { return "", nil }
+	got, err = a.ChooseProjectDir()
+	if err != nil || got != "" {
+		t.Fatalf("cancel result=%q err=%v", got, err)
+	}
+	if projects := a.ListProjects(); len(projects) != 0 {
+		t.Fatalf("chooser should not save projects: %v", projects)
+	}
+}
+
+func TestAddProjectRejectsBlankMissingAndFilePaths(t *testing.T) {
+	a, _, _, root := testApp(t)
+	filePath := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(filePath, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"   ", filepath.Join(root, "missing"), filePath} {
+		if err := a.AddProject(dir); err == nil {
+			t.Fatalf("AddProject(%q) unexpectedly succeeded", dir)
+		}
+	}
+}
+
+func TestAddProjectAcceptsDirectoryAndRejectsCaseInsensitiveDuplicate(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	dir := t.TempDir()
+	if err := a.AddProject(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddProject(strings.ToUpper(dir)); err != nil {
+		t.Fatalf("case-insensitive duplicate should be idempotent: %v", err)
+	}
+	projects := a.ListProjects()
+	if len(projects) != 1 || !strings.EqualFold(projects[0], dir) {
+		t.Fatalf("projects after duplicate add = %v", projects)
+	}
+}
+
+func TestListProjectsCorruptionReturnsSafeListAndLogs(t *testing.T) {
+	a, _, logs, root := testApp(t)
+	if err := os.WriteFile(filepath.Join(root, "projects.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projects := a.ListProjects()
+	if projects == nil || len(projects) != 0 {
+		t.Fatalf("projects after corruption = %v", projects)
+	}
+	if !containsLog(*logs, "projects.json") {
+		t.Fatalf("projects corruption diagnostic missing: %v", *logs)
+	}
+}
+
+func TestDeleteProjectRemovesConfigurationOnly(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	if err := a.DeleteProject("   "); err == nil {
+		t.Fatal("DeleteProject(blank) unexpectedly succeeded")
+	}
+	dir := t.TempDir()
+	if err := a.AddProject(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DeleteProject(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("DeleteProject removed the real directory: %v", err)
+	}
+	if projects := a.ListProjects(); len(projects) != 0 {
+		t.Fatalf("projects after deletion = %v", projects)
 	}
 }
 

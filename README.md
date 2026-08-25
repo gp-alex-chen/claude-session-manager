@@ -6,9 +6,10 @@ Windows 原生 Claude 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成
 
 - 多会话 ConPTY 终端：会话后台保持运行，切换互不关闭；支持恢复、新建、重命名、归档和关闭。
 - 会话按项目分组；折叠、全局眼睛筛选、完成徽标、未读提示和完成动画保持独立。
+- 项目栏保存用户选择的工作目录字符串；空目录也会显示，目录项的 `+` 使用该目录创建新会话。
 - 左下角「⚙ 设置」管理日间/夜间 UI 主题、8 套终端主题和底层 Shell（cmd / pwsh）。
 - 设置中的「更新」只检查 GitHub Releases 的 `v*-wails` 正式版本，可显示下载进度并自动替换重启。
-- 本地状态兼容 `favorites.json`、`open-sessions.json`、`settings.json`，默认位于 exe 同目录。
+- 本地状态包括 `favorites.json`、`open-sessions.json`、`settings.json` 和 `projects.json`，默认位于 exe 同目录。
 
 ## 前置条件
 
@@ -81,7 +82,25 @@ agent watcher（约 1~2s） -> agents:update -> 徽标/未读/完成提示
 - `favorites.json` 保存会话 ID、显示别名和隐藏 ID。
 - `open-sessions.json` 保存关闭应用时仍运行的会话 ID。
 - `settings.json` 保存 `cmd`/`pwsh` 选择。
+- `projects.json` 保存项目工作目录数组，格式为 `{"dirs":["..."]}`。项目只是用户选择并保存的目录字符串，不包含额外的项目数据。
 - 写入使用同一 Store 锁和临时文件替换；读取损坏时返回安全默认并记录诊断。
+
+项目目录由 Wails App 提供 `ListProjects`、`ChooseProjectDir`、`AddProject` 和 `DeleteProject`。目录选择器取消时不保存；添加目录会按规范化路径去重，重复添加幂等成功。删除只移除 `projects.json` 中的配置，不删除真实目录、历史会话或终端。重启时项目栏从 `projects.json` 恢复，即使目录当前没有会话或后来已不存在也继续显示；项目 `+` 复用 `StartNew(dir)`。会话恢复仍以会话自身保存的 `dir` 为准。
+
+项目相关的确定性覆盖包括：项目持久化往返、损坏或缺失文件的安全读取、规范化重复目录、空目录渲染、添加/取消/删除边界、项目 `+` 的 `StartNew(dir)` 转发、失效目录启动失败不产生 pending 会话，以及重启恢复时使用会话自身目录。绑定集合和参数转发由 frontend binding test 校验。
+
+可单独运行项目相关检查：
+
+```powershell
+cd frontend
+node --test test/app-bootstrap.test.js test/backend-bindings.test.js test/projects-controller.test.js test/session-controller.test.js
+node --check src/app/bootstrap.js
+node --check src/sessions/controller.js
+node --check src/sessions/view.js
+cd ..
+go test ./internal/state ./internal/app
+git diff --check
+```
 
 ## 发布与更新
 

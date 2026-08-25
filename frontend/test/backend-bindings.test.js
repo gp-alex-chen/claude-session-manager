@@ -12,6 +12,7 @@ const expected = [
   'NotifyBeep', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
   'DeleteSession', 'UnhideSession', 'StartSession', 'StartNew', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
+  'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject',
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
@@ -28,7 +29,7 @@ function extractBackendExports(source) {
 
 const backendNames = extractBackendExports(backend);
 
-test('Wails wrapper and backend boundary expose the same 21 methods', () => {
+test('Wails wrapper and backend boundary expose the same 25 methods', () => {
   assert.equal(new Set(backendNames).size, backendNames.length);
   assert.deepEqual(new Set(wrapperNames), new Set(expected));
   assert.deepEqual(new Set(backendNames), new Set(expected));
@@ -53,5 +54,20 @@ test('usage wrapper forwards both arguments unchanged', () => {
   assert.match(
     binding,
     /export function GetUsageSummary\(sessionID, projectDir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetUsageSummary'\]\(sessionID, projectDir\);\s*\}/,
+  );
+});
+
+test('directory project wrappers forward arguments unchanged', () => {
+  assert.match(
+    binding,
+    /export function ChooseProjectDir\(\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['ChooseProjectDir'\]\(\);\s*\}/,
+  );
+  assert.match(
+    binding,
+    /export function AddProject\(dir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['AddProject'\]\(dir\);\s*}/,
+  );
+  assert.match(
+    binding,
+    /export function DeleteProject\(dir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['DeleteProject'\]\(dir\);\s*\}/,
   );
 });
