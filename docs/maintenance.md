@@ -31,7 +31,7 @@ main.go
 - `app/bootstrap.js` 统一创建 controller、DOM、事件路由和生命周期。
 - `terminal/` 处理 xterm、输入、粘贴、resize、主题和 terminal token。
 - `agents/` 处理状态分类、完成边沿、未读徽标和提示动画。
-- `sessions/` 处理项目目录栏、列表、分组、折叠、归档、恢复、新会话 FIFO 配对；`pairing.js` 和 `view.js` 保持纯逻辑/DOM 边界。
+- `sessions/` 处理项目入口、会话列表目录分组、折叠、归档、恢复和新会话 FIFO 配对；`pairing.js` 和 `view.js` 保持纯逻辑/DOM 边界。
 - `settings/` 管理 UI theme、terminal theme、Shell 和设置菜单异步构建。
 - `updates/` 管理检查/可用/应用状态机、进度和更新菜单。
 - `state/` 是共享业务 state 的唯一来源；controller 不复制 active token、pending 或各类 Map/Set。
@@ -84,7 +84,7 @@ JSON 格式必须保持：
 
 项目存储和 App 边界必须保持以下语义：缺失 `projects.json` 返回安全空列表，损坏文件返回安全空列表并保留错误；添加使用规范化目录，重复目录幂等成功；删除不存在的目录也幂等成功。App 的 `ListProjects`、`ChooseProjectDir`、`AddProject`、`DeleteProject` 分别负责读取、打开原生目录选择器、校验并保存目录、移除配置。选择取消不保存；删除只移除配置，不删除真实目录、历史会话或终端。
 
-前端启动时先加载项目目录并渲染项目栏，因此没有会话的目录仍可见；已保存但后来不存在的目录也保持可见。项目 `+` 直接复用 `StartNew(dir)`，失败时不写入 pending 会话。应用重启后项目栏从 `projects.json` 恢复，而会话恢复使用会话记录自身的 `dir`，不从项目目录列表推导。
+前端启动时先加载项目目录，再按规范化完整路径把它们合并到会话列表；因此没有会话的目录仍以空分组可见，已保存但后来不存在的目录也保持可见。顶部只显示「项目」和加号，选择成功后空目录分组立即出现，目录分组的 `+` 直接复用 `StartNew(dir)`，失败时不写入 pending 会话。应用重启后目录从 `projects.json` 恢复，而会话恢复使用会话记录自身的 `dir`，不从项目目录列表推导。前端不提供删除按钮；`DeleteProject` 仅作为后端/绑定兼容能力保留。
 
 ### Update 状态机
 
@@ -131,7 +131,7 @@ go test ./internal/state ./internal/app
 git diff --check
 ```
 
-这些测试覆盖项目保存/重启读取、缺失或损坏配置、规范化重复目录、空目录显示、选择取消与添加、删除确认/失败边界、真实目录和已有会话不受删除影响、失效目录新建失败，以及 Wails wrapper 方法集合和参数转发。
+这些测试覆盖项目保存/重启读取、缺失或损坏配置、规范化重复目录、单行项目入口、空目录分组、选择取消与添加、目录分组加号、失效目录新建失败，以及 Wails wrapper 方法集合和参数转发。Go/App 测试另外覆盖兼容性 `DeleteProject` 只移除配置、不触碰真实目录和已有会话的边界；前端不提供删除确认或删除按钮。
 
 ## 扩展流程
 

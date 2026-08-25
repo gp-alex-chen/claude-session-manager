@@ -1,6 +1,6 @@
 import { leafOf } from '../utils.js';
 import { listSig, pairPendingSessions } from './pairing.js';
-import { renderHiddenSessions, renderProjectBar, renderSessionList, updateProjectUsageLabels } from './view.js';
+import { dirIdentity, renderHiddenSessions, renderSessionList, updateProjectUsageLabels } from './view.js';
 
 export function createSessionController(deps) {
   const {
@@ -9,7 +9,6 @@ export function createSessionController(deps) {
     terminalController,
     agentController,
     listRoot,
-    projectRoot = null,
     addProjectButton = null,
     hiddenPanel,
     hiddenCount,
@@ -34,6 +33,7 @@ export function createSessionController(deps) {
   let started = false;
   let ctxTarget = null;
   let addProjectBound = false;
+  let sessionsLoaded = false;
 
   const contextMenu = documentRef.createElement('div');
   contextMenu.id = 'ctx-menu';
@@ -53,7 +53,7 @@ export function createSessionController(deps) {
   function refreshFoldState() {
     for (const item of listRoot.querySelectorAll('.group .session-item')) {
       const id = item.dataset.id;
-      const dir = item.dataset.dir;
+      const dir = dirIdentity(item.dataset.dir);
       const kind = agentController.classifyAgent(id);
       const hidden = state.collapsedDirs.has(dir) && (state.eyeGlobalOff || kind === 'idle');
       item.classList.toggle('fold-hidden', hidden);
@@ -127,6 +127,7 @@ export function createSessionController(deps) {
     }
     list = Array.isArray(list) ? list : [];
     pairNewSessions(list);
+    sessionsLoaded = true;
     renderSessions(list);
     return true;
   }
@@ -152,20 +153,22 @@ export function createSessionController(deps) {
     for (const session of list) state.sessionDirs.set(session.id, session.dir);
     if (!state.collapseAllDone && list.length) {
       state.collapseAllDone = true;
-      for (const session of list) state.collapsedDirs.add(session.dir);
+      for (const session of list) state.collapsedDirs.add(dirIdentity(session.dir));
     }
 
     renderSessionList({
       listRoot,
       list,
+      projects: state.projects,
       state,
       agentController,
       el,
       onStartNew: startNew,
       onToggleGroup: (dir, group, chevron) => {
+        const identity = dirIdentity(dir);
         const collapsed = group.classList.toggle('collapsed');
-        if (collapsed) state.collapsedDirs.add(dir);
-        else state.collapsedDirs.delete(dir);
+        if (collapsed) state.collapsedDirs.add(identity);
+        else state.collapsedDirs.delete(identity);
         chevron.classList.toggle('collapsed', collapsed);
         refreshFoldState();
       },
@@ -197,31 +200,20 @@ export function createSessionController(deps) {
     }
   }
 
-  function renderProjects() {
-    if (!projectRoot) return;
-    renderProjectBar({
-      listRoot: projectRoot,
-      projects: Array.isArray(state.projects) ? state.projects : [],
-      el,
-      onStartNew: startNew,
-      onDeleteProject: deleteProject,
-    });
-  }
-
   async function loadProjects() {
     if (typeof backend?.ListProjects !== 'function') {
       state.projects = [];
-      renderProjects();
+      if (sessionsLoaded) renderSessions(lastLoaded);
       return true;
     }
     try {
       const projects = await backend.ListProjects();
       state.projects = Array.isArray(projects) ? projects : [];
-      renderProjects();
+      if (sessionsLoaded) renderSessions(lastLoaded);
       return true;
     } catch (error) {
       state.projects = [];
-      renderProjects();
+      if (sessionsLoaded) renderSessions(lastLoaded);
       setStatus('加载项目失败: ' + error, 'warn');
       return false;
     }
@@ -243,18 +235,6 @@ export function createSessionController(deps) {
       await loadProjects();
     } catch (error) {
       setStatus('添加项目失败: ' + error, 'warn');
-    }
-  }
-
-  async function deleteProject(dir) {
-    if (typeof windowRef?.confirm === 'function'
-      && !windowRef.confirm('移除项目配置？\n不会删除目录、会话或终端。')) return;
-    if (typeof backend?.DeleteProject !== 'function') return;
-    try {
-      await backend.DeleteProject(dir);
-      await loadProjects();
-    } catch (error) {
-      setStatus('删除项目失败: ' + error, 'warn');
     }
   }
 
@@ -436,7 +416,6 @@ export function createSessionController(deps) {
     autoRefreshSessions,
     closeRealSession,
     deleteSession,
-    deleteProject,
     initialize,
     listSig,
     loadSessions,

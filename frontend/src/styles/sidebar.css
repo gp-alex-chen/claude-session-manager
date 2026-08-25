@@ -91,7 +91,7 @@
 #project-bar {
   padding: 8px 10px 6px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel-2);
+  background: var(--panel);
 }
 .project-bar-header {
   display: flex;
@@ -121,61 +121,6 @@
   border-color: var(--border-strong);
   color: var(--accent);
 }
-#project-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: 168px;
-  overflow-y: auto;
-}
-.project-item {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 5px 5px 5px 8px;
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12px;
-}
-.project-item:hover { background: var(--hover-bg); }
-.project-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.project-plus {
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--text-faint);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 5px;
-  transition: color .12s, background .12s;
-}
-.project-plus:hover { background: var(--accent-soft); color: var(--accent); }
-.project-delete {
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--text-faint);
-  cursor: pointer;
-  font-size: 15px;
-  line-height: 1;
-  padding: 0 4px;
-  transition: color .12s, background .12s;
-}
-.project-delete:hover { background: var(--danger-soft); color: var(--danger); }
-.project-empty {
-  padding: 5px 8px;
-  color: var(--text-faint);
-  font-size: 11px;
-}
-
 #session-list { flex: 1; overflow-y: auto; padding: 10px 10px 18px; }
 .group { margin-bottom: 8px; }
 .group-head {

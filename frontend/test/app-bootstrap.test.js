@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createApplication } from '../src/app/bootstrap.js';
 
 const REQUIRED_IDS = [
-  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'project-bar', 'btn-add-project', 'project-list', 'session-list', 'hidden-panel', 'hidden-count',
+  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'project-bar', 'btn-add-project', 'session-list', 'hidden-panel', 'hidden-count',
   'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
@@ -197,13 +197,14 @@ test('bootstrap creates controllers around one shared state and wires callbacks'
   assert.equal(fixture.calls.clipboardReads, 1);
 });
 
-test('bootstrap passes project APIs and project nodes to the session controller', () => {
+test('bootstrap passes project APIs and the top project add button to the session controller', () => {
   const fixture = makeFixture();
   const sessionDeps = fixture.calls.factories.session;
 
-  assert.equal(sessionDeps.projectRoot, fixture.elements.get('project-list'));
+  assert.ok(fixture.elements.get('project-bar'));
+  assert.equal(fixture.calls.factories.session.projectRoot, undefined);
   assert.equal(sessionDeps.addProjectButton, fixture.elements.get('btn-add-project'));
-  for (const name of ['ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject']) {
+  for (const name of ['ListProjects', 'ChooseProjectDir', 'AddProject']) {
     assert.equal(typeof sessionDeps.backend[name], 'function', name);
   }
 });

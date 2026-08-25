@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 
 import { createAppState } from '../src/state/app-state.js';
 import { createSessionController } from '../src/sessions/controller.js';
@@ -45,7 +44,6 @@ class FakeNode {
 function makeFixture(options = {}) {
   const state = createAppState();
   const listRoot = new FakeNode();
-  const projectRoot = new FakeNode();
   const addProjectButton = new FakeNode();
   let renderCount = 0;
   Object.defineProperty(listRoot, 'innerHTML', {
@@ -65,10 +63,7 @@ function makeFixture(options = {}) {
     innerWidth: 1000,
     innerHeight: 800,
     prompt: () => 'Renamed',
-    confirm: () => {
-      confirmCalls.push(true);
-      return options.confirmResult ?? true;
-    },
+    confirm: () => options.confirmResult ?? true,
     addEventListener() {},
   };
   const terminals = new Map();
@@ -101,13 +96,11 @@ function makeFixture(options = {}) {
     renderUnreadMarks: () => {},
   };
   const statuses = [];
-  const confirmCalls = [];
   let listIndex = 0;
   const listCalls = [];
   const openCalls = [];
   const projectCalls = [];
   const projectAddCalls = [];
-  const projectDeleteCalls = [];
   const chooserCalls = [];
   let projectIndex = 0;
   const listResults = options.listResults || [[]];
@@ -137,7 +130,6 @@ function makeFixture(options = {}) {
       return options.chosenDir || '';
     }),
     AddProject: options.AddProject || (async (dir) => { projectAddCalls.push(dir); }),
-    DeleteProject: options.DeleteProject || (async (dir) => { projectDeleteCalls.push(dir); }),
   };
   const intervals = [];
   const cleared = [];
@@ -147,7 +139,6 @@ function makeFixture(options = {}) {
     terminalController,
     agentController,
     listRoot,
-    projectRoot,
     addProjectButton,
     hiddenPanel,
     hiddenCount,
@@ -172,13 +163,36 @@ function makeFixture(options = {}) {
   });
   return {
     state, controller, backend, terminals, statuses, intervals, cleared, listCalls,
-    listRoot, projectRoot, addProjectButton, terminalController, projectCalls, projectAddCalls,
-    chooserCalls, openCalls, projectDeleteCalls, confirmCalls,
+    listRoot, addProjectButton, terminalController, projectCalls, projectAddCalls,
+    chooserCalls, openCalls,
     get renderCount() { return renderCount; },
   };
 }
 
 const session = (id, dir = 'work', name = id, time = 'today') => ({ id, dir, name, time });
+
+function renderProjectGroups(projects, list, onStartNew = () => {}) {
+  const listRoot = new FakeNode();
+  renderSessionList({
+    listRoot,
+    projects,
+    list,
+    state: createAppState(),
+    agentController: { classifyAgent: () => 'idle' },
+    el: (tag, className, text) => {
+      const node = new FakeNode();
+      node.className = className;
+      node.textContent = text || '';
+      return node;
+    },
+    onStartNew,
+    onToggleGroup() {},
+    onOpen() {},
+    onClose() {},
+    onContextMenu() {},
+  });
+  return listRoot;
+}
 
 test('listSig ignores time but tracks id, directory, and name', () => {
   const first = [session('a', 'work', 'A', 'one')];
@@ -262,16 +276,63 @@ test('rendering a session list invokes the single project prefetch entry point',
   assert.deepEqual(fixture.projectCalls, [sessions]);
 });
 
-test('initialize loads projects before an empty session list and renders the project bar', async () => {
-  const dir = 'C:\\work\\alpha';
-  const fixture = makeFixture({ projectResults: [[dir]], listResults: [[]] });
+test('a saved project with no sessions renders one empty group', () => {
+  const dir = 'C:\\work\\empty';
+  const listRoot = renderProjectGroups([dir], []);
 
-  await fixture.controller.initialize();
+  assert.equal(listRoot.children.filter((node) => node.className === 'group').length, 1);
+  assert.equal(listRoot.children[0].children[1].children.length, 0);
+});
 
-  assert.deepEqual(fixture.state.projects, [dir]);
-  assert.equal(fixture.projectRoot.children[0].className, 'project-item');
-  assert.equal(fixture.listCalls.length, 1);
-  assert.equal(fixture.openCalls.length, 1);
+test('a project and a session with the same directory render one group', () => {
+  const projectDir = 'C:\\Work\\Alpha';
+  const sessionDir = 'c:/work/alpha/';
+  const listRoot = renderProjectGroups([projectDir], [session('one', sessionDir)]);
+
+  assert.equal(listRoot.children.filter((node) => node.className === 'group').length, 1);
+  assert.equal(listRoot.children[0].children[1].children.length, 1);
+});
+
+test('case, slash, and non-root trailing-slash differences do not duplicate a group', () => {
+  const listRoot = renderProjectGroups([
+    'C:\\Work\\Alpha',
+    'c:/work/alpha/',
+  ], []);
+
+  assert.equal(listRoot.children.filter((node) => node.className === 'group').length, 1);
+});
+
+test('an empty project group plus starts a session with the saved directory', () => {
+  const dir = 'C:\\work\\empty';
+  const started = [];
+  const listRoot = renderProjectGroups([dir], [], (projectDir) => started.push(projectDir));
+
+  const plus = listRoot.children[0].children[0].children[3];
+  plus.click();
+  assert.deepEqual(started, [dir]);
+});
+
+test('a normalized project/session group plus passes the saved project directory', () => {
+  const projectDir = 'C:\\Work\\Alpha';
+  const sessionDir = 'c:/work/alpha/';
+  const started = [];
+  const listRoot = renderProjectGroups(
+    [projectDir],
+    [session('one', sessionDir)],
+    (dir) => started.push(dir),
+  );
+
+  listRoot.children[0].children[0].children[3].click();
+  assert.deepEqual(started, [projectDir]);
+});
+
+test('directories with the same leaf name remain separate groups', () => {
+  const listRoot = renderProjectGroups([
+    'C:\\one\\same',
+    'C:\\two\\same',
+  ], []);
+
+  assert.equal(listRoot.children.filter((node) => node.className === 'group').length, 2);
 });
 
 test('cancelled project chooser does not call AddProject', async () => {
@@ -281,47 +342,6 @@ test('cancelled project chooser does not call AddProject', async () => {
 
   assert.equal(fixture.chooserCalls.length, 1);
   assert.deepEqual(fixture.projectAddCalls, []);
-});
-
-test('chosen project is added with the same directory and project bar refreshes', async () => {
-  const dir = 'C:\\work\\chosen';
-  const fixture = makeFixture({ chosenDir: dir, projectResults: [[], [dir]] });
-
-  await fixture.controller.initialize();
-  await fixture.addProjectButton.click();
-
-  assert.deepEqual(fixture.projectAddCalls, [dir]);
-  assert.deepEqual(fixture.state.projects, [dir]);
-  const projectItem = fixture.projectRoot.children.at(-1);
-  assert.equal(projectItem.children[0].title, dir);
-});
-
-test('project plus starts a session in that project directory', async () => {
-  const dir = 'C:\\work\\alpha';
-  const started = [];
-  const fixture = makeFixture({
-    projectResults: [[dir]],
-    StartNew: async (projectDir) => { started.push(projectDir); return 'new-project'; },
-  });
-
-  await fixture.controller.initialize();
-  await fixture.projectRoot.children[0].children[1].click();
-
-  assert.deepEqual(started, [dir]);
-  assert.deepEqual(fixture.state.pendingNew, [{ token: 'new-project', dir }]);
-});
-
-test('project plus start failure does not add a pending session', async () => {
-  const dir = 'C:\\work\\alpha';
-  const fixture = makeFixture({
-    projectResults: [[dir]],
-    StartNew: async () => { throw new Error('failed'); },
-  });
-
-  await fixture.controller.initialize();
-  await fixture.projectRoot.children[0].children[1].click();
-
-  assert.deepEqual(fixture.state.pendingNew, []);
 });
 
 test('project load failure reports status but still loads sessions and open sessions', async () => {
@@ -345,61 +365,48 @@ test('project add button binds once across repeated project refreshes', async ()
   assert.equal(fixture.chooserCalls.length, 1);
 });
 
-test('confirmed project deletion removes configuration only', async () => {
-  const dir = process.cwd();
-  const fixture = makeFixture({ projectResults: [[dir], []], listResults: [[session('real', dir)]] });
-  fixture.terminalController.openTab('terminal-1', 'Existing');
-  fixture.state.sessionDirs.set('real', dir);
+test('adding a chosen project refreshes session-list with an empty directory group', async () => {
+  const dir = 'C:\\work\\chosen';
+  const fixture = makeFixture({ chosenDir: dir, projectResults: [[], [dir]], listResults: [[]] });
 
   await fixture.controller.initialize();
-  await fixture.projectRoot.children.at(-1).children[2].click();
+  await fixture.addProjectButton.click();
 
-  assert.deepEqual(fixture.projectDeleteCalls, [dir]);
-  assert.equal(fixture.confirmCalls.length, 1);
-  assert.deepEqual(fixture.state.projects, []);
-  assert.equal(fs.existsSync(dir), true);
-  assert.equal(fixture.terminals.has('terminal-1'), true);
-  assert.equal(fixture.state.sessionDirs.get('real'), dir);
-  assert.deepEqual(fixture.terminalController.closed, []);
-});
-
-test('cancelled project deletion leaves configuration untouched', async () => {
-  const dir = 'C:\\work\\keep';
-  const fixture = makeFixture({ projectResults: [[dir]], confirmResult: false });
-
-  await fixture.controller.initialize();
-  await fixture.projectRoot.children.at(-1).children[2].click();
-
-  assert.deepEqual(fixture.projectDeleteCalls, []);
-  assert.equal(fixture.confirmCalls.length, 1);
+  assert.deepEqual(fixture.projectAddCalls, [dir]);
   assert.deepEqual(fixture.state.projects, [dir]);
+  const groups = fixture.listRoot.children.filter((node) => node.className === 'group');
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].children[0].className, 'group-head');
+  assert.equal(groups[0].children[1].className, 'group-body');
+  assert.equal(groups[0].children[1].children.length, 0);
+  assert.equal(groups[0].children[0].children[3].className, 'plus');
 });
 
-test('project deletion failure reports status and keeps the project', async () => {
-  const dir = 'C:\\work\\keep';
-  const fixture = makeFixture({
-    projectResults: [[dir]],
-    DeleteProject: async () => { throw new Error('delete failed'); },
-  });
+test('initialize renders a saved project as an empty session-list group', async () => {
+  const dir = 'C:\\work\\startup';
+  const fixture = makeFixture({ projectResults: [[dir]], listResults: [[]] });
 
   await fixture.controller.initialize();
-  await fixture.projectRoot.children.at(-1).children[2].click();
 
-  assert.deepEqual(fixture.state.projects, [dir]);
-  assert.match(fixture.statuses.at(-1).message, /删除项目失败/);
+  const groups = fixture.listRoot.children.filter((node) => node.className === 'group');
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].children[0].className, 'group-head');
+  assert.equal(groups[0].children[1].className, 'group-body');
+  assert.equal(groups[0].children[1].children.length, 0);
 });
 
-test('missing saved directory remains visible but failed project plus leaves pending empty', async () => {
+test('saved project group plus start failure leaves pending sessions empty', async () => {
   const dir = 'C:\\missing\\later';
   const fixture = makeFixture({
     projectResults: [[dir]],
+    listResults: [[]],
     StartNew: async () => { throw new Error('start failed'); },
   });
 
   await fixture.controller.initialize();
-  await fixture.projectRoot.children.at(-1).children[1].click();
+  const groups = fixture.listRoot.children.filter((node) => node.className === 'group');
+  await groups[0].children[0].children[3].click();
 
-  assert.deepEqual(fixture.state.projects, [dir]);
   assert.deepEqual(fixture.state.pendingNew, []);
   assert.match(fixture.statuses.at(-1).message, /新建失败/);
 });

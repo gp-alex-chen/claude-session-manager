@@ -1,43 +1,38 @@
 import { leafOf } from '../utils.js';
 import { formatProjectUsage, formatProjectUsageTitle } from '../usage/format.js';
 
-export function renderProjectBar({ listRoot, projects = [], el, onStartNew, onDeleteProject }) {
-  listRoot.innerHTML = '';
-  if (!projects.length) {
-    listRoot.appendChild(el('div', 'project-empty', '暂无项目'));
-    return;
-  }
+export function dirIdentity(dir) {
+  if (typeof dir !== 'string') return '';
+  let normalized = dir.trim().replaceAll('\\', '/');
+  if (!normalized) return '';
 
-  for (const dir of projects) {
-    const item = el('div', 'project-item');
-    const name = el('span', 'project-name', leafOf(dir));
-    name.title = dir;
-    const plus = el('button', 'project-plus', '+');
-    plus.type = 'button';
-    plus.title = '在 ' + dir + ' 新建会话';
-    if (typeof onStartNew === 'function') {
-      plus.addEventListener('click', (event) => {
-        event.stopPropagation();
-        return onStartNew(dir);
-      });
-    }
-    const deleteButton = el('button', 'project-delete', '×');
-    deleteButton.type = 'button';
-    deleteButton.title = '移除项目';
-    if (typeof onDeleteProject === 'function') {
-      deleteButton.addEventListener('click', (event) => {
-        event.stopPropagation();
-        return onDeleteProject(dir);
-      });
-    }
-    item.append(name, plus, deleteButton);
-    listRoot.appendChild(item);
+  const unc = normalized.startsWith('//');
+  normalized = unc
+    ? '//' + normalized.slice(2).replace(/\/+/g, '/')
+    : normalized.replace(/\/+/g, '/');
+  if (normalized === '/') return normalized;
+  if (/^[A-Za-z]:\/$/.test(normalized)) return normalized.toLowerCase();
+  normalized = normalized.replace(/\/+$/, '');
+  if (!normalized) return '/';
+  if (/^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//')) {
+    return normalized.toLowerCase();
   }
+  return normalized;
+}
+
+function projectUsage(usageByProject, dir, identity = dirIdentity(dir)) {
+  if (!usageByProject || typeof usageByProject.get !== 'function') return undefined;
+  if (usageByProject.has(dir)) return usageByProject.get(dir);
+  for (const [projectDir, summary] of usageByProject) {
+    if (dirIdentity(projectDir) === identity) return summary;
+  }
+  return undefined;
 }
 
 export function renderSessionList({
   listRoot,
-  list,
+  list = [],
+  projects = [],
   state,
   agentController,
   el,
@@ -51,29 +46,53 @@ export function renderSessionList({
   const groups = new Map();
   for (const session of list) {
     state.sessionNames.set(session.id, session.name);
-    if (!groups.has(session.dir)) groups.set(session.dir, []);
-    groups.get(session.dir).push(session);
+    const identity = dirIdentity(session.dir);
+    if (!groups.has(identity)) {
+      groups.set(identity, {
+        identity,
+        dir: session.dir,
+        projectDir: null,
+        items: [],
+      });
+    }
+    groups.get(identity).items.push(session);
+  }
+  for (const projectDir of Array.isArray(projects) ? projects : []) {
+    const identity = dirIdentity(projectDir);
+    const existing = groups.get(identity);
+    if (existing) {
+      if (!existing.projectDir) existing.projectDir = projectDir;
+      continue;
+    }
+    groups.set(identity, {
+      identity,
+      dir: projectDir,
+      projectDir,
+      items: [],
+    });
   }
 
   listRoot.innerHTML = '';
-  for (const [dir, items] of groups) {
+  for (const { identity, dir, projectDir, items } of groups.values()) {
+    const startDir = projectDir || dir;
     const group = el('div', 'group');
-    if (state.collapsedDirs.has(dir)) group.classList.add('collapsed');
+    if (state.collapsedDirs.has(identity)) group.classList.add('collapsed');
     const head = el('div', 'group-head');
-    head.dataset.dir = dir;
+    head.dataset.dir = identity;
     const chevron = el('span', 'chevron');
     chevron.title = '点击折叠/展开';
     const name = el('span', 'group-name', leafOf(dir));
     name.title = dir;
-    const usage = el('span', 'group-usage', formatProjectUsage(usageByProject.get(dir)));
-    usage.title = formatProjectUsageTitle(usageByProject.get(dir));
+    const summary = projectUsage(usageByProject, dir, identity);
+    const usage = el('span', 'group-usage', formatProjectUsage(summary));
+    usage.title = formatProjectUsageTitle(summary);
     const plus = el('button', 'plus', '+');
-    plus.title = '在 ' + dir + ' 新建会话';
+    plus.title = '在 ' + startDir + ' 新建会话';
     plus.addEventListener('click', (event) => {
       event.stopPropagation();
-      onStartNew(dir);
+      onStartNew(startDir);
     });
-    head.addEventListener('click', () => onToggleGroup(dir, group, chevron));
+    head.addEventListener('click', () => onToggleGroup(identity, group, chevron));
     head.append(chevron, name, usage, plus);
     group.appendChild(head);
 
@@ -96,9 +115,9 @@ export function renderSessionList({
 
 export function updateProjectUsageLabels({ listRoot, usageByProject }) {
   for (const head of listRoot.querySelectorAll('.group-head')) {
-    const dir = head.dataset.dir || '';
+    const identity = dirIdentity(head.dataset.dir || '');
     const usage = head.querySelector?.('.group-usage');
-    const summary = usageByProject.get(dir);
+    const summary = projectUsage(usageByProject, head.dataset.dir || '', identity);
     if (!usage) continue;
     usage.textContent = formatProjectUsage(summary);
     usage.title = formatProjectUsageTitle(summary);
@@ -116,9 +135,9 @@ function renderSessionRow({
 }) {
   const item = el('div', 'session-item');
   item.dataset.id = session.id;
-  item.dataset.dir = session.dir;
+  item.dataset.dir = dirIdentity(session.dir);
   item.title = session.dir;
-  if (state.collapsedDirs.has(session.dir)
+  if (state.collapsedDirs.has(dirIdentity(session.dir))
     && (state.eyeGlobalOff || agentController.classifyAgent(session.id) === 'idle')) {
     item.classList.add('fold-hidden');
   }
