@@ -61,7 +61,6 @@ export function createTerminalController(deps) {
       }
       return;
     }
-    await pasteIntoTerm(session);
   }
 
   function openTab(token, name) {
