@@ -79,16 +79,20 @@ export function renderSessionList({
     if (state.collapsedDirs.has(identity)) group.classList.add('collapsed');
     const head = el('div', 'group-head');
     head.dataset.dir = identity;
-    const chevron = el('span', 'chevron');
-    chevron.title = '点击折叠/展开';
     const folder = el('span', 'folder-icon');
     folder.setAttribute('aria-hidden', 'true');
     folder.innerHTML = [
-      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"',
-      ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"',
-      ' stroke-linejoin="round"><path d="M3.5 7.5h6l1.8 2h9.2v7.7',
-      'a2.3 2.3 0 0 1-2.3 2.3H5.8a2.3 2.3 0 0 1-2.3-2.3V7.5Z"/>',
-      '<path d="M3.5 9.5h17"/></svg>',
+      '<svg class="folder-open" xmlns="http://www.w3.org/2000/svg" width="16" height="16"',
+      ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"',
+      ' stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9',
+      'A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95',
+      ' 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81',
+      ' 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>',
+      '<svg class="folder-closed" xmlns="http://www.w3.org/2000/svg" width="16" height="16"',
+      ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"',
+      ' stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2',
+      'V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4',
+      'a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M2 10h20"/></svg>',
     ].join('');
     const name = el('span', 'group-name', leafOf(dir));
     name.title = dir;
@@ -100,17 +104,19 @@ export function renderSessionList({
     plus.title = '在 ' + startDir + ' 新建会话';
     plus.setAttribute('aria-label', '在「' + (leafOf(startDir) || '项目') + '」中新建会话');
     plus.innerHTML = [
-      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"',
-      ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"',
-      ' stroke-linejoin="round"><path d="M5 3.5h9l4 4v13H5z"/>',
-      '<path d="M14 3.5v4h4M8.5 13h7M12 9.5v7"/></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"',
+      ' fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"',
+      ' stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2',
+      'h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2',
+      ' 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M9 15h6"/>',
+      '<path d="M12 18v-6"/></svg>',
     ].join('');
     plus.addEventListener('click', (event) => {
       event.stopPropagation();
       onStartNew(startDir);
     });
-    head.addEventListener('click', () => onToggleGroup(identity, group, chevron));
-    head.append(chevron, folder, name, usage, plus);
+    head.addEventListener('click', () => onToggleGroup(identity, group, folder));
+    head.append(folder, name, usage, plus);
     group.appendChild(head);
 
     const body = el('div', 'group-body');

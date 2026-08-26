@@ -20,6 +20,7 @@ class FakeClassList {
 class FakeNode {
   constructor() {
     this.children = [];
+    this.parentNode = null;
     this.dataset = {};
     this.style = { setProperty() {} };
     this.classList = new FakeClassList();
@@ -28,13 +29,35 @@ class FakeNode {
     this.innerHTML = '';
     this.textContent = '';
   }
-  append(...children) { this.children.push(...children); }
-  appendChild(child) { this.children.push(child); return child; }
+  append(...children) {
+    for (const child of children) {
+      child.parentNode = this;
+      this.children.push(child);
+    }
+  }
+  appendChild(child) {
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
   addEventListener(name, callback) {
     this.listeners.set(name, callback);
     this.listenerCounts.set(name, (this.listenerCounts.get(name) || 0) + 1);
   }
-  click() { return this.listeners.get('click')?.({ stopPropagation() {} }); }
+  dispatchEvent(event) {
+    const result = this.listeners.get(event.type)?.(event);
+    if (event.bubbles && !event.cancelBubble) this.parentNode?.dispatchEvent(event);
+    return result;
+  }
+  click() {
+    const event = {
+      type: 'click',
+      bubbles: true,
+      cancelBubble: false,
+      stopPropagation() { this.cancelBubble = true; },
+    };
+    return this.dispatchEvent(event);
+  }
   querySelectorAll() { return []; }
   querySelector() { return null; }
   remove() { this.removed = true; }
@@ -171,7 +194,7 @@ function makeFixture(options = {}) {
 
 const session = (id, dir = 'work', name = id, time = 'today') => ({ id, dir, name, time });
 
-function renderProjectGroups(projects, list, onStartNew = () => {}) {
+function renderProjectGroups(projects, list, onStartNew = () => {}, onToggleGroup = () => {}) {
   const listRoot = new FakeNode();
   renderSessionList({
     listRoot,
@@ -186,7 +209,7 @@ function renderProjectGroups(projects, list, onStartNew = () => {}) {
       return node;
     },
     onStartNew,
-    onToggleGroup() {},
+    onToggleGroup,
     onOpen() {},
     onClose() {},
     onContextMenu() {},
@@ -239,7 +262,7 @@ test('session rows keep their custom context menu and prevent the native menu', 
   });
 });
 
-test('group heads show a folder icon and an icon-only new-session button', () => {
+test('group heads show a stateful folder icon and an icon-only new-session button', () => {
   const listRoot = new FakeNode();
   renderSessionList({
     listRoot,
@@ -263,14 +286,49 @@ test('group heads show a folder icon and an icon-only new-session button', () =>
     onContextMenu() {},
   });
   const head = listRoot.children[0].children[0];
-  assert.equal(head.children[1].className, 'folder-icon');
-  assert.match(head.children[1].innerHTML, /<svg/);
-  assert.equal(head.children[3].className, 'group-usage');
-  assert.equal(head.children[3].textContent, '1.02K');
-  assert.equal(head.children[4].className, 'plus');
-  assert.match(head.children[4].innerHTML, /<svg/);
-  assert.equal(head.children[4].type, 'button');
-  assert.match(head.children[3].title, /项目累计 1.02K/);
+  assert.equal(head.children[0].className, 'folder-icon');
+  assert.match(head.children[0].innerHTML, /folder-open/);
+  assert.match(head.children[0].innerHTML, /folder-closed/);
+  assert.match(head.children[0].innerHTML, /viewBox="0 0 24 24"/);
+  assert.match(head.children[0].innerHTML, /stroke-width="1\.8"/);
+  assert.match(head.children[0].innerHTML, /m6 14 1\.5-2\.9A2 2/);
+  assert.match(head.children[0].innerHTML, /M20 20a2 2 0 0 0 2-2/);
+  assert.equal(head.children.some((child) => child.className === 'chevron'), false);
+  assert.equal(head.children[2].className, 'group-usage');
+  assert.equal(head.children[2].textContent, '1.02K');
+  assert.equal(head.children[3].className, 'plus');
+  assert.match(head.children[3].innerHTML, /<svg/);
+  assert.equal(head.children[3].type, 'button');
+  assert.match(head.children[3].innerHTML, /M6 22a2 2/);
+  assert.match(head.children[3].innerHTML, /M12 18v-6/);
+  assert.match(head.children[2].title, /项目累计 1.02K/);
+});
+
+test('collapsed group renders the closed folder variant', () => {
+  const state = createAppState();
+  state.collapsedDirs.add('work');
+  const listRoot = new FakeNode();
+  renderSessionList({
+    listRoot,
+    list: [session('session-1', 'work')],
+    state,
+    agentController: { classifyAgent: () => 'idle' },
+    el: (tag, className, text) => {
+      const node = new FakeNode();
+      node.className = className;
+      node.textContent = text || '';
+      return node;
+    },
+    onStartNew() {},
+    onToggleGroup() {},
+    onOpen() {},
+    onClose() {},
+    onContextMenu() {},
+  });
+
+  const group = listRoot.children[0];
+  assert.equal(group.classList.contains('collapsed'), true);
+  assert.match(group.children[0].children[0].innerHTML, /folder-closed/);
 });
 
 test('rendering a session list invokes the single project prefetch entry point', () => {
@@ -314,6 +372,21 @@ test('an empty project group plus starts a session with the saved directory', ()
   const plus = listRoot.children[0].children[0].children.find((child) => child.className === 'plus');
   plus.click();
   assert.deepEqual(started, [dir]);
+});
+
+test('group plus does not toggle its group header', () => {
+  let toggled = 0;
+  const listRoot = renderProjectGroups(
+    ['C:\\work\\empty'],
+    [],
+    () => {},
+    () => { toggled += 1; },
+  );
+
+  const plus = listRoot.children[0].children[0].children.find((child) => child.className === 'plus');
+  plus.click();
+
+  assert.equal(toggled, 0);
 });
 
 test('a normalized project/session group plus passes the saved project directory', () => {

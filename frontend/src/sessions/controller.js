@@ -164,12 +164,11 @@ export function createSessionController(deps) {
       agentController,
       el,
       onStartNew: startNew,
-      onToggleGroup: (dir, group, chevron) => {
+      onToggleGroup: (dir, group) => {
         const identity = dirIdentity(dir);
         const collapsed = group.classList.toggle('collapsed');
         if (collapsed) state.collapsedDirs.add(identity);
         else state.collapsedDirs.delete(identity);
-        chevron.classList.toggle('collapsed', collapsed);
         refreshFoldState();
       },
       onOpen: openFromList,

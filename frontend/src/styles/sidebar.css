@@ -26,6 +26,7 @@
   overflow: hidden;
   white-space: nowrap;
 }
+.brand, .project-bar-title { user-select: none; }
 .brand-dot {
   width: 9px;
   height: 9px;
@@ -152,27 +153,30 @@
   transition: background .12s, color .12s;
 }
 .group-head:hover { background: var(--hover-bg); color: var(--text); }
-.chevron {
-  display: inline-block;
-  width: 12px;
-  color: var(--text-faint);
-  font-size: 9px;
-  transition: transform .15s;
-}
-.chevron::before { content: '▾'; }
-.group.collapsed .chevron::before { content: '▸'; }
 /* Collapsed groups keep sessions with an open terminal visible. */
-.group.collapsed .group-body .session-item.fold-hidden { display: none; }
+.group.collapsed .group-body .session-item.fold-hidden {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  pointer-events: none;
+}
 .folder-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
+  width: 16px;
   height: 16px;
   color: var(--text-faint);
   flex-shrink: 0;
 }
-.folder-icon svg { display: block; }
+.folder-icon svg { display: none; }
+.folder-icon .folder-open { display: block; }
+.group.collapsed .folder-icon .folder-open { display: none; }
+.group.collapsed .folder-icon .folder-closed { display: block; }
 .group-name {
   flex: 1;
   overflow: hidden;
@@ -204,9 +208,16 @@
   padding: 0;
   border-radius: 6px;
   cursor: pointer;
-  transition: color .12s, background .12s;
+  opacity: 0;
+  pointer-events: none;
+  transition: color .12s, background .12s, opacity .12s;
 }
 .plus svg { display: block; }
+.group-head:hover .plus,
+.group-head:focus-within .plus {
+  opacity: 1;
+  pointer-events: auto;
+}
 .plus:hover { color: var(--accent); background: var(--accent-soft); }
 
 /* Fold filter toggle. */
@@ -231,16 +242,20 @@
 #btn-eye.off { color: var(--text-faint); opacity: .45; }
 #btn-eye svg { display: block; }
 @media (prefers-reduced-motion: reduce) {
-  .project-bar-actions { transition: none; }
+  .project-bar-actions, .plus, .session-item { transition: none; }
 }
 
 .session-item {
+  max-height: 72px;
+  overflow: hidden;
   padding: 9px 11px 9px 15px;
   margin: 2px 0;
   border-radius: var(--radius-sm);
   cursor: pointer;
   position: relative;
-  transition: background .12s;
+  transition: background .12s, max-height .18s cubic-bezier(.2, 0, 0, 1),
+    opacity .14s ease, transform .18s cubic-bezier(.2, 0, 0, 1),
+    padding .18s cubic-bezier(.2, 0, 0, 1), margin .18s cubic-bezier(.2, 0, 0, 1);
 }
 .session-item:hover { background: var(--hover-bg); }
 .session-item:active { background: var(--active-bg); }

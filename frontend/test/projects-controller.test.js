@@ -32,11 +32,31 @@ test('sidebar header keeps the eye filter out of the archive controls', () => {
   assert.match(match[0], /id="btn-hidden"/);
 });
 
+test('sidebar titles are not selectable', () => {
+  assert.match(sidebarCSS, /\.brand,\s*\.project-bar-title\s*\{[^}]*user-select:\s*none/);
+});
+
 test('project controls reveal on hover and keyboard focus', () => {
   assert.match(sidebarCSS, /#project-bar:hover\s+\.project-bar-actions/);
   assert.match(sidebarCSS, /#project-bar:focus-within\s+\.project-bar-actions/);
   assert.match(sidebarCSS, /\.project-bar-actions\s*\{[^}]*opacity:\s*0/);
   assert.match(sidebarCSS, /\.project-bar-actions\s*\{[^}]*pointer-events:\s*none/);
+});
+
+test('group new-session controls reveal on hover and keyboard focus', () => {
+  assert.match(sidebarCSS, /\.plus\s*\{[^}]*opacity:\s*0/);
+  assert.match(sidebarCSS, /\.group-head:hover\s+\.plus/);
+  assert.match(sidebarCSS, /\.group-head:focus-within\s+\.plus/);
+  assert.match(sidebarCSS, /\.plus\s*\{[^}]*pointer-events:\s*none/);
+});
+
+test('group session folding uses a transitionable hidden state', () => {
+  assert.match(sidebarCSS, /\.session-item\s*\{[^}]*max-height:\s*72px/);
+  assert.match(sidebarCSS, /\.session-item\s*\{[^}]*transition:[^}]*max-height/);
+  assert.match(sidebarCSS, /\.group\.collapsed\s+\.group-body\s+\.session-item\.fold-hidden\s*\{[^}]*max-height:\s*0/);
+  assert.match(sidebarCSS, /\.group\.collapsed\s+\.group-body\s+\.session-item\.fold-hidden\s*\{[^}]*opacity:\s*0/);
+  assert.match(sidebarCSS, /\.group\.collapsed\s+\.group-body\s+\.session-item\.fold-hidden\s*\{[^}]*pointer-events:\s*none/);
+  assert.match(sidebarCSS, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.session-item\s*\{?\s*transition:\s*none/);
 });
 
 test('project bar is positioned above the existing session list', () => {
