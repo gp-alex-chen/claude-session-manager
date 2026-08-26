@@ -12,7 +12,6 @@
       <div id="sidebar-header">
         <div class="brand"><span class="brand-dot"></span><span>Claude 会话管理</span></div>
         <span class="header-btns">
-          <button id="btn-eye" title="折叠时显示运行中的会话（点击切换）"></button>
           <button id="btn-hidden">归档(<span id="hidden-count">0</span>)</button>
         </span>
       </div>
@@ -20,7 +19,10 @@
       <section id="project-bar" aria-label="项目">
         <div class="project-bar-header">
           <span class="project-bar-title">项目</span>
-          <button id="btn-add-project" type="button" title="添加项目">+</button>
+          <span class="project-bar-actions">
+            <button id="btn-eye" type="button" title="折叠时显示运行中的会话（点击切换）"></button>
+            <button id="btn-add-project" type="button" title="添加项目">+</button>
+          </span>
         </div>
       </section>
       <div id="session-list"></div>

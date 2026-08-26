@@ -105,6 +105,20 @@
   letter-spacing: .2px;
   text-transform: uppercase;
 }
+.project-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+}
+#project-bar:hover .project-bar-actions,
+#project-bar:focus-within .project-bar-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
 #btn-add-project {
   background: transparent;
   border: 1px solid var(--border);
@@ -200,6 +214,9 @@
 }
 #btn-eye.off { color: var(--text-faint); opacity: .45; }
 #btn-eye svg { display: block; }
+@media (prefers-reduced-motion: reduce) {
+  .project-bar-actions { transition: none; }
+}
 
 .session-item {
   padding: 9px 11px 9px 15px;
