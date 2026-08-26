@@ -12,7 +12,6 @@
       <div id="sidebar-header">
         <div class="brand"><span class="brand-dot"></span><span>Claude 会话管理</span></div>
         <span class="header-btns">
-          <button id="btn-eye" title="折叠时显示运行中的会话（点击切换）"></button>
           <button id="btn-hidden">归档(<span id="hidden-count">0</span>)</button>
         </span>
       </div>
@@ -20,7 +19,10 @@
       <section id="project-bar" aria-label="项目">
         <div class="project-bar-header">
           <span class="project-bar-title">项目</span>
-          <button id="btn-add-project" type="button" title="添加项目">+</button>
+          <span class="project-bar-actions">
+            <button id="btn-eye" type="button" title="折叠时显示运行中的会话（点击切换）"></button>
+            <button id="btn-add-project" type="button" title="添加项目">+</button>
+          </span>
         </div>
       </section>
       <div id="session-list"></div>
@@ -30,7 +32,7 @@
     </aside>
     <main id="terminal-pane">
       <div id="status-bar">
-        <span id="status-message">未运行 — 点击左侧会话恢复，或点分组行 + 新建会话</span>
+        <span id="status-message">未运行 — 点击左侧会话恢复，或点分组行的新建会话按钮</span>
         <button id="usage-summary" type="button" aria-controls="usage-details" aria-expanded="false" aria-label="查看 token 用量详情">
           <span class="usage-unavailable-chip">用量不可用</span>
         </button>

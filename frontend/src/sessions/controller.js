@@ -164,12 +164,11 @@ export function createSessionController(deps) {
       agentController,
       el,
       onStartNew: startNew,
-      onToggleGroup: (dir, group, chevron) => {
+      onToggleGroup: (dir, group) => {
         const identity = dirIdentity(dir);
         const collapsed = group.classList.toggle('collapsed');
         if (collapsed) state.collapsedDirs.add(identity);
         else state.collapsedDirs.delete(identity);
-        chevron.classList.toggle('collapsed', collapsed);
         refreshFoldState();
       },
       onOpen: openFromList,
@@ -354,9 +353,11 @@ export function createSessionController(deps) {
 
   function paintEye() {
     eyeButton.classList.toggle('off', state.eyeGlobalOff);
-    eyeButton.title = state.eyeGlobalOff
+    const label = state.eyeGlobalOff
       ? '折叠时隐藏所有会话（点击开启：折叠时显示运行中的）'
       : '折叠时显示运行中的会话（点击关闭：折叠即全部隐藏）';
+    eyeButton.title = label;
+    eyeButton.setAttribute('aria-label', label);
     setEyeIcon(state.eyeGlobalOff);
   }
 
