@@ -239,7 +239,7 @@ test('session rows keep their custom context menu and prevent the native menu', 
   });
 });
 
-test('group heads place compact project usage before the plus button', () => {
+test('group heads show a folder icon and an icon-only new-session button', () => {
   const listRoot = new FakeNode();
   renderSessionList({
     listRoot,
@@ -263,10 +263,14 @@ test('group heads place compact project usage before the plus button', () => {
     onContextMenu() {},
   });
   const head = listRoot.children[0].children[0];
-  assert.equal(head.children[2].className, 'group-usage');
-  assert.equal(head.children[2].textContent, '1.02K');
-  assert.equal(head.children[3].className, 'plus');
-  assert.match(head.children[2].title, /项目累计 1.02K/);
+  assert.equal(head.children[1].className, 'folder-icon');
+  assert.match(head.children[1].innerHTML, /<svg/);
+  assert.equal(head.children[3].className, 'group-usage');
+  assert.equal(head.children[3].textContent, '1.02K');
+  assert.equal(head.children[4].className, 'plus');
+  assert.match(head.children[4].innerHTML, /<svg/);
+  assert.equal(head.children[4].type, 'button');
+  assert.match(head.children[3].title, /项目累计 1.02K/);
 });
 
 test('rendering a session list invokes the single project prefetch entry point', () => {
@@ -307,7 +311,7 @@ test('an empty project group plus starts a session with the saved directory', ()
   const started = [];
   const listRoot = renderProjectGroups([dir], [], (projectDir) => started.push(projectDir));
 
-  const plus = listRoot.children[0].children[0].children[3];
+  const plus = listRoot.children[0].children[0].children.find((child) => child.className === 'plus');
   plus.click();
   assert.deepEqual(started, [dir]);
 });
@@ -322,7 +326,7 @@ test('a normalized project/session group plus passes the saved project directory
     (dir) => started.push(dir),
   );
 
-  listRoot.children[0].children[0].children[3].click();
+  listRoot.children[0].children[0].children.find((child) => child.className === 'plus').click();
   assert.deepEqual(started, [projectDir]);
 });
 
@@ -379,7 +383,7 @@ test('adding a chosen project refreshes session-list with an empty directory gro
   assert.equal(groups[0].children[0].className, 'group-head');
   assert.equal(groups[0].children[1].className, 'group-body');
   assert.equal(groups[0].children[1].children.length, 0);
-  assert.equal(groups[0].children[0].children[3].className, 'plus');
+  assert.equal(groups[0].children[0].children.find((child) => child.className === 'plus').className, 'plus');
 });
 
 test('initialize renders a saved project as an empty session-list group', async () => {
@@ -405,7 +409,7 @@ test('saved project group plus start failure leaves pending sessions empty', asy
 
   await fixture.controller.initialize();
   const groups = fixture.listRoot.children.filter((node) => node.className === 'group');
-  await groups[0].children[0].children[3].click();
+  await groups[0].children[0].children.find((child) => child.className === 'plus').click();
 
   assert.deepEqual(fixture.state.pendingNew, []);
   assert.match(fixture.statuses.at(-1).message, /新建失败/);

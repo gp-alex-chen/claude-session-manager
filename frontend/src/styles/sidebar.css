@@ -163,6 +163,16 @@
 .group.collapsed .chevron::before { content: '▸'; }
 /* Collapsed groups keep sessions with an open terminal visible. */
 .group.collapsed .group-body .session-item.fold-hidden { display: none; }
+.folder-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 16px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.folder-icon svg { display: block; }
 .group-name {
   flex: 1;
   overflow: hidden;
@@ -181,16 +191,22 @@
   white-space: nowrap;
 }
 .plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: none;
   color: var(--text-faint);
-  font-size: 16px;
+  width: 28px;
+  height: 24px;
+  font-size: 0;
   line-height: 1;
-  padding: 0 6px;
+  padding: 0;
   border-radius: 6px;
   cursor: pointer;
   transition: color .12s, background .12s;
 }
+.plus svg { display: block; }
 .plus:hover { color: var(--accent); background: var(--accent-soft); }
 
 /* Fold filter toggle. */

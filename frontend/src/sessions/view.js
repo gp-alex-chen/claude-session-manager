@@ -81,19 +81,36 @@ export function renderSessionList({
     head.dataset.dir = identity;
     const chevron = el('span', 'chevron');
     chevron.title = '点击折叠/展开';
+    const folder = el('span', 'folder-icon');
+    folder.setAttribute('aria-hidden', 'true');
+    folder.innerHTML = [
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"',
+      ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"',
+      ' stroke-linejoin="round"><path d="M3.5 7.5h6l1.8 2h9.2v7.7',
+      'a2.3 2.3 0 0 1-2.3 2.3H5.8a2.3 2.3 0 0 1-2.3-2.3V7.5Z"/>',
+      '<path d="M3.5 9.5h17"/></svg>',
+    ].join('');
     const name = el('span', 'group-name', leafOf(dir));
     name.title = dir;
     const summary = projectUsage(usageByProject, dir, identity);
     const usage = el('span', 'group-usage', formatProjectUsage(summary));
     usage.title = formatProjectUsageTitle(summary);
-    const plus = el('button', 'plus', '+');
+    const plus = el('button', 'plus');
+    plus.type = 'button';
     plus.title = '在 ' + startDir + ' 新建会话';
+    plus.setAttribute('aria-label', '在「' + (leafOf(startDir) || '项目') + '」中新建会话');
+    plus.innerHTML = [
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"',
+      ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"',
+      ' stroke-linejoin="round"><path d="M5 3.5h9l4 4v13H5z"/>',
+      '<path d="M14 3.5v4h4M8.5 13h7M12 9.5v7"/></svg>',
+    ].join('');
     plus.addEventListener('click', (event) => {
       event.stopPropagation();
       onStartNew(startDir);
     });
     head.addEventListener('click', () => onToggleGroup(identity, group, chevron));
-    head.append(chevron, name, usage, plus);
+    head.append(chevron, folder, name, usage, plus);
     group.appendChild(head);
 
     const body = el('div', 'group-body');
