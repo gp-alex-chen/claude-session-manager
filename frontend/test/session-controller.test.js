@@ -125,6 +125,7 @@ function makeFixture(options = {}) {
   const projectCalls = [];
   const projectAddCalls = [];
   const chooserCalls = [];
+  const adoptionCalls = [];
   let projectIndex = 0;
   const listResults = options.listResults || [[]];
   const projectResults = options.projectResults || [[]];
@@ -142,6 +143,9 @@ function makeFixture(options = {}) {
     UnhideSession: async () => {},
     StartSession: options.StartSession || (async () => {}),
     StartNew: options.StartNew || (async () => 'new-1'),
+    AdoptSession: options.AdoptSession || (async (token, realId) => {
+      adoptionCalls.push([token, realId]);
+    }),
     GetOpenSessions: options.GetOpenSessions || (async () => { openCalls.push(true); return []; }),
     ListProjects: options.ListProjects || (async () => {
       const result = projectResults[Math.min(projectIndex++, projectResults.length - 1)];
@@ -188,6 +192,7 @@ function makeFixture(options = {}) {
     state, controller, backend, terminals, statuses, intervals, cleared, listCalls,
     listRoot, addProjectButton, terminalController, projectCalls, projectAddCalls,
     chooserCalls, openCalls,
+    adoptionCalls,
     get renderCount() { return renderCount; },
   };
 }
@@ -217,9 +222,9 @@ function renderProjectGroups(projects, list, onStartNew = () => {}, onToggleGrou
   return listRoot;
 }
 
-test('listSig ignores time but tracks id, directory, and name', () => {
+test('listSig tracks time as well as id, directory, and name', () => {
   const first = [session('a', 'work', 'A', 'one')];
-  assert.equal(listSig(first), listSig([session('a', 'work', 'A', 'two')]));
+  assert.notEqual(listSig(first), listSig([session('a', 'work', 'A', 'two')]));
   assert.notEqual(listSig(first), listSig([session('b', 'work', 'A')]));
   assert.notEqual(listSig(first), listSig([session('a', 'other', 'A')]));
   assert.notEqual(listSig(first), listSig([session('a', 'work', 'B')]));
@@ -559,14 +564,14 @@ test('startNew only records pending state after successful backend start', async
   assert.deepEqual(created.terminalController.activations, ['new-success']);
 });
 
-test('controller pairing updates the temporary label for a new real session', () => {
+test('controller pairing updates the temporary label for a new real session', async () => {
   const fixture = makeFixture();
   fixture.controller.renderSessions([session('old', 'work', 'Old')]);
   fixture.state.activeToken = 'new-1';
   fixture.state.pendingNew.push({ token: 'new-1', dir: 'work' });
   fixture.terminalController.openTab('new-1', '新会话 1');
 
-  fixture.controller.pairNewSessions([
+  await fixture.controller.pairNewSessions([
     session('old', 'work', 'Old'),
     session('real', 'work', 'Real name'),
   ]);
@@ -574,6 +579,94 @@ test('controller pairing updates the temporary label for a new real session', ()
   assert.equal(fixture.state.realToNew.get('real'), 'new-1');
   assert.equal(fixture.state.terminals.get('new-1').labelText, 'Real name');
   assert.deepEqual(fixture.state.pendingNew, []);
+  assert.deepEqual(fixture.adoptionCalls, [['new-1', 'real']]);
+});
+
+test('controller adopts multiple paired sessions in FIFO order', async () => {
+  const fixture = makeFixture();
+  fixture.controller.renderSessions([session('old', 'work', 'Old')]);
+  fixture.state.pendingNew.push(
+    { token: 'new-1', dir: 'work' },
+    { token: 'new-2', dir: 'work' },
+  );
+  fixture.terminalController.openTab('new-1', '新会话 1');
+  fixture.terminalController.openTab('new-2', '新会话 2');
+
+  await fixture.controller.pairNewSessions([
+    session('old', 'work', 'Old'),
+    session('real-1', 'work', 'One'),
+    session('real-2', 'work', 'Two'),
+  ]);
+
+  assert.deepEqual(fixture.adoptionCalls, [
+    ['new-1', 'real-1'],
+    ['new-2', 'real-2'],
+  ]);
+});
+
+test('controller retries a failed adoption on the next refresh', async () => {
+  let attempts = 0;
+  const fixture = makeFixture({
+    AdoptSession: async (token, realId) => {
+      attempts += 1;
+      fixture.adoptionCalls.push([token, realId]);
+      if (attempts === 1) throw new Error('disk full');
+    },
+  });
+  fixture.controller.renderSessions([session('old', 'work', 'Old')]);
+  fixture.state.pendingNew.push({ token: 'new-retry', dir: 'work' });
+  fixture.terminalController.openTab('new-retry', '新会话');
+  const list = [session('old', 'work', 'Old'), session('real-retry', 'work', 'Retry')];
+
+  await fixture.controller.pairNewSessions(list);
+  assert.deepEqual(fixture.adoptionCalls, [['new-retry', 'real-retry']]);
+
+  await fixture.controller.pairNewSessions(list);
+  assert.deepEqual(fixture.adoptionCalls, [
+    ['new-retry', 'real-retry'],
+    ['new-retry', 'real-retry'],
+  ]);
+});
+
+test('terminal exit drops a failed adoption instead of retrying a dead token', async () => {
+  let attempts = 0;
+  const fixture = makeFixture({
+    AdoptSession: async () => {
+      attempts += 1;
+      throw new Error('token exited');
+    },
+  });
+  fixture.controller.renderSessions([session('old', 'work', 'Old')]);
+  fixture.state.pendingNew.push({ token: 'new-dead', dir: 'work' });
+  fixture.terminalController.openTab('new-dead', '新会话');
+  const list = [session('old', 'work', 'Old'), session('real-dead', 'work', 'Dead')];
+
+  await fixture.controller.pairNewSessions(list);
+  fixture.controller.handleTerminalExit('new-dead');
+  await fixture.controller.pairNewSessions(list);
+
+  assert.equal(attempts, 1);
+});
+
+test('stopping during an in-flight adoption invalidates its result', async () => {
+  let resolveAdoption;
+  const fixture = makeFixture({
+    AdoptSession: () => new Promise((resolve) => { resolveAdoption = resolve; }),
+  });
+  fixture.controller.renderSessions([session('old', 'work', 'Old')]);
+  fixture.state.pendingNew.push({ token: 'new-stop', dir: 'work' });
+  fixture.terminalController.openTab('new-stop', '新会话');
+  const pairing = fixture.controller.pairNewSessions([
+    session('old', 'work', 'Old'), session('real-stop', 'work', 'Stop'),
+  ]);
+  await new Promise((resolve) => setImmediate(resolve));
+  fixture.controller.stop();
+  resolveAdoption();
+  await pairing;
+
+  fixture.controller.start();
+  await fixture.controller.autoRefreshSessions();
+  assert.deepEqual(fixture.adoptionCalls, []);
 });
 
 test('full refresh pairs pending sessions before replacing the loaded snapshot', async () => {

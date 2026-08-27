@@ -129,6 +129,7 @@ function makeFixture(options = {}) {
       return makeController('session', {
         refreshFoldState: () => calls.routed.push(['fold']),
         syncActiveHighlight: () => calls.routed.push(['active']),
+        handleTerminalExit: (...value) => calls.routed.push(['session-exit', value]),
       });
     },
     settings: (deps) => {
@@ -204,7 +205,7 @@ test('bootstrap passes project APIs and the top project add button to the sessio
   assert.ok(fixture.elements.get('project-bar'));
   assert.equal(fixture.calls.factories.session.projectRoot, undefined);
   assert.equal(sessionDeps.addProjectButton, fixture.elements.get('btn-add-project'));
-  for (const name of ['ListProjects', 'ChooseProjectDir', 'AddProject']) {
+  for (const name of ['ListProjects', 'ChooseProjectDir', 'AddProject', 'AdoptSession']) {
     assert.equal(typeof sessionDeps.backend[name], 'function', name);
   }
 });
@@ -227,11 +228,13 @@ test('runtime and resize events route to the matching controllers', () => {
   fixture.runtimeListeners.get('agents:update')(['agent']);
   fixture.runtimeListeners.get('term:data')('token', 'b64');
   fixture.runtimeListeners.get('term:exit')('token');
+  fixture.calls.factories.terminal.onExit('token');
   fixture.runtimeListeners.get('update:state')('下载中');
   fixture.runtimeListeners.get('update:progress')(42);
   fixture.windowListeners.get('resize')();
   assert.deepEqual(fixture.calls.routed, [
     ['agents', ['agent']], ['data', ['token', 'b64']], ['exit', ['token']],
+    ['session-exit', ['token']],
     ['update-state', '下载中'], ['update-progress', 42],
   ]);
   assert.equal(fixture.calls.resize, 1);

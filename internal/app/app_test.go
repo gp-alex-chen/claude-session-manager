@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/gp-alex-chen/claude-session-manager/internal/session"
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 	"github.com/gp-alex-chen/claude-session-manager/internal/terminal"
 	"github.com/gp-alex-chen/claude-session-manager/internal/usage"
@@ -59,10 +61,10 @@ func TestSessionMutationsTrimAndUseTransactions(t *testing.T) {
 
 func TestClaudeCommandShellSelection(t *testing.T) {
 	a, _, _, _ := testApp(t)
-	if got := a.claudeCmd(""); got != "cmd /c claude" {
+	if got, err := a.claudeCmd(""); err != nil || got != "cmd /c claude" {
 		t.Fatalf("default command = %q", got)
 	}
-	if got := a.claudeCmd("-r abc"); got != "cmd /c claude -r abc" {
+	if got, err := a.claudeCmd("abc"); err != nil || got != "cmd /c claude -r abc" {
 		t.Fatalf("resume command = %q", got)
 	}
 	a.lookPath = func(string) (string, error) { return `C:\Program Files\PowerShell\pwsh.exe`, nil }
@@ -80,7 +82,7 @@ func TestClaudeCommandShellSelection(t *testing.T) {
 	if startedCommand != `pwsh -NoLogo -NoExit -Command "claude "` {
 		t.Fatalf("pwsh new command = %q", startedCommand)
 	}
-	if got := a.claudeCmd("-r abc"); got != `pwsh -NoLogo -NoExit -Command "claude -r abc"` {
+	if got, err := a.claudeCmd("abc"); err != nil || got != `pwsh -NoLogo -NoExit -Command "claude -r abc"` {
 		t.Fatalf("pwsh resume command = %q", got)
 	}
 }
@@ -91,11 +93,69 @@ func TestClaudeCommandFallsBackWhenPwshMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
-	if got := a.claudeCmd("-r abc"); got != "cmd /c claude -r abc" {
+	if got, err := a.claudeCmd("abc"); err != nil || got != "cmd /c claude -r abc" {
 		t.Fatalf("fallback command = %q", got)
 	}
 	if !containsLog(*logs, "回退 cmd") {
 		t.Fatalf("fallback diagnostic missing: %v", *logs)
+	}
+}
+
+func TestStartSessionRejectsUnsafeIDsBeforeLaunching(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	started := []string{}
+	a.startPTYFn = func(_, cmdLine, _ string) error {
+		started = append(started, cmdLine)
+		return nil
+	}
+
+	unsafeIDs := []string{
+		"abc&whoami", "abc|whoami", "abc>file", "abc<file", "abc^whoami",
+		`abc"whoami`, "abc'whoami", "abc%PATH%", "abc!PATH!", "abc\nwhoami", "abc whoami",
+		"", "-abc", ".abc", "_abc", strings.Repeat("a", 257),
+	}
+	for _, id := range unsafeIDs {
+		started = nil
+		if _, err := a.StartSession(id, `C:\work`); err == nil {
+			t.Fatalf("StartSession(%q) unexpectedly succeeded", id)
+		}
+		if len(started) != 0 {
+			t.Fatalf("StartSession(%q) launched command %q", id, started[0])
+		}
+	}
+
+	if _, err := a.StartSession("a1b2c3-session", `C:\work`); err != nil {
+		t.Fatalf("valid session ID was rejected: %v", err)
+	}
+	if len(started) != 1 || started[0] != "cmd /c claude -r a1b2c3-session" {
+		t.Fatalf("valid session command = %v", started)
+	}
+}
+
+func TestStartSessionValidatesIDsBeforePowerShellCommandConstruction(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	a.lookPath = func(string) (string, error) { return `C:\Program Files\PowerShell\pwsh.exe`, nil }
+	if err := a.SetShell("pwsh"); err != nil {
+		t.Fatal(err)
+	}
+	started := []string{}
+	a.startPTYFn = func(_, cmdLine, _ string) error {
+		started = append(started, cmdLine)
+		return nil
+	}
+
+	if _, err := a.StartSession("safe-id", `C:\work`); err != nil {
+		t.Fatalf("valid PowerShell session ID was rejected: %v", err)
+	}
+	if len(started) != 1 || started[0] != `pwsh -NoLogo -NoExit -Command "claude -r safe-id"` {
+		t.Fatalf("PowerShell session command = %v", started)
+	}
+	started = nil
+	if _, err := a.StartSession("safe-id&whoami", `C:\work`); err == nil {
+		t.Fatal("unsafe PowerShell session ID was accepted")
+	}
+	if len(started) != 0 {
+		t.Fatalf("unsafe PowerShell session launched command %q", started[0])
 	}
 }
 
@@ -193,12 +253,321 @@ func TestShutdownPreservesOpenSessions(t *testing.T) {
 	}
 }
 
+func TestShutdownPreservesAdoptionAlreadyAtAppBoundary(t *testing.T) {
+	a, store, _, _ := testApp(t)
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func(ids []string) error { return store.SaveOpen(ids) },
+		func(string, string, int, int, []string) (terminal.Pty, error) {
+			return newShutdownPty(), nil
+		},
+	)
+	if err := a.terms.Start("new-runtime", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.registerPendingAdoption("new-runtime", "real-session"); err != nil {
+		t.Fatal(err)
+	}
+
+	a.shutdown(context.Background())
+	got, err := store.LoadOpen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"real-session"}) {
+		t.Fatalf("open sessions after pending adoption shutdown = %v", got)
+	}
+}
+
+func TestShutdownExcludesCancelledPendingAdoptionBeforeManagerEntry(t *testing.T) {
+	a, store, _, _ := testApp(t)
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func(ids []string) error { return store.SaveOpen(ids) },
+		func(string, string, int, int, []string) (terminal.Pty, error) {
+			return newShutdownPty(), nil
+		},
+	)
+	if err := a.terms.Start("new-runtime", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.registerPendingAdoption("new-runtime", "real-session"); err != nil {
+		t.Fatal(err)
+	}
+	a.cancelPendingAdoption("new-runtime")
+
+	a.shutdown(context.Background())
+	got, err := store.LoadOpen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("open sessions after cancelled pending shutdown = %v, want empty", got)
+	}
+}
+
+func TestTermKillCancelsInFlightAdoptionBeforeShutdownSnapshot(t *testing.T) {
+	a, store, _, _ := testApp(t)
+	adoptionPersistStarted := make(chan struct{})
+	releaseAdoptionPersist := make(chan struct{})
+	var blockOnce sync.Once
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func(ids []string) error {
+			if reflect.DeepEqual(ids, []string{"real-session"}) {
+				blockOnce.Do(func() { close(adoptionPersistStarted) })
+				<-releaseAdoptionPersist
+			}
+			return store.SaveOpen(ids)
+		},
+		func(string, string, int, int, []string) (terminal.Pty, error) {
+			return newShutdownPty(), nil
+		},
+	)
+	if err := a.terms.Start("new-runtime", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	adoptDone := make(chan error, 1)
+	go func() { adoptDone <- a.AdoptSession("new-runtime", "real-session") }()
+	<-adoptionPersistStarted
+
+	killDone := make(chan struct{})
+	go func() {
+		a.TermKill("new-runtime")
+		close(killDone)
+	}()
+	for {
+		a.adoptionMu.Lock()
+		pending := a.pendingAdoptions["new-runtime"]
+		cancelled := pending != nil && pending.cancelled.Load()
+		a.adoptionMu.Unlock()
+		if cancelled {
+			break
+		}
+		goruntime.Gosched()
+	}
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		a.shutdown(context.Background())
+		close(shutdownDone)
+	}()
+	close(releaseAdoptionPersist)
+	if err := <-adoptDone; err == nil {
+		t.Fatal("cancelled adoption unexpectedly succeeded")
+	}
+	<-killDone
+	<-shutdownDone
+
+	got, err := store.LoadOpen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("open sessions after TermKill + Shutdown = %v, want empty", got)
+	}
+}
+
+func TestAdoptSessionPersistsRealIDWhileKeepingRuntimeToken(t *testing.T) {
+	a, store, _, _ := testApp(t)
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func(ids []string) error { return store.SaveOpen(ids) },
+		func(string, string, int, int, []string) (terminal.Pty, error) {
+			return newShutdownPty(), nil
+		},
+	)
+	if err := a.terms.Start("new-runtime", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AdoptSession("new-runtime", "real-session"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LoadOpen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"real-session"}) {
+		t.Fatalf("open sessions after adoption = %v, want [real-session]", got)
+	}
+	a.terms.Kill("new-runtime")
+}
+
+func TestAdoptSessionReturnsPersistenceErrorSoFrontendCanRetry(t *testing.T) {
+	sentinel := errors.New("persist failed")
+	shouldFail := false
+	a, _, _, _ := testApp(t)
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func([]string) error {
+			if shouldFail {
+				return sentinel
+			}
+			return nil
+		},
+		func(string, string, int, int, []string) (terminal.Pty, error) {
+			return newShutdownPty(), nil
+		},
+	)
+	if err := a.terms.Start("new-runtime", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+
+	shouldFail = true
+	if err := a.AdoptSession("new-runtime", "real-session"); !errors.Is(err, sentinel) {
+		t.Fatalf("AdoptSession error = %v, want %v", err, sentinel)
+	}
+	shouldFail = false
+	if err := a.AdoptSession("new-runtime", "real-session"); err != nil {
+		t.Fatalf("AdoptSession retry failed: %v", err)
+	}
+	a.terms.Kill("new-runtime")
+}
+
+func TestAdoptSessionRejectsUnsafeIDsBeforePersisting(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	persistCalls := 0
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func([]string) error {
+			persistCalls++
+			return nil
+		},
+		func(string, string, int, int, []string) (terminal.Pty, error) {
+			return newShutdownPty(), nil
+		},
+	)
+	if err := a.terms.Start("new-runtime", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	baselineCalls := persistCalls
+	if err := a.AdoptSession("new-runtime", "real&whoami"); err == nil {
+		t.Fatal("AdoptSession unexpectedly accepted a Shell metacharacter")
+	}
+	if persistCalls != baselineCalls {
+		t.Fatalf("unsafe adoption reached persistence: calls=%d baseline=%d", persistCalls, baselineCalls)
+	}
+	a.terms.Kill("new-runtime")
+}
+
+func TestAdoptedSessionSurvivesShutdownAndRestoresByRealID(t *testing.T) {
+	a, store, _, _ := testApp(t)
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func(ids []string) error { return store.SaveOpen(ids) },
+		func(string, string, int, int, []string) (terminal.Pty, error) {
+			return newShutdownPty(), nil
+		},
+	)
+	if err := a.terms.Start("new-runtime", "cmd", `C:\work`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AdoptSession("new-runtime", "real-session"); err != nil {
+		t.Fatal(err)
+	}
+	a.shutdown(context.Background())
+
+	restored := NewAppWithStore(store)
+	started := []string{}
+	restored.startPTYFn = func(token, _, dir string) error {
+		started = append(started, token+"|"+dir)
+		return nil
+	}
+	for _, id := range restored.GetOpenSessions() {
+		if _, err := restored.StartSession(id, `C:\work`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(started, []string{`real-session|C:\work`}) {
+		t.Fatalf("restored starts = %v, want real session ID", started)
+	}
+}
+
+func TestAdoptSessionRejectsInvalidBoundary(t *testing.T) {
+	a, _, _, _ := testApp(t)
+	for _, tt := range []struct {
+		name, token, sessionID string
+	}{
+		{name: "missing token", sessionID: "real-session"},
+		{name: "missing session ID", token: "new-runtime"},
+		{name: "temporary session ID", token: "new-runtime", sessionID: "new-other"},
+		{name: "non-temporary token", token: "real-runtime", sessionID: "real-session"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := a.AdoptSession(tt.token, tt.sessionID); err == nil {
+				t.Fatal("AdoptSession unexpectedly accepted invalid input")
+			}
+		})
+	}
+}
+
+func TestSessionListsUseInjectedCatalogForVisibleAndHiddenSessions(t *testing.T) {
+	a, store, _, root := testApp(t)
+	projectsRoot := filepath.Join(root, "claude-projects")
+	projectDir := filepath.Join(projectsRoot, "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"user","cwd":"C:\\work","message":"hello"}` + "\n"
+	if err := os.WriteFile(filepath.Join(projectDir, "session-1.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.sessionCatalog = session.NewCatalog(projectsRoot)
+
+	visible := a.ListSessions()
+	if len(visible) != 1 || visible[0].ID != "session-1" || visible[0].Dir != `C:\work` {
+		t.Fatalf("visible sessions = %+v", visible)
+	}
+	if err := store.SetHidden("session-1", true); err != nil {
+		t.Fatal(err)
+	}
+	hidden := a.ListHiddenSessions()
+	if len(hidden) != 1 || hidden[0].ID != "session-1" {
+		t.Fatalf("hidden sessions = %+v", hidden)
+	}
+}
+
+func TestSessionListsExcludeIDsThatCannotBeLaunchedSafely(t *testing.T) {
+	a, _, _, root := testApp(t)
+	projectsRoot := filepath.Join(root, "claude-projects")
+	projectDir := filepath.Join(projectsRoot, "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"user","cwd":"C:\\work","message":"hello"}` + "\n"
+	for _, id := range []string{"safe-session", "unsafe&whoami"} {
+		if err := os.WriteFile(filepath.Join(projectDir, id+".jsonl"), []byte(line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.sessionCatalog = session.NewCatalog(projectsRoot)
+
+	visible := a.ListSessions()
+	if len(visible) != 1 || visible[0].ID != "safe-session" {
+		t.Fatalf("visible sessions = %+v, want only safe-session", visible)
+	}
+}
+
+func TestSessionListLogsCatalogReadWarnings(t *testing.T) {
+	a, _, logs, root := testApp(t)
+	badRoot := filepath.Join(root, "catalog-root-file")
+	if err := os.WriteFile(badRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.sessionCatalog = session.NewCatalog(badRoot)
+
+	_ = a.ListSessions()
+	if !containsLog(*logs, "读取会话目录失败") {
+		t.Fatalf("catalog warning was not logged: %v", *logs)
+	}
+}
+
 func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 	typ := reflect.TypeOf(&App{})
 	want := []string{
 		"CheckForUpdate", "UpdateToLatest", "RenameSession", "DeleteSession", "UnhideSession",
 		"GetOpenSessions", "GetShell", "ShellInstalled", "SetShell", "ListSessions", "ListHiddenSessions",
-		"StartSession", "StartNew", "TermWrite", "TermResize", "TermKill", "NotifyBeep", "DebugLog",
+		"StartSession", "StartNew", "AdoptSession", "TermWrite", "TermResize", "TermKill", "NotifyBeep", "DebugLog",
 		"GetAgents", "GetVersion", "GetUsageSummary",
 		"ListProjects", "ChooseProjectDir", "AddProject", "DeleteProject",
 	}

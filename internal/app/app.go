@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/agent"
@@ -25,8 +26,16 @@ type SessionInfo struct {
 	Name string `json:"name"`
 	Time string `json:"time"`
 }
+
+type pendingAdoption struct {
+	id    string
+	count int
+	cancelled atomic.Bool
+}
+
 type App struct {
 	lifecycleMu  sync.Mutex
+	adoptionMu   sync.Mutex
 	ctx          context.Context
 	terms        *terminal.Manager
 	store        *state.Store
@@ -37,6 +46,9 @@ type App struct {
 	startPTYFn   func(string, string, string) error
 	chooseDirFn  func(context.Context, runtime.OpenDialogOptions) (string, error)
 	usageScanner *usage.Scanner
+	sessionCatalog *session.Catalog
+	pendingAdoptions map[string]*pendingAdoption
+	cancelledAdoptions map[string]struct{}
 }
 
 func NewApp() *App {
@@ -53,6 +65,9 @@ func NewAppWithStore(store *state.Store) *App {
 		debugLog:     agent.DebugLog,
 		chooseDirFn:  runtime.OpenDirectoryDialog,
 		usageScanner: defaultUsageScanner(),
+		sessionCatalog: defaultSessionCatalog(),
+		pendingAdoptions: make(map[string]*pendingAdoption),
+		cancelledAdoptions: make(map[string]struct{}),
 	}
 	a.terms = terminal.NewManager(terminal.Callbacks{}, func(ids []string) error {
 		return a.store.SaveOpen(ids)
@@ -69,6 +84,13 @@ func defaultUsageScanner() *usage.Scanner {
 		return nil
 	}
 	return usage.NewScanner(filepath.Join(home, ".claude", "projects"))
+}
+func defaultSessionCatalog() *session.Catalog {
+	home, err := userHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return nil
+	}
+	return session.NewCatalog(filepath.Join(home, ".claude", "projects"))
 }
 func (a *App) startup(ctx context.Context) {
 	if ctx == nil {
@@ -112,7 +134,7 @@ func (a *App) shutdown(context.Context) {
 	if watcher != nil {
 		watcher.Stop()
 	}
-	a.terms.CloseAll()
+	a.closeAllTerms()
 }
 func (a *App) Startup(ctx context.Context)  { a.startup(ctx) }
 func (a *App) Shutdown(ctx context.Context) { a.shutdown(ctx) }
@@ -123,7 +145,7 @@ func (a *App) ListSessions() []SessionInfo {
 	}
 	hidden, aliases := st.HiddenSet(), st.Aliases
 	out := []SessionInfo{}
-	for _, s := range session.ScanAll() {
+	for _, s := range a.sessionSnapshot() {
 		if hidden[s.ID] {
 			continue
 		}
@@ -142,7 +164,7 @@ func (a *App) ListHiddenSessions() []SessionInfo {
 	}
 	hidden := st.HiddenSet()
 	out := []SessionInfo{}
-	for _, s := range session.ScanAll() {
+	for _, s := range a.sessionSnapshot() {
 		if !hidden[s.ID] {
 			continue
 		}
@@ -154,27 +176,56 @@ func (a *App) ListHiddenSessions() []SessionInfo {
 	}
 	return out
 }
+func (a *App) sessionSnapshot() []*session.Session {
+	if a.sessionCatalog == nil {
+		return nil
+	}
+	snapshot := a.sessionCatalog.Snapshot()
+	for _, warning := range a.sessionCatalog.TakeWarnings() {
+		a.log("读取会话目录失败: " + warning)
+	}
+	return snapshot
+}
 func (a *App) StartSession(id, dir string) (string, error) {
+	if err := validateSessionID(id); err != nil {
+		return "", err
+	}
 	if a.terms.IsRunning(id) {
 		return id, nil
 	}
-	if err := a.startPTY(id, a.claudeCmd("-r "+id), dir); err != nil {
+	cmdLine, err := a.claudeCmd(id)
+	if err != nil {
+		return "", err
+	}
+	if err := a.startPTY(id, cmdLine, dir); err != nil {
 		return "", err
 	}
 	return id, nil
 }
 func (a *App) StartNew(dir string) (string, error) {
 	token := "new-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	if err := a.startPTY(token, a.claudeCmd(""), dir); err != nil {
+	cmdLine, err := a.claudeCmd("")
+	if err != nil {
+		return "", err
+	}
+	if err := a.startPTY(token, cmdLine, dir); err != nil {
 		return "", err
 	}
 	return token, nil
 }
 func (a *App) startPTY(token, cmdLine, dir string) error {
 	if a.startPTYFn != nil {
-		return a.startPTYFn(token, cmdLine, dir)
+		err := a.startPTYFn(token, cmdLine, dir)
+		if err == nil {
+			a.clearAdoptionCancellation(token)
+		}
+		return err
 	}
-	return a.terms.Start(token, cmdLine, dir)
+	err := a.terms.Start(token, cmdLine, dir)
+	if err == nil {
+		a.clearAdoptionCancellation(token)
+	}
+	return err
 }
 func (a *App) TermWrite(token, b64 string) {
 	raw, err := terminal.DecodeInput(b64)
@@ -183,26 +234,42 @@ func (a *App) TermWrite(token, b64 string) {
 	}
 }
 func (a *App) TermResize(token string, cols, rows int) { a.terms.Resize(token, cols, rows) }
-func (a *App) TermKill(token string)                   { a.terms.Kill(token) }
+func (a *App) TermKill(token string) {
+	a.cancelPendingAdoption(token)
+	if a.terms != nil {
+		a.terms.Kill(token)
+	}
+}
 func (a *App) NotifyBeep()                             { notify.Beep() }
 func (a *App) persistOpenSessions() error {
 	if a.store == nil || a.terms == nil {
 		return nil
 	}
-	return a.store.SaveOpen(a.terms.OpenIDs())
+	a.adoptionMu.Lock()
+	defer a.adoptionMu.Unlock()
+	return a.store.SaveOpen(a.terms.OpenIDsWithPending(a.pendingAdoptionIDsLocked()))
 }
-func (a *App) claudeCmd(sessionArgs string) string {
-	args := strings.TrimSpace(sessionArgs)
+
+func (a *App) claudeCmd(sessionID string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" {
+		if err := validateSessionID(sessionID); err != nil {
+			return "", err
+		}
+	}
 	if a.GetShell() == "pwsh" {
 		if a.shellAvailable("pwsh") {
-			return `pwsh -NoLogo -NoExit -Command "claude ` + args + `"`
+			if sessionID == "" {
+				return `pwsh -NoLogo -NoExit -Command "claude "`, nil
+			}
+			return `pwsh -NoLogo -NoExit -Command "claude -r ` + sessionID + `"`, nil
 		}
 		a.DebugLog("pwsh 当前不可用，会话回退 cmd 启动")
 	}
-	if args == "" {
-		return "cmd /c claude"
+	if sessionID == "" {
+		return "cmd /c claude", nil
 	}
-	return "cmd /c claude " + args
+	return "cmd /c claude -r " + sessionID, nil
 }
 func (a *App) log(msg string) {
 	if a.debugLog != nil {

@@ -279,6 +279,218 @@ func TestOpenIDsSortedAndFiltersTemporaryClosedAndNil(t *testing.T) {
 	}
 }
 
+func TestAdoptedTemporarySessionPersistsRealIDWithoutChangingRuntimeToken(t *testing.T) {
+	var persisted [][]string
+	p := &fakePty{read: make(chan struct{})}
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error {
+		persisted = append(persisted, append([]string(nil), ids...))
+		return nil
+	}, func(string, string, int, int, []string) (Pty, error) {
+		return p, nil
+	})
+
+	if err := m.Start("new-1", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	persisted = nil
+
+	if err := m.Adopt("new-1", "real-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.OpenIDs(); !reflect.DeepEqual(got, []string{"real-1"}) {
+		t.Fatalf("OpenIDs after adoption = %v, want [real-1]", got)
+	}
+	m.mu.Lock()
+	current := m.terms["new-1"]
+	m.mu.Unlock()
+	if current == nil || current.pty != p {
+		t.Fatal("adoption changed the runtime token or PTY identity")
+	}
+
+	m.CloseAll()
+	if len(persisted) == 0 || !reflect.DeepEqual(persisted[len(persisted)-1], []string{"real-1"}) {
+		t.Fatalf("persisted snapshots = %v, want the final snapshot to contain [real-1]", persisted)
+	}
+}
+
+func TestAdoptionPersistenceErrorIsReturnedAndRetriedIdempotently(t *testing.T) {
+	sentinel := errors.New("persist failed")
+	var shouldFail atomic.Bool
+	var persistCalls atomic.Int32
+	m := NewManagerWithStart(Callbacks{}, func([]string) error {
+		persistCalls.Add(1)
+		if shouldFail.Load() {
+			return sentinel
+		}
+		return nil
+	}, func(string, string, int, int, []string) (Pty, error) {
+		return &fakePty{read: make(chan struct{})}, nil
+	})
+
+	if err := m.Start("new-retry", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	shouldFail.Store(true)
+	if err := m.Adopt("new-retry", "real-retry"); !errors.Is(err, sentinel) {
+		t.Fatalf("first adoption error = %v, want %v", err, sentinel)
+	}
+	if got := m.OpenIDs(); !reflect.DeepEqual(got, []string{"real-retry"}) {
+		t.Fatalf("OpenIDs after failed adoption = %v", got)
+	}
+
+	shouldFail.Store(false)
+	if err := m.Adopt("new-retry", "real-retry"); err != nil {
+		t.Fatalf("idempotent adoption retry failed: %v", err)
+	}
+	if got := persistCalls.Load(); got != 3 {
+		t.Fatalf("persist calls = %d, want start + failed adoption + retry", got)
+	}
+	m.CloseAll()
+}
+
+func TestAdoptedTemporarySessionKeepsIdentityAcrossReplacement(t *testing.T) {
+	first := &fakePty{read: make(chan struct{})}
+	second := &fakePty{read: make(chan struct{})}
+	var starts atomic.Int32
+	m := NewManagerWithStart(Callbacks{}, nil, func(string, string, int, int, []string) (Pty, error) {
+		if starts.Add(1) == 1 {
+			return first, nil
+		}
+		return second, nil
+	})
+
+	if err := m.Start("new-replacement", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Adopt("new-replacement", "real-replacement"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start("new-replacement", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.OpenIDs(); !reflect.DeepEqual(got, []string{"real-replacement"}) {
+		t.Fatalf("OpenIDs after adopted replacement = %v, want [real-replacement]", got)
+	}
+	m.CloseAll()
+}
+
+func TestAdoptedOldReaderCannotDeleteReplacement(t *testing.T) {
+	old := &ptyRef{pty: &fakePty{}}
+	next := &ptyRef{pty: &fakePty{}}
+	m := NewManagerWithStart(Callbacks{}, nil, nil)
+	m.terms["new-reader"] = next
+	m.persistIDByToken["new-reader"] = "real-reader"
+
+	m.finishRead("new-reader", old)
+
+	if got := m.OpenIDs(); !reflect.DeepEqual(got, []string{"real-reader"}) {
+		t.Fatalf("OpenIDs after old adopted reader exit = %v, want [real-reader]", got)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.terms["new-reader"] != next || m.persistIDByToken["new-reader"] != "real-reader" {
+		t.Fatal("old adopted reader changed the replacement identity")
+	}
+}
+
+func TestPersistenceFailureCanBeRetriedAfterKill(t *testing.T) {
+	sentinel := errors.New("persist failed")
+	var failures atomic.Int32
+	var calls atomic.Int32
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error {
+		calls.Add(1)
+		if failures.Load() > 0 && failures.Add(-1) >= 0 {
+			return sentinel
+		}
+		return nil
+	}, func(string, string, int, int, []string) (Pty, error) {
+		return &fakePty{read: make(chan struct{})}, nil
+	})
+
+	if err := m.Start("kill-retry", "cmd", "."); err != nil {
+		t.Fatal(err)
+	}
+	failures.Store(2)
+	m.Kill("kill-retry")
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("calls after failed kill = %d, want start + kill + immediate retry", got)
+	}
+	if err := m.RetryPersistence(); err != nil {
+		t.Fatalf("RetryPersistence failed: %v", err)
+	}
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("calls after retry = %d, want 4", got)
+	}
+	if got := m.OpenIDs(); len(got) != 0 {
+		t.Fatalf("OpenIDs after kill = %v, want empty", got)
+	}
+}
+
+func TestCloseAllRetriesFailedRestoreSnapshot(t *testing.T) {
+	sentinel := errors.New("persist failed")
+	var calls atomic.Int32
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error {
+		if calls.Add(1) == 1 {
+			return sentinel
+		}
+		return nil
+	}, nil)
+	m.terms["restore-me"] = &ptyRef{pty: &fakePty{}}
+
+	m.CloseAll()
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("CloseAll persistence calls = %d, want failed call + immediate retry", got)
+	}
+	if err := m.RetryPersistence(); err != nil {
+		t.Fatalf("unexpected pending persistence after successful retry: %v", err)
+	}
+}
+
+func TestCloseAllIsIdempotentWithoutOverwritingRestoreSnapshot(t *testing.T) {
+	var persisted [][]string
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error {
+		persisted = append(persisted, append([]string(nil), ids...))
+		return nil
+	}, nil)
+	m.terms["restore-me"] = &ptyRef{pty: &fakePty{}}
+
+	m.CloseAll()
+	m.CloseAll()
+	if len(persisted) != 1 || !reflect.DeepEqual(persisted[0], []string{"restore-me"}) {
+		t.Fatalf("idempotent CloseAll snapshots = %v", persisted)
+	}
+}
+
+func TestCloseAllWithPendingAndForgetExcludesCancelledAdoption(t *testing.T) {
+	var persisted [][]string
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error {
+		persisted = append(persisted, append([]string(nil), ids...))
+		return nil
+	}, nil)
+	m.terms["new-cancelled"] = &ptyRef{pty: &fakePty{}}
+	m.persistIDByToken["new-cancelled"] = "real-cancelled"
+
+	m.CloseAllWithPendingAndForget(nil, []string{"new-cancelled"})
+	if len(persisted) != 1 || len(persisted[0]) != 0 {
+		t.Fatalf("cancelled adoption snapshot = %v, want empty", persisted)
+	}
+}
+
+func TestCancelledAdoptionOverridesStaleFailedSnapshotWhenAlreadyClosed(t *testing.T) {
+	var persisted [][]string
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error {
+		persisted = append(persisted, append([]string(nil), ids...))
+		return nil
+	}, nil)
+	m.persistDirty = true
+	m.persistRetryIDs = []string{"stale-real"}
+
+	m.CloseAllWithPendingAndForget(nil, []string{"new-cancelled"})
+	if len(persisted) != 1 || len(persisted[0]) != 0 {
+		t.Fatalf("cancelled stale snapshot = %v, want empty", persisted)
+	}
+}
+
 func TestCloseAllPersistsOpenIDsBeforeClearing(t *testing.T) {
 	var persisted [][]string
 	m := NewManagerWithStart(Callbacks{}, func(ids []string) error {
