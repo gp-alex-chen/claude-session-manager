@@ -8,6 +8,7 @@ import { createUpdateController } from '../updates/controller.js';
 import { createUsageController } from '../usage/controller.js';
 import { createUsageView } from '../usage/view.js';
 import { clampProgress } from '../utils.js';
+import { createPaneController } from '../panes/controller.js';
 
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'project-bar', 'btn-add-project',
@@ -47,6 +48,7 @@ export function createApplication(deps) {
   const createTerminal = controllerFactories.terminal || createTerminalController;
   const createSession = controllerFactories.session || createSessionController;
   const createSettings = controllerFactories.settings || createSettingsController;
+  const createPanes = controllerFactories.panes || createPaneController;
   const createUpdate = controllerFactories.update || createUpdateController;
   const createUsage = controllerFactories.usage || createUsageController;
   const nodes = Object.fromEntries(REQUIRED_IDS.map((id) => [id, requiredElement(documentRef, id)]));
@@ -79,6 +81,7 @@ export function createApplication(deps) {
     return element;
   };
   let sessionController;
+  let paneController;
   const agentController = createAgent({
     state,
     GetAgents: backend.GetAgents,
@@ -97,6 +100,7 @@ export function createApplication(deps) {
     termOptions,
     themes,
     setStatus,
+    layoutManaged: true,
     hostFactory: () => documentRef.createElement('div'),
     appendHost: (host) => nodes.terminal.appendChild(host),
     documentRef,
@@ -111,7 +115,26 @@ export function createApplication(deps) {
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
     },
-    onExit: (token) => sessionController?.handleTerminalExit(token),
+    onExit: (token) => {
+      sessionController?.handleTerminalExit(token);
+      paneController?.handleTerminalExit(token);
+    },
+    onDispose: (token) => paneController?.removeSession(token),
+  });
+  paneController = createPanes({
+    state,
+    terminalController,
+    terminalRoot: nodes.terminal,
+    statusBar: nodes['status-bar'],
+    documentRef,
+    storageRef: safeStorage(windowRef),
+    el,
+    setStatus,
+    onFocus: (token) => {
+      usageController.onActivate(token);
+      sessionController?.syncActiveHighlight();
+      agentController.renderUnreadMarks();
+    },
   });
   sessionController = createSession({
     state,
@@ -130,6 +153,7 @@ export function createApplication(deps) {
       AddProject: backend.AddProject,
     },
     terminalController,
+    paneController,
     agentController,
     listRoot: nodes['session-list'],
     addProjectButton: nodes['btn-add-project'],
@@ -187,7 +211,7 @@ export function createApplication(deps) {
     updateController,
   });
 
-  const controllers = { agent: agentController, terminal: terminalController, session: sessionController,
+  const controllers = { agent: agentController, terminal: terminalController, panes: paneController, session: sessionController,
     settings: settingsController, update: updateController, usage: usageController };
   const subscriptions = [];
   let resizeHandler = null;
@@ -219,7 +243,10 @@ export function createApplication(deps) {
   function start() {
     if (started) return readyPromise;
     started = true;
-    resizeHandler = () => terminalController.resizeActive();
+    resizeHandler = () => {
+      if (typeof paneController.resizeVisible === 'function') paneController.resizeVisible();
+      else terminalController.resizeActive();
+    };
     windowRef.addEventListener('resize', resizeHandler);
     subscribe('agents:update', (list) => agentController.applyAgents(list));
     subscribe('term:data', (token, b64) => terminalController.handleData(token, b64));
@@ -228,9 +255,12 @@ export function createApplication(deps) {
     subscribe('update:progress', (progress) => updateController.handleProgress(progress));
     agentController.start();
     usageController.start();
+    paneController.start();
     sessionController.start();
     settingsController.start();
-    readyPromise = Promise.all([initialize(sessionController), initialize(settingsController)]);
+    readyPromise = initialize(paneController).then(() => Promise.all([
+      initialize(sessionController), initialize(settingsController),
+    ]));
     return readyPromise;
   }
 
@@ -246,6 +276,7 @@ export function createApplication(deps) {
     }
     settingsController.stop();
     sessionController.stop();
+    paneController.stop();
     usageController.stop();
     agentController.stop();
     readyPromise = null;

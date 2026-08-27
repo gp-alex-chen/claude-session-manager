@@ -64,6 +64,22 @@ test('controller-driven classes and states remain represented in split styles', 
   }
 });
 
+test('terminal styles define all fixed pane geometries', () => {
+  const terminal = read('terminal.css');
+  for (const mode of ['single', 'split-rows-2', 'split-cols-2', 'split-main-left-3', 'grid-2x2']) {
+    assert.match(terminal, new RegExp(`#terminal\\[data-layout-mode="${mode}"\\]`), mode);
+  }
+  const menuBlock = terminal.match(/\.terminal-layout-menu\s*\{([\s\S]*?)\}/)?.[1] || '';
+  assert.match(menuBlock, /top:\s*calc\(100% \+ 7px\)/);
+  assert.match(menuBlock, /bottom:\s*auto/);
+  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-0"\]\s*\{\s*grid-area:\s*1 \/ 1 \/ 3 \/ 2;/);
+  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-1"\]\s*\{\s*grid-area:\s*1 \/ 2;/);
+  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-2"\]\s*\{\s*grid-area:\s*2 \/ 2;/);
+  assert.match(terminal, /#terminal\[data-layout-mode="grid-2x2"\] \[data-pane-id="pane-3"\]\s*\{\s*grid-area:\s*2 \/ 2;/);
+  assert.match(terminal, /split-main-left-3[^}]*[\s\S]*pane-0/);
+  assert.match(terminal, /terminal-pane-body \.term-host\.is-mounted/);
+});
+
 test('complete selectors are owned by one CSS module', () => {
   const ownership = new Map();
   for (const file of fs.readdirSync(stylesDir).filter((name) => name.endsWith('.css'))) {

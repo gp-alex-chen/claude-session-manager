@@ -16,6 +16,7 @@ export function createTerminalController(deps) {
     storageRef = typeof localStorage === 'undefined' ? null : localStorage,
     onActivate,
     onExit,
+    onDispose,
   } = deps;
 
   const requestFrame = deps.requestFrame || ((callback) => {
@@ -25,7 +26,8 @@ export function createTerminalController(deps) {
     return globalThis.setTimeout(callback, 0);
   });
   let fontFitPending = false;
-  let fontFitTarget = null;
+  const fontFitTargets = new Set();
+  const legacyVisibility = deps.layoutManaged !== true;
 
   const clipboardReader = deps.readClipboard || (() => {
     if (!navigatorRef?.clipboard?.readText) return Promise.reject(new Error('剪贴板不可用'));
@@ -67,10 +69,7 @@ export function createTerminalController(deps) {
   function openTab(token, name) {
     state.closedTokens.delete(token);
     const existing = state.terminals.get(token);
-    if (existing) {
-      activate(token);
-      return existing;
-    }
+    if (existing) return existing;
     const session = {
       token,
       name,
@@ -88,6 +87,25 @@ export function createTerminalController(deps) {
     appendHost(session.host);
     state.terminals.set(token, session);
     return session;
+  }
+
+  function mountSession(token, body) {
+    const session = state.terminals.get(token);
+    if (!session) return null;
+    if (body?.appendChild) body.appendChild(session.host);
+    session.host.classList.toggle('is-mounted', true);
+    session.visible = true;
+    if (!session.term) makeTerminal(session);
+    scheduleFontFit([token]);
+    return session;
+  }
+
+  function unmountSession(token, hostPool) {
+    const session = state.terminals.get(token);
+    if (!session) return;
+    session.visible = false;
+    session.host.classList.toggle('is-mounted', false);
+    if (hostPool?.appendChild) hostPool.appendChild(session.host);
   }
 
   function makeTerminal(session) {
@@ -121,30 +139,51 @@ export function createTerminalController(deps) {
       return true;
     });
     term.onResize(() => {
-      if (session.visible) backend.TermResize(session.token, term.cols, term.rows);
+      if (session.visible && !session.resizeSuppressed) syncResize(session);
     });
     return term;
   }
 
+  function syncResize(session) {
+    if (!session?.term || !session.visible) return;
+    const size = { cols: session.term.cols, rows: session.term.rows };
+    if (session.lastResize
+      && session.lastResize.cols === size.cols
+      && session.lastResize.rows === size.rows) return;
+    session.lastResize = size;
+    backend.TermResize(session.token, size.cols, size.rows);
+  }
+
   function fitAndSync(session) {
     try {
+      if (!session?.term || !session.visible) return;
+      session.resizeSuppressed = true;
       session.fit.fit();
       const cols = Math.max(2, session.term.cols - 1);
       if (cols !== session.term.cols) session.term.resize(cols, session.term.rows);
-      backend.TermResize(session.token, session.term.cols, session.term.rows);
     } catch (error) {
       // A hidden or disposed host can fail measurement during a resize.
+      return;
+    } finally {
+      if (session) session.resizeSuppressed = false;
     }
+    syncResize(session);
   }
 
   function activate(token) {
     const session = state.terminals.get(token);
     if (!session) return;
+    if (!legacyVisibility) {
+      focusSession(token);
+      return;
+    }
     state.activeToken = token;
-    for (const [currentToken, current] of state.terminals) {
-      const visible = currentToken === token;
-      current.host.classList.toggle('active', visible);
-      current.visible = visible;
+    if (legacyVisibility) {
+      for (const [currentToken, current] of state.terminals) {
+        const visible = currentToken === token;
+        current.host.classList.toggle('active', visible);
+        current.visible = visible;
+      }
     }
     state.unreadSessions.delete(token);
     onActivate?.(token);
@@ -157,14 +196,31 @@ export function createTerminalController(deps) {
     );
   }
 
+  function focusSession(token, options = {}) {
+    const session = state.terminals.get(token);
+    if (!session) return false;
+    state.activeToken = token;
+    state.unreadSessions.delete(token);
+    onActivate?.(token);
+    if (!session.term) makeTerminal(session);
+    if (session.visible) fitAndSync(session);
+    if (options.focus !== false) session.term.focus();
+    setStatus?.(
+      '当前会话: ' + session.labelText + (session.exited ? '（已退出）' : ''),
+      session.exited ? 'warn' : 'ok',
+    );
+    return true;
+  }
+
   function disposeSession(token) {
     const session = state.terminals.get(token);
     if (!session) return;
+    state.terminals.delete(token);
+    onDispose?.(token);
     if (session.term) {
       try { session.term.dispose(); } catch (error) { /* ignore */ }
     }
     session.host.remove();
-    state.terminals.delete(token);
   }
 
   function pickNextAfter(token) {
@@ -196,37 +252,39 @@ export function createTerminalController(deps) {
     clearNewMapping(token);
     if (!session) return;
     disposeSession(token);
-    pickNextAfter(token);
+    if (legacyVisibility) pickNextAfter(token);
+  }
+
+  function resizeVisible(tokens = null) {
+    const wanted = tokens || [...state.terminals.keys()];
+    for (const token of wanted) {
+      const session = state.terminals.get(token);
+      if (session?.visible && session.term) fitAndSync(session);
+    }
   }
 
   function resizeActive() {
-    const session = state.terminals.get(state.activeToken);
-    if (session?.term) fitAndSync(session);
+    resizeVisible();
   }
 
-  function scheduleFontFit() {
-    const token = state.activeToken;
-    const session = state.terminals.get(token);
-    if (!token || !session?.visible || !session.term || !session.fit) return;
-    fontFitTarget = { token, session };
+  function scheduleFontFit(tokens = null) {
+    const wanted = tokens || [...state.terminals.keys()];
+    for (const token of wanted) {
+      const session = state.terminals.get(token);
+      if (session?.visible && session.term && session.fit) fontFitTargets.add(token);
+    }
+    if (!fontFitTargets.size) return;
     if (fontFitPending) return;
 
     fontFitPending = true;
     requestFrame(() => {
       fontFitPending = false;
-      const target = fontFitTarget;
-      fontFitTarget = null;
-      if (!target) return;
-      const { token: targetToken, session: targetSession } = target;
-      const current = state.terminals.get(targetToken);
-      if (
-        state.activeToken !== targetToken
-        || current !== targetSession
-        || !targetSession.visible
-        || !targetSession.term
-        || !targetSession.fit
-      ) return;
-      fitAndSync(targetSession);
+      const pending = [...fontFitTargets];
+      fontFitTargets.clear();
+      for (const token of pending) {
+        const session = state.terminals.get(token);
+        if (session?.visible && session.term && session.fit) fitAndSync(session);
+      }
     });
   }
 
@@ -239,26 +297,34 @@ export function createTerminalController(deps) {
   }
 
   function handleExit(token) {
-    onExit?.(token);
-    if (state.closedTokens.has(token)) return;
+    if (state.closedTokens.has(token)) {
+      onExit?.(token);
+      return;
+    }
     const real = state.newToReal.get(token);
     if (real) {
       state.newToReal.delete(token);
       state.realToNew.delete(real);
       disposeSession(token);
-      pickNextAfter(token);
+      if (legacyVisibility) pickNextAfter(token);
+      onExit?.(token);
       return;
     }
     if (token.startsWith('new-')) {
       clearNewMapping(token);
       disposeSession(token);
-      pickNextAfter(token);
+      if (legacyVisibility) pickNextAfter(token);
+      onExit?.(token);
       return;
     }
     const session = state.terminals.get(token);
-    if (!session) return;
+    if (!session) {
+      onExit?.(token);
+      return;
+    }
     session.exited = true;
     setStatus?.('会话已退出: ' + session.labelText, 'warn');
+    onExit?.(token);
   }
 
   function applyTheme(name, notify = true) {
@@ -302,9 +368,13 @@ export function createTerminalController(deps) {
     handleData,
     handleExit,
     makeTerminal,
+    mountSession,
     openTab,
     pasteIntoTerm,
+    focusSession,
     resizeActive,
+    resizeVisible,
+    unmountSession,
     writeTerm,
   };
 }

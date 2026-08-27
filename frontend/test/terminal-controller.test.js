@@ -28,12 +28,20 @@ class FakeClassList {
 class FakeHost {
   constructor() {
     this.classList = new FakeClassList();
+    this.children = [];
+    this.parentNode = null;
     this.removed = false;
     this.listeners = new Map();
   }
 
   addEventListener(name, callback) { this.listeners.set(name, callback); }
   emit(name, event) { return this.listeners.get(name)?.(event); }
+
+  appendChild(child) {
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
 
   remove() {
     this.removed = true;
@@ -45,8 +53,7 @@ class FakeFit {
   fit() {
     this.fitCalls += 1;
     if (this.term) {
-      this.term.cols = 80;
-      this.term.rows = 24;
+      this.term.resize(80, 24);
     }
   }
 }
@@ -65,7 +72,11 @@ class FakeTerm {
 
   loadAddon(addon) { this.addon = addon; addon.term = this; }
   open(host) { this.host = host; }
-  resize(cols, rows) { this.cols = cols; this.rows = rows; }
+  resize(cols, rows) {
+    this.cols = cols;
+    this.rows = rows;
+    this.resizeHandler?.();
+  }
   onData(handler) { this.dataHandler = handler; }
   onResize(handler) { this.resizeHandler = handler; }
   attachCustomKeyEventHandler(handler) { this.keyHandler = handler; }
@@ -128,6 +139,7 @@ function createFixture(options = {}) {
         storageWrites.push([key, value]);
       },
     },
+    layoutManaged: options.layoutManaged === true,
     readClipboard: options.readClipboard || (async () => {
       clipboardReads.push(true);
       return options.clipboardText ?? '粘贴内容';
@@ -140,6 +152,7 @@ function createFixture(options = {}) {
       return frames.length;
     },
     onExit: (token) => exits.push(token),
+    onDispose: options.onDispose,
   });
   return {
     state,
@@ -234,6 +247,41 @@ test('multiple terminals use overlapping hosts with only the active host shown',
   assert.equal(second.host.classList.contains('active'), true);
 });
 
+test('layout-managed terminals can stay mounted together and focus does not hide siblings', () => {
+  const fixture = createFixture({ layoutManaged: true, onDispose: () => {} });
+  const first = fixture.controller.openTab('first', 'first');
+  const second = fixture.controller.openTab('second', 'second');
+  fixture.controller.mountSession('first', new FakeHost());
+  fixture.controller.mountSession('second', new FakeHost());
+
+  fixture.controller.activate('second');
+  assert.equal(first.visible, true);
+  assert.equal(second.visible, true);
+  assert.equal(first.host.classList.contains('is-mounted'), true);
+  assert.equal(second.host.classList.contains('is-mounted'), true);
+  assert.equal(fixture.state.activeToken, 'second');
+});
+
+test('layout-managed resize and font fitting cover every visible terminal with deduped sizes', () => {
+  const fixture = createFixture({ layoutManaged: true, onDispose: () => {} });
+  const first = fixture.controller.openTab('first', 'first');
+  const second = fixture.controller.openTab('second', 'second');
+  fixture.controller.mountSession('first', new FakeHost());
+  fixture.controller.mountSession('second', new FakeHost());
+  fixture.flushFrame();
+  const resizes = fixture.resizes.length;
+
+  fixture.controller.resizeVisible(['first', 'second']);
+  assert.equal(fixture.resizes.length, resizes);
+  const firstFits = first.fit.fitCalls;
+  const secondFits = second.fit.fitCalls;
+  fixture.controller.applyFontSize(18, false);
+  fixture.flushFrame();
+  assert.equal(first.fit.fitCalls, firstFits + 1);
+  assert.equal(second.fit.fitCalls, secondFits + 1);
+  assert.equal(fixture.resizes.length, resizes);
+});
+
 test('applyTheme updates options on existing terminals', () => {
   const fixture = createFixture();
   const session = openAndActivate(fixture, 'session-1');
@@ -264,7 +312,7 @@ test('applyFontSize updates active and hidden terminals while new terminals inhe
   fixture.flushFrame();
   assert.equal(active.fit.fitCalls, activeFits + 1);
   assert.equal(hidden.fit.fitCalls, hiddenFits);
-  assert.equal(fixture.resizes.length, resizeCount + 1);
+  assert.equal(fixture.resizes.length, resizeCount);
   assert.deepEqual(fixture.resizes.at(-1), { token: 'active', cols: 79, rows: 24 });
 
   const future = fixture.controller.openTab('future', 'future');

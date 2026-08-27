@@ -16,16 +16,31 @@ class FakeNode {
   constructor(id = '') {
     this.id = id;
     this.children = [];
+    this.parentNode = null;
+    this.dataset = {};
     this.listeners = new Map();
     this.style = {};
+    this.classList = {
+      values: new Set(),
+      add: (...names) => names.forEach((name) => this.classList.values.add(name)),
+      remove: (...names) => names.forEach((name) => this.classList.values.delete(name)),
+      toggle: (name, force) => {
+        const next = force === undefined ? !this.classList.values.has(name) : force;
+        if (next) this.classList.values.add(name);
+        else this.classList.values.delete(name);
+        return next;
+      },
+      forEach: (callback) => this.classList.values.forEach(callback),
+    };
     this.className = '';
     this.textContent = '';
     this.innerHTML = '';
     this.hidden = false;
     this.attributes = new Map();
   }
-  appendChild(child) { this.children.push(child); return child; }
-  replaceChildren(...children) { this.children = children; }
+  append(...children) { children.forEach((child) => this.appendChild(child)); }
+  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  replaceChildren(...children) { this.children = children; children.forEach((child) => { child.parentNode = this; }); }
   addEventListener(name, callback) { this.listeners.set(name, callback); }
   removeEventListener(name, callback) {
     if (this.listeners.get(name) === callback) this.listeners.delete(name);
@@ -122,6 +137,7 @@ function makeFixture(options = {}) {
         handleData: (...value) => calls.routed.push(['data', value]),
         handleExit: (...value) => calls.routed.push(['exit', value]),
         resizeActive: () => { calls.resize += 1; },
+        resizeVisible: () => { calls.resize += 1; },
       });
     },
     session: (deps) => {

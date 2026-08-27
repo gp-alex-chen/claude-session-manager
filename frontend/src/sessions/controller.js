@@ -7,6 +7,7 @@ export function createSessionController(deps) {
     state,
     backend,
     terminalController,
+    paneController = null,
     agentController,
     listRoot,
     addProjectButton = null,
@@ -54,6 +55,16 @@ export function createSessionController(deps) {
     updateProjectUsageLabels({ listRoot, usageByProject: state.usageByProject });
   }
 
+  function showTerminal(token, options = {}) {
+    if (options.show === false) {
+      paneController?.refresh?.();
+      return true;
+    }
+    if (paneController?.showSession) return paneController.showSession(token, options);
+    if (options.focus !== false) terminalController.activate(token);
+    return true;
+  }
+
   function refreshFoldState() {
     for (const item of listRoot.querySelectorAll('.group .session-item')) {
       const id = item.dataset.id;
@@ -64,17 +75,19 @@ export function createSessionController(deps) {
     }
   }
 
-  async function openFromList(sessionInfo) {
+  async function openFromList(sessionInfo, options = {}) {
     const token = state.realToNew.get(sessionInfo.id) || sessionInfo.id;
+    const targetPaneId = paneController?.getTargetPaneId?.(options.paneId) || options.paneId;
+    const showOptions = targetPaneId ? { ...options, paneId: targetPaneId } : options;
     state.sessionDirs.set(sessionInfo.id, sessionInfo.dir);
     const existingSession = state.terminals.get(token);
     if (existingSession) existingSession.dir = sessionInfo.dir;
     const existing = existingSession;
     if (existing && !existing.exited) {
-      terminalController.activate(token);
+      showTerminal(token, showOptions);
       state.unreadSessions.delete(sessionInfo.id);
       agentController.renderUnreadMarks();
-      return;
+      return true;
     }
     if (existing) terminalController.disposeSession(token);
     terminalController.openTab(token, sessionInfo.name);
@@ -85,10 +98,12 @@ export function createSessionController(deps) {
       setStatus('已恢复: ' + sessionInfo.name, 'ok');
       state.unreadSessions.delete(sessionInfo.id);
       agentController.renderUnreadMarks();
-      terminalController.activate(token);
+      showTerminal(token, showOptions);
+      return true;
     } catch (error) {
       setStatus('恢复失败: ' + error, 'warn');
       terminalController.disposeSession(token);
+      return false;
     }
   }
 
@@ -231,10 +246,12 @@ export function createSessionController(deps) {
     agentController.refreshAgents();
     refreshFoldState();
     agentController.renderUnreadMarks();
+    paneController?.setSessionOptions?.(list);
     syncActiveHighlight();
   }
 
   async function startNew(dir) {
+    const targetPaneId = paneController?.getTargetPaneId?.();
     try {
       const token = await backend.StartNew(dir);
       const label = '新会话 ' + (++newCounter) + ' · ' + leafOf(dir);
@@ -242,7 +259,7 @@ export function createSessionController(deps) {
       const terminal = state.terminals.get(token);
       if (terminal) terminal.dir = dir;
       state.pendingNew.push({ token, dir });
-      terminalController.activate(token);
+      showTerminal(token, targetPaneId ? { paneId: targetPaneId } : {});
       setStatus('已启动新会话: ' + leafOf(dir), 'ok');
     } catch (error) {
       setStatus('新建失败: ' + error, 'warn');
@@ -422,15 +439,28 @@ export function createSessionController(deps) {
       return;
     }
     if (!Array.isArray(open)) return;
+    const paneIds = paneController?.getVisiblePaneIds?.() || [];
+    let restoreIndex = 0;
+    let restored = false;
     for (const id of open) {
       const session = lastLoaded.find((item) => item.id === id);
       if (!session) continue;
       try {
-        await openFromList(session);
+        const restoreOptions = {
+          paneId: paneIds[restoreIndex],
+          focus: !paneController,
+        };
+        if (paneController && !restoreOptions.paneId) restoreOptions.show = false;
+        const ok = await openFromList(session, restoreOptions);
+        if (ok && paneIds[restoreIndex]) {
+          restoreIndex += 1;
+          restored = true;
+        }
       } catch (error) {
         setStatus('恢复失败: ' + error, 'warn');
       }
     }
+    if (paneController && restored) paneController.focusFirstAssigned?.();
   }
 
   function start() {

@@ -113,6 +113,7 @@ function makeFixture(options = {}) {
     },
     closed: [],
   };
+  const paneController = options.paneController || null;
   const agentController = {
     classifyAgent: () => 'idle',
     refreshAgents: async () => {},
@@ -164,6 +165,7 @@ function makeFixture(options = {}) {
     state,
     backend,
     terminalController,
+    paneController,
     agentController,
     listRoot,
     addProjectButton,
@@ -193,6 +195,7 @@ function makeFixture(options = {}) {
     listRoot, addProjectButton, terminalController, projectCalls, projectAddCalls,
     chooserCalls, openCalls,
     adoptionCalls,
+    paneController,
     get renderCount() { return renderCount; },
   };
 }
@@ -550,6 +553,114 @@ test('openFromList activates existing, rebuilds exited, and cleans failed starts
   await fixture.controller.openFromList(session('good'));
   assert.equal(fixture.state.terminals.has('good'), true);
   assert.equal(fixture.state.terminals.get('good').dir, 'work');
+});
+
+test('pane-aware opening assigns sessions without using the legacy single-terminal activation', async () => {
+  const calls = [];
+  const paneController = {
+    showSession: (token, options) => { calls.push(['show', token, options]); return true; },
+    getVisiblePaneIds: () => ['pane-0', 'pane-1'],
+    focusFirstAssigned: () => calls.push(['focus-first']),
+    setSessionOptions: () => {},
+  };
+  const fixture = makeFixture({
+    paneController,
+    listResults: [[session('one'), session('two')]],
+    GetOpenSessions: async () => ['one', 'two'],
+  });
+
+  await fixture.controller.initialize();
+
+  assert.deepEqual(fixture.terminalController.activations, []);
+  assert.deepEqual(calls, [
+    ['show', 'one', { paneId: 'pane-0', focus: false }],
+    ['show', 'two', { paneId: 'pane-1', focus: false }],
+    ['focus-first'],
+  ]);
+});
+
+test('pane-aware restoration does not replace earlier sessions when more are open than panes', async () => {
+  const calls = [];
+  const starts = [];
+  const paneController = {
+    showSession: (token, options) => { calls.push(['show', token, options]); return true; },
+    getVisiblePaneIds: () => ['pane-0', 'pane-1'],
+    focusFirstAssigned: () => calls.push(['focus-first']),
+    setSessionOptions: () => {},
+  };
+  const fixture = makeFixture({
+    paneController,
+    listResults: [[session('one'), session('two'), session('three')]],
+    StartSession: async (...args) => { starts.push(args); },
+    GetOpenSessions: async () => ['one', 'two', 'three'],
+  });
+
+  await fixture.controller.initialize();
+
+  assert.deepEqual(calls, [
+    ['show', 'one', { paneId: 'pane-0', focus: false }],
+    ['show', 'two', { paneId: 'pane-1', focus: false }],
+    ['focus-first'],
+  ]);
+  assert.deepEqual(starts, [['one', 'work'], ['two', 'work'], ['three', 'work']]);
+});
+
+test('async session opening keeps the pane chosen before backend startup', async () => {
+  const calls = [];
+  let targetPane = 'pane-0';
+  let resolveStart;
+  const paneController = {
+    getTargetPaneId: () => targetPane,
+    showSession: (token, options) => { calls.push([token, options]); return true; },
+    setSessionOptions: () => {},
+  };
+  const fixture = makeFixture({
+    paneController,
+    StartSession: () => new Promise((resolve) => { resolveStart = resolve; }),
+  });
+
+  const pending = fixture.controller.openFromList(session('async'));
+  targetPane = 'pane-1';
+  resolveStart();
+  await pending;
+
+  assert.deepEqual(calls, [['async', { paneId: 'pane-0' }]]);
+});
+
+test('async new session opening keeps the pane chosen before backend startup', async () => {
+  const calls = [];
+  let targetPane = 'pane-0';
+  let resolveStart;
+  const paneController = {
+    getTargetPaneId: () => targetPane,
+    showSession: (token, options) => { calls.push([token, options]); return true; },
+    setSessionOptions: () => {},
+  };
+  const fixture = makeFixture({
+    paneController,
+    StartNew: () => new Promise((resolve) => { resolveStart = () => resolve('async-new'); }),
+  });
+
+  const pending = fixture.controller.startNew('work');
+  targetPane = 'pane-1';
+  resolveStart();
+  await pending;
+
+  assert.deepEqual(calls, [['async-new', { paneId: 'pane-0' }]]);
+});
+
+test('pane-aware new sessions are shown in the pane layer after backend startup', async () => {
+  const calls = [];
+  const paneController = {
+    showSession: (token, options) => { calls.push([token, options]); return true; },
+    setSessionOptions: () => {},
+  };
+  const fixture = makeFixture({ paneController, StartNew: async () => 'new-pane' });
+
+  await fixture.controller.startNew('work');
+
+  assert.deepEqual(calls, [['new-pane', {}]]);
+  assert.deepEqual(fixture.terminalController.activations, []);
 });
 
 test('startNew only records pending state after successful backend start', async () => {

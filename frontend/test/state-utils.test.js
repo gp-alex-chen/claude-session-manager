@@ -19,10 +19,15 @@ test('createAppState returns independent containers', () => {
   first.terminals.set('one', { token: 'one' });
   first.pendingNew.push({ token: 'one', dir: 'work' });
   first.activeToken = 'one';
+  first.panes[0].token = 'one';
+  first.layoutMode = 'split-cols-2';
 
   assert.equal(second.terminals.size, 0);
   assert.deepEqual(second.pendingNew, []);
   assert.equal(second.activeToken, null);
+  assert.equal(second.panes[0].token, null);
+  assert.equal(second.layoutMode, 'single');
+  assert.equal(second.focusedPaneId, 'pane-0');
 });
 
 test('shared state is the single source for primitive and array updates', () => {

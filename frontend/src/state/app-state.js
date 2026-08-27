@@ -1,4 +1,9 @@
 import { DEFAULT_TERMINAL_FONT_SIZE } from '../terminal/options.js';
+import { PANE_IDS } from '../panes/presets.js';
+
+function createPanes() {
+  return PANE_IDS.map((id) => ({ id, token: null }));
+}
 
 export function createAppState() {
   return {
@@ -7,6 +12,9 @@ export function createAppState() {
     sessionNames: new Map(),
     collapsedDirs: new Set(),
     activeToken: null,
+    layoutMode: 'single',
+    panes: createPanes(),
+    focusedPaneId: 'pane-0',
     pendingNew: [],
     realToNew: new Map(),
     newToReal: new Map(),
