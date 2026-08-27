@@ -15,6 +15,7 @@ export function createTerminalController(deps) {
     navigatorRef = typeof navigator === 'undefined' ? null : navigator,
     storageRef = typeof localStorage === 'undefined' ? null : localStorage,
     onActivate,
+    onExit,
   } = deps;
 
   const requestFrame = deps.requestFrame || ((callback) => {
@@ -238,6 +239,7 @@ export function createTerminalController(deps) {
   }
 
   function handleExit(token) {
+    onExit?.(token);
     if (state.closedTokens.has(token)) return;
     const real = state.newToReal.get(token);
     if (real) {

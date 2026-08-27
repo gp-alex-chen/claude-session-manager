@@ -10,7 +10,7 @@ const backend = fs.readFileSync(path.join(frontendDir, 'src/api/backend.js'), 'u
 const expected = [
   'GetAgents', 'GetOpenSessions', 'GetShell', 'ShellInstalled', 'SetShell',
   'NotifyBeep', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
-  'DeleteSession', 'UnhideSession', 'StartSession', 'StartNew', 'TermWrite',
+  'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject',
 ];
@@ -29,7 +29,7 @@ function extractBackendExports(source) {
 
 const backendNames = extractBackendExports(backend);
 
-test('Wails wrapper and backend boundary expose the same 25 methods', () => {
+test('Wails wrapper and backend boundary expose the same methods', () => {
   assert.equal(new Set(backendNames).size, backendNames.length);
   assert.deepEqual(new Set(wrapperNames), new Set(expected));
   assert.deepEqual(new Set(backendNames), new Set(expected));

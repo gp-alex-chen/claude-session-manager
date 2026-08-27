@@ -109,5 +109,13 @@ func CleanupUpdateArtifacts() {
 // closeAllTerms 关闭全部 ConPTY 会话（与 shutdown 相同的幂等路径，
 // 仅用于"更新替换前"的主动收尾）。
 func (a *App) closeAllTerms() {
-	a.terms.CloseAll()
+	if a.terms == nil {
+		return
+	}
+	a.adoptionMu.Lock()
+	defer a.adoptionMu.Unlock()
+	a.terms.CloseAllWithPendingAndForget(
+		a.pendingAdoptionIDsLocked(),
+		a.cancelledAdoptionTokensLocked(),
+	)
 }

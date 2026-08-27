@@ -34,6 +34,10 @@ export function createSessionController(deps) {
   let ctxTarget = null;
   let addProjectBound = false;
   let sessionsLoaded = false;
+  const pendingAdoptions = new Map();
+  let adoptionInFlight = null;
+  let adoptionInFlightGeneration = null;
+  let adoptionGeneration = 0;
 
   const contextMenu = documentRef.createElement('div');
   contextMenu.id = 'ctx-menu';
@@ -90,12 +94,53 @@ export function createSessionController(deps) {
 
   function closeRealSession(id) {
     const mappedToken = state.realToNew.get(id);
+    pendingAdoptions.delete(mappedToken || id);
     if (mappedToken) {
       state.closedTokens.add(id);
       terminalController.closeTab(mappedToken);
     } else {
       terminalController.closeTab(id);
     }
+  }
+
+  async function flushPendingAdoptions() {
+    const requestedGeneration = adoptionGeneration;
+    if (adoptionInFlight) {
+      const inFlight = adoptionInFlight;
+      if (adoptionInFlightGeneration === requestedGeneration) return inFlight;
+      await inFlight;
+      return flushPendingAdoptions();
+    }
+    if (!pendingAdoptions.size) return;
+    const runGeneration = requestedGeneration;
+    const run = (async () => {
+      for (const [token, adoption] of pendingAdoptions) {
+        if (adoptionGeneration !== runGeneration) return;
+        try {
+          await backend.AdoptSession(token, adoption.realId);
+          if (adoptionGeneration !== runGeneration) return;
+          if (pendingAdoptions.get(token) === adoption) pendingAdoptions.delete(token);
+        } catch (error) {
+          if (adoptionGeneration !== runGeneration) return;
+          setStatus('会话持久化失败: ' + error, 'warn');
+          break;
+        }
+      }
+    })();
+    adoptionInFlight = run;
+    adoptionInFlightGeneration = runGeneration;
+    try {
+      await run;
+    } finally {
+      if (adoptionInFlight === run) {
+        adoptionInFlight = null;
+        adoptionInFlightGeneration = null;
+      }
+    }
+  }
+
+  function handleTerminalExit(token) {
+    pendingAdoptions.delete(token);
   }
 
   function pairNewSessions(list) {
@@ -111,10 +156,12 @@ export function createSessionController(deps) {
         if (terminal && info) terminal.dir = info.dir;
         if (info) state.sessionDirs.set(realId, info.dir);
         if (state.activeToken === pendingItem.token) syncActiveHighlight();
+        pendingAdoptions.set(pendingItem.token, { realId });
         onPair?.(pendingItem, realId, info);
         return realId;
       },
     });
+    return flushPendingAdoptions();
   }
 
   async function loadSessions() {
@@ -126,7 +173,7 @@ export function createSessionController(deps) {
       return false;
     }
     list = Array.isArray(list) ? list : [];
-    pairNewSessions(list);
+    await pairNewSessions(list);
     sessionsLoaded = true;
     renderSessions(list);
     return true;
@@ -139,8 +186,11 @@ export function createSessionController(deps) {
       const list = await backend.ListSessions();
       if (!Array.isArray(list)) return;
       const signature = listSig(list);
-      if (signature === lastListSignature) return;
-      pairNewSessions(list);
+      if (signature === lastListSignature) {
+        await flushPendingAdoptions();
+        return;
+      }
+      await pairNewSessions(list);
       renderSessions(list);
     } finally {
       refreshInFlight = false;
@@ -392,10 +442,13 @@ export function createSessionController(deps) {
   }
 
   function stop() {
-    if (!started) return;
-    started = false;
-    clearIntervalFn(refreshTimer);
-    refreshTimer = null;
+    if (started) {
+      started = false;
+      clearIntervalFn(refreshTimer);
+      refreshTimer = null;
+    }
+    adoptionGeneration += 1;
+    pendingAdoptions.clear();
   }
 
   hiddenButton.addEventListener('click', () => {
@@ -423,6 +476,7 @@ export function createSessionController(deps) {
     loadProjects,
     openFromList,
     pairNewSessions,
+    handleTerminalExit,
     refreshFoldState,
     refreshHidden,
     renderSessions,

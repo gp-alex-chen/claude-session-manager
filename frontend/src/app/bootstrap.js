@@ -111,6 +111,7 @@ export function createApplication(deps) {
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
     },
+    onExit: (token) => sessionController?.handleTerminalExit(token),
   });
   sessionController = createSession({
     state,
@@ -120,6 +121,7 @@ export function createApplication(deps) {
       RenameSession: backend.RenameSession,
       DeleteSession: backend.DeleteSession,
       UnhideSession: backend.UnhideSession,
+      AdoptSession: backend.AdoptSession,
       StartSession: backend.StartSession,
       StartNew: backend.StartNew,
       GetOpenSessions: backend.GetOpenSessions,

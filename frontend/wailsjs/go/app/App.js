@@ -13,6 +13,7 @@ export function ListHiddenSessions() { return window['go']['app']['App']['ListHi
 export function RenameSession(id, name) { return window['go']['app']['App']['RenameSession'](id, name); }
 export function DeleteSession(id) { return window['go']['app']['App']['DeleteSession'](id); }
 export function UnhideSession(id) { return window['go']['app']['App']['UnhideSession'](id); }
+export function AdoptSession(runtimeToken, sessionID) { return window['go']['app']['App']['AdoptSession'](runtimeToken, sessionID); }
 export function StartNew(dir) { return window['go']['app']['App']['StartNew'](dir); }
 export function StartSession(id, dir) { return window['go']['app']['App']['StartSession'](id, dir); }
 export function TermKill(token) { return window['go']['app']['App']['TermKill'](token); }

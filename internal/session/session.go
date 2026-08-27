@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -69,9 +70,14 @@ func decodeDir(enc string) string {
 }
 
 func parseSession(path, fallbackDir string) *Session {
+	s, _ := parseSessionDetailed(path, fallbackDir)
+	return s
+}
+
+func parseSessionDetailed(path, fallbackDir string) (*Session, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer f.Close()
 	s := &Session{
@@ -85,12 +91,19 @@ func parseSession(path, fallbackDir string) *Session {
 	sc.Buffer(make([]byte, 1<<20), 32<<20)
 	n := 0
 	var aiTitle, custom string
+	var parseErr error
 	for sc.Scan() {
 		n++
 		if n > 5000 || (s.Text != "" && aiTitle != "" && custom != "") {
 			break
 		}
 		raw := sc.Bytes()
+		if !json.Valid(raw) {
+			if parseErr == nil {
+				parseErr = fmt.Errorf("invalid JSONL at line %d", n)
+			}
+			continue
+		}
 		// 会话名三来源，优先级：custom-title（用户 /rename）> ai-title/agent-name。
 		// 这些行会被 claude 周期性重写（可能在文件头、也可能在改名时刻），
 		// 因此继续扫描并保留最后一次看到的值，避免被早期的旧标题锁死。
@@ -112,7 +125,13 @@ func parseSession(path, fallbackDir string) *Session {
 			continue
 		}
 		var l line
-		if err := json.Unmarshal(raw, &l); err != nil || l.Type != "user" {
+		if err := json.Unmarshal(raw, &l); err != nil {
+			if parseErr == nil {
+				parseErr = fmt.Errorf("invalid JSONL at line %d: %w", n, err)
+			}
+			continue
+		}
+		if l.Type != "user" {
 			continue
 		}
 		if l.Cwd != "" {
@@ -123,12 +142,15 @@ func parseSession(path, fallbackDir string) *Session {
 			s.Text = messageText(l.Message)
 		}
 	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("scan JSONL: %w", err)
+	}
 	if custom != "" {
 		s.Name = custom // 用户 /rename 的名字优先
 	} else {
 		s.Name = aiTitle
 	}
-	return s
+	return s, parseErr
 }
 
 // messageText 从 user 消息的 message 字段提取可显示文本。claude 不同版本格式不同：
@@ -180,33 +202,9 @@ func ScanAll() []*Session {
 		return nil
 	}
 	root := filepath.Join(home, ".claude", "projects")
-	projDirs, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-	var out []*Session
-	for _, pd := range projDirs {
-		if !pd.IsDir() {
-			continue
-		}
-		files, err := os.ReadDir(filepath.Join(root, pd.Name()))
-		if err != nil {
-			continue
-		}
-		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
-				continue
-			}
-			if fi, err := f.Info(); err != nil || fi.Size() == 0 {
-				continue
-			}
-			path := filepath.Join(root, pd.Name(), f.Name())
-			if s := parseSession(path, decodeDir(pd.Name())); s != nil {
-				out = append(out, s)
-			}
-		}
-	}
-	return out
+	// Compatibility helper: callers that need incremental caching and warning
+	// delivery should keep one Catalog instance, as App does.
+	return NewCatalog(root).Snapshot()
 }
 
 // groupSessions 按目录分组。组按目录名升序（不区分大小写）；

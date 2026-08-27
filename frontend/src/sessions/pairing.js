@@ -1,5 +1,5 @@
 export function listSig(list) {
-  return list.map((session) => [session.id, session.dir, session.name].join('|')).join('\n');
+  return list.map((session) => [session.id, session.dir, session.name, session.time].join('|')).join('\n');
 }
 
 export function pairPendingSessions({ pending, lastLoaded, list, realToNew, newToReal, onPair }) {

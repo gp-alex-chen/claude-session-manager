@@ -91,6 +91,7 @@ function createFixture(options = {}) {
   const statuses = [];
   const clipboardReads = [];
   const clipboardWrites = [];
+  const exits = [];
   const storageWrites = [];
   const frames = [];
   const termOptions = { ...createTermOptions(), pasteEmitsData: options.pasteEmitsData };
@@ -138,6 +139,7 @@ function createFixture(options = {}) {
       frames.push(callback);
       return frames.length;
     },
+    onExit: (token) => exits.push(token),
   });
   return {
     state,
@@ -151,6 +153,7 @@ function createFixture(options = {}) {
     clipboardWrites,
     storageWrites,
     frames,
+    exits,
     termOptions,
     flushFrame: () => frames.shift()?.(),
   };
@@ -199,6 +202,14 @@ test('late data and exit after close cannot resurrect a terminal', () => {
   fixture.controller.handleExit('session-1');
   assert.equal(fixture.state.terminals.has('session-1'), false);
   assert.equal(fixture.hosts[0].removed, true);
+  assert.deepEqual(fixture.exits, ['session-1']);
+});
+
+test('exit callback runs even when the terminal was already marked closed', () => {
+  const fixture = createFixture();
+  fixture.state.closedTokens.add('closed');
+  fixture.controller.handleExit('closed');
+  assert.deepEqual(fixture.exits, ['closed']);
 });
 
 test('activate updates active token and clears unread state', () => {
