@@ -78,6 +78,15 @@ test('terminal styles define all fixed pane geometries', () => {
   assert.match(terminal, /#terminal\[data-layout-mode="grid-2x2"\] \[data-pane-id="pane-3"\]\s*\{\s*grid-area:\s*2 \/ 2;/);
   assert.match(terminal, /split-main-left-3[^}]*[\s\S]*pane-0/);
   assert.match(terminal, /terminal-pane-body \.term-host\.is-mounted/);
+  assert.match(terminal, /#terminal\.terminal-layout[\s\S]*background:\s*var\(--bg\)/);
+  assert.match(terminal, /#terminal\.terminal-layout[\s\S]*gap:\s*6px/);
+  assert.match(terminal, /terminal-pane-slot[\s\S]*border:\s*1px solid transparent/);
+  assert.match(terminal, /terminal-pane-slot::after[\s\S]*z-index:\s*10/);
+  assert.match(terminal, /terminal-pane-slot::after[\s\S]*pointer-events:\s*none/);
+  assert.match(terminal, /terminal-pane-slot\.is-focused::after\s*\{\s*border-color:\s*var\(--accent\)/);
+  assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-header[\s\S]*background:\s*var\(--accent-soft\)/);
+  assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-header[\s\S]*box-shadow:\s*inset 3px 0 0 var\(--accent\)/);
+  assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-title::after[\s\S]*content:\s*'当前'/);
 });
 
 test('complete selectors are owned by one CSS module', () => {

@@ -45,6 +45,8 @@ export function createPaneController(deps) {
   let sessionOptions = [];
   let started = false;
   let currentMode = normalizeLayoutMode(readStorage(storageRef, LAYOUT_STORAGE_KEY));
+  let layoutSwitching = false;
+  let layoutFramePending = false;
   let resizeFramePending = false;
   const resizeTargets = new Set();
 
@@ -67,6 +69,7 @@ export function createPaneController(deps) {
 
   const resizeObserver = typeof ResizeObserverCtor === 'function'
     ? new ResizeObserverCtor((entries) => {
+      if (layoutSwitching) return;
       for (const entry of entries) {
         const paneId = entry.target?.dataset?.paneId;
         const pane = paneById(state, paneId);
@@ -133,12 +136,12 @@ export function createPaneController(deps) {
     view.setFocusedPane(state.focusedPaneId);
   }
 
-  function mountVisibleSessions() {
+  function mountVisibleSessions(options = {}) {
     const visible = new Set(visibleIds());
     for (const pane of state.panes) {
       if (!pane.token) continue;
       if (visible.has(pane.id)) {
-        terminalController.mountSession?.(pane.token, view.paneBody(pane.id));
+        terminalController.mountSession?.(pane.token, view.paneBody(pane.id), options);
       } else {
         terminalController.unmountSession?.(pane.token, view.hostPool);
       }
@@ -155,7 +158,9 @@ export function createPaneController(deps) {
     state.activeToken = pane.token || null;
     view.setFocusedPane(selectedId);
     if (pane.token) {
-      terminalController.focusSession?.(pane.token, { focus: options.focus !== false });
+      const focusOptions = { focus: options.focus !== false };
+      if (options.resize !== undefined) focusOptions.resize = options.resize;
+      terminalController.focusSession?.(pane.token, focusOptions);
     } else {
       onFocus?.(null);
       setStatus?.('空窗格 — 从左侧选择会话', '');
@@ -234,19 +239,32 @@ export function createPaneController(deps) {
     const oldTokens = uniqueTokens(state.panes.map((pane) => pane.token));
     const candidates = uniqueTokens([...oldTokens, ...runningUnassignedTokens()]);
     const ids = visiblePaneIds(normalized);
-    for (const token of oldTokens) terminalController.unmountSession?.(token, view.hostPool);
+    const nextTokens = ids.map((id, index) => candidates[index] || null);
+    const nextAssigned = new Set(nextTokens.filter(Boolean));
+    layoutSwitching = true;
+    for (const token of oldTokens) {
+      if (!nextAssigned.has(token)) terminalController.unmountSession?.(token, view.hostPool);
+    }
     for (const pane of state.panes) pane.token = null;
     ids.forEach((id, index) => {
       const pane = paneById(state, id);
-      if (pane) pane.token = candidates[index] || null;
+      if (pane) pane.token = nextTokens[index];
     });
     state.layoutMode = normalized;
     currentMode = normalized;
     if (!ids.includes(state.focusedPaneId)) state.focusedPaneId = ids[0];
-    mountVisibleSessions();
+    mountVisibleSessions({ fit: false });
     syncView();
     writeStorage(storageRef, LAYOUT_STORAGE_KEY, normalized);
-    focusFirstAssigned({ focus: false });
+    focusFirstAssigned({ focus: false, resize: false });
+    if (!layoutFramePending) {
+      layoutFramePending = true;
+      requestFrame(() => {
+        layoutFramePending = false;
+        layoutSwitching = false;
+        resizeVisible();
+      });
+    }
     return normalized;
   }
 

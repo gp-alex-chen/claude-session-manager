@@ -262,6 +262,18 @@ test('layout-managed terminals can stay mounted together and focus does not hide
   assert.equal(fixture.state.activeToken, 'second');
 });
 
+test('layout-managed mounting and focus can defer fitting until layout settles', () => {
+  const fixture = createFixture({ layoutManaged: true, onDispose: () => {} });
+  const session = fixture.controller.openTab('first', 'first');
+  fixture.controller.mountSession('first', new FakeHost(), { fit: false });
+  assert.equal(session.fit.fitCalls, 0);
+  assert.equal(fixture.frames.length, 0);
+
+  fixture.controller.focusSession('first', { focus: false, resize: false });
+  assert.equal(session.fit.fitCalls, 0);
+  assert.equal(fixture.frames.length, 0);
+});
+
 test('layout-managed resize and font fitting cover every visible terminal with deduped sizes', () => {
   const fixture = createFixture({ layoutManaged: true, onDispose: () => {} });
   const first = fixture.controller.openTab('first', 'first');

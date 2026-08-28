@@ -147,6 +147,7 @@ test('fixed layouts expose the requested visible pane geometry', () => {
     const expected = mode === 'split-main-left-3' ? 3 : (mode === 'grid-2x2' ? 4 : 2);
     assert.equal(visible.length, expected, mode);
     assert.equal(fixture.terminalRoot.dataset.layoutMode, mode);
+    assert.equal(fixture.terminalRoot.dataset.focusedPaneId, 'pane-0', mode);
   }
 });
 
@@ -183,11 +184,23 @@ test('layout changes retain sessions in stable order and clear panes removed by 
   assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['a', 'b', 'c', 'd']);
   fixture.controller.setLayout('split-main-left-3');
   assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['a', 'b', 'c', null]);
-  assert.deepEqual(fixture.unmounts.map(([token]) => token), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(fixture.unmounts.map(([token]) => token), ['d']);
   fixture.controller.setLayout('split-cols-2');
   assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['a', 'b', null, null]);
-  assert.deepEqual(fixture.unmounts.map(([token]) => token), ['a', 'b', 'c', 'd', 'a', 'b', 'c']);
+  assert.deepEqual(fixture.unmounts.map(([token]) => token), ['d', 'c']);
   assert.equal(fixture.state.layoutMode, 'split-cols-2');
+});
+
+test('layout switching batches one resize after pane geometry settles', () => {
+  const fixture = makeFixture();
+  fixture.controller.initialize();
+
+  fixture.controller.setLayout('split-cols-2');
+
+  assert.equal(fixture.frames.length, 1);
+  assert.deepEqual(fixture.resizes, []);
+  fixture.flushFrame();
+  assert.deepEqual(fixture.resizes, [['a', 'b']]);
 });
 
 test('showing an existing session focuses its original pane and never duplicates it', () => {
@@ -230,6 +243,7 @@ test('resize observer batches the tokens assigned to visible panes', () => {
   const fixture = makeFixture();
   fixture.controller.initialize();
   fixture.controller.setLayout('split-cols-2');
+  fixture.flushFrame();
   fixture.controller.start();
   const pane0 = fixture.controller.view.paneBody('pane-0');
   const pane1 = fixture.controller.view.paneBody('pane-1');
@@ -244,6 +258,7 @@ test('resize observer batches only visible pane tokens', () => {
   const fixture = makeFixture();
   fixture.controller.initialize();
   fixture.controller.setLayout('split-cols-2');
+  fixture.flushFrame();
   fixture.controller.showSession('a', { paneId: 'pane-0', focus: false });
   fixture.controller.showSession('b', { paneId: 'pane-1', focus: false });
   const pane0Body = fixture.controller.view.paneBody('pane-0');
@@ -264,6 +279,7 @@ test('clicking a pane updates focus without hiding the other visible pane', () =
 
   assert.equal(fixture.state.focusedPaneId, 'pane-1');
   assert.equal(fixture.state.activeToken, 'b');
+  assert.equal(fixture.terminalRoot.dataset.focusedPaneId, 'pane-1');
   assert.equal(fixture.controller.view.paneRoot('pane-0').hidden, false);
   assert.equal(fixture.controller.view.paneRoot('pane-1').hidden, false);
 });

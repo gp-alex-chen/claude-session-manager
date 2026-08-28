@@ -165,6 +165,8 @@ export function createPaneView(deps) {
   }
 
   function setFocusedPane(paneId) {
+    if (paneId) terminalRoot.dataset.focusedPaneId = paneId;
+    else delete terminalRoot.dataset.focusedPaneId;
     for (const [id, pane] of panes) pane.root.classList?.toggle('is-focused', id === paneId);
   }
 

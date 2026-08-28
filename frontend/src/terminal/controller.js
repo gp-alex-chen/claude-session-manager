@@ -89,14 +89,14 @@ export function createTerminalController(deps) {
     return session;
   }
 
-  function mountSession(token, body) {
+  function mountSession(token, body, options = {}) {
     const session = state.terminals.get(token);
     if (!session) return null;
     if (body?.appendChild) body.appendChild(session.host);
     session.host.classList.toggle('is-mounted', true);
     session.visible = true;
     if (!session.term) makeTerminal(session);
-    scheduleFontFit([token]);
+    if (options.fit !== false) scheduleFontFit([token]);
     return session;
   }
 
@@ -203,7 +203,7 @@ export function createTerminalController(deps) {
     state.unreadSessions.delete(token);
     onActivate?.(token);
     if (!session.term) makeTerminal(session);
-    if (session.visible) fitAndSync(session);
+    if (session.visible && options.resize !== false) fitAndSync(session);
     if (options.focus !== false) session.term.focus();
     setStatus?.(
       '当前会话: ' + session.labelText + (session.exited ? '（已退出）' : ''),
