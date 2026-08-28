@@ -235,6 +235,14 @@ test('activate updates active token and clears unread state', () => {
   assert.equal(session.host.classList.values.has('active'), true);
 });
 
+test('terminal focus does not overwrite the global status message', () => {
+  const fixture = createFixture();
+  openAndActivate(fixture, 'session-1');
+  fixture.controller.focusSession('session-1');
+
+  assert.deepEqual(fixture.statuses, []);
+});
+
 test('multiple terminals use overlapping hosts with only the active host shown', () => {
   const fixture = createFixture();
   const first = openAndActivate(fixture, 'session-1');

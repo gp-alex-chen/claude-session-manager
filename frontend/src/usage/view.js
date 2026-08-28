@@ -26,37 +26,21 @@ function addMetric(documentRef, parent, label, value, className = '') {
   return metric;
 }
 
-function summaryChips(documentRef, button, state) {
-  button.replaceChildren();
-  const project = usageTotal(state.usageSummary, 'project');
-  const session = usageTotal(state.usageSummary, 'session');
-  const cache = project ? formatPercent(project.cacheHitRate) : '—';
-  if (state.usageLoading && !project) {
-    addText(documentRef, button, 'span', 'usage-loading-chip', '用量加载中…');
-    return;
-  }
-  if (!project) {
-    addText(documentRef, button, 'span', 'usage-unavailable-chip', '用量不可用');
-    return;
-  }
-  addText(documentRef, button, 'span', 'usage-summary-segment usage-project-chip', `项目 ${formatTokenCount(project.total)}`);
-  addText(documentRef, button, 'span', 'usage-summary-segment usage-cache-chip', `缓存 ${cache}`);
-  addText(documentRef, button, 'span', 'usage-summary-segment usage-session-chip', `会话 ${session ? formatTokenCount(session.total) : '—'}`);
-  if (state.usageLoading) addText(documentRef, button, 'span', 'usage-loading-chip', '更新中…');
-  if (state.usageStale) addText(documentRef, button, 'span', 'usage-stale-chip', '数据较旧');
-}
-
-function renderDetails(documentRef, details, state) {
+function renderDetails(documentRef, details, summary, stale, error) {
   details.replaceChildren();
-  const summary = state.usageSummary;
+  if (!summary) {
+    addText(documentRef, details, 'p', 'usage-details-empty', error ? '用量暂不可用' : '当前会话暂无用量');
+    return;
+  }
   const project = usageTotal(summary, 'project');
   const session = usageTotal(summary, 'session');
-  const latest = summary?.session_found && summary?.latest ? usageNumbers(summary.latest) : null;
+  const latest = summary.session_found && summary.latest ? usageNumbers(summary.latest) : null;
 
   const title = documentRef.createElement('div');
   title.className = 'usage-details-title';
   addText(documentRef, title, 'span', 'usage-details-title-text', 'Token 用量');
-  if (state.usageStale) addText(documentRef, title, 'span', 'usage-details-stale', '数据较旧');
+  if (stale) addText(documentRef, title, 'span', 'usage-details-stale', '数据较旧');
+  if (error && !stale) addText(documentRef, title, 'span', 'usage-details-stale', '更新失败');
   details.appendChild(title);
 
   const hero = documentRef.createElement('div');
@@ -76,8 +60,8 @@ function renderDetails(documentRef, details, state) {
   head.appendChild(headRow);
   compare.appendChild(head);
   const body = documentRef.createElement('tbody');
-  const projectRequests = summary?.project_found ? String(summary.project_request_count ?? 0) : '—';
-  const sessionRequests = summary?.session_found ? String(summary.session_request_count ?? 0) : '—';
+  const projectRequests = summary.project_found ? String(summary.project_request_count ?? 0) : '—';
+  const sessionRequests = summary.session_found ? String(summary.session_request_count ?? 0) : '—';
   const rows = [
     ['请求数', projectRequests, sessionRequests],
     ['新输入', valueOrDash(project?.input), valueOrDash(session?.input)],
@@ -116,40 +100,117 @@ function renderDetails(documentRef, details, state) {
   details.appendChild(requestSection);
 }
 
+function renderSummary(documentRef, button, token, entry) {
+  button.replaceChildren();
+  const summary = entry?.summary;
+  const session = usageTotal(summary, 'session');
+  let label = '用量 —';
+  let disabled = true;
+  if (token && entry?.waiting) {
+    label = '等待统计';
+  } else if (token && entry?.loading && !summary) {
+    label = '加载中…';
+  } else if (token && entry?.error && !summary) {
+    label = '用量失败';
+  } else if (token && summary) {
+    label = `会话 ${session ? formatTokenCount(session.total) : '—'}`;
+    if (entry.stale) label += ' · 较旧';
+    disabled = false;
+  } else if (token) {
+    label = '暂无用量';
+  }
+  addText(documentRef, button, 'span', 'usage-pane-label', label);
+  button.disabled = disabled;
+  button.setAttribute?.('aria-busy', String(Boolean(entry?.loading)));
+  return { summary, disabled };
+}
+
 export function createUsageView({
-  summaryButton,
-  details,
+  surfaces = [],
   documentRef = typeof document === 'undefined' ? null : document,
   windowRef = typeof window === 'undefined' ? null : window,
 }) {
-  let open = false;
+  const surfaceList = typeof surfaces === 'function' ? surfaces() : surfaces;
+  const surfaceById = new Map(surfaceList.map((surface) => [surface.id, surface]));
+  let openPaneId = null;
+  let openToken = null;
+  const tokenByPane = new Map();
   let started = false;
+  const clickHandlers = new Map();
 
-  function setOpen(next) {
-    open = Boolean(next);
-    details.hidden = !open;
-    summaryButton.setAttribute('aria-expanded', String(open));
+  function setOpen(paneId, next) {
+    const surface = surfaceById.get(paneId);
+    if (!surface) return;
+    if (next && surface.usageSummary.disabled) return;
+    if (openPaneId && openPaneId !== paneId) {
+      const previous = surfaceById.get(openPaneId);
+      if (previous) {
+        previous.usageDetails.hidden = true;
+        previous.usageDetails.setAttribute?.('aria-hidden', 'true');
+        previous.usageSummary.setAttribute?.('aria-expanded', 'false');
+      }
+    }
+    const open = Boolean(next);
+    surface.usageDetails.hidden = !open;
+    surface.usageDetails.setAttribute?.('aria-hidden', String(!open));
+    surface.usageSummary.setAttribute?.('aria-expanded', String(open));
+    openPaneId = open ? paneId : null;
+    openToken = open ? tokenByPane.get(paneId) || null : null;
   }
 
-  function toggle(event) {
+  function toggle(paneId, event) {
     event?.stopPropagation?.();
-    setOpen(!open);
+    setOpen(paneId, openPaneId !== paneId);
   }
 
   function onKeyDown(event) {
-    if (event.key === 'Escape' && open) setOpen(false);
+    if (event.key === 'Escape' && openPaneId) setOpen(openPaneId, false);
   }
 
   function onDocumentClick(event) {
-    if (!open) return;
-    if (event.target === summaryButton || details.contains?.(event.target)) return;
-    setOpen(false);
+    if (!openPaneId) return;
+    const surface = surfaceById.get(openPaneId);
+    if (!surface) return;
+    if (
+      event.target === surface.usageSummary
+      || surface.usageSummary.contains?.(event.target)
+      || surface.usageDetails.contains?.(event.target)
+    ) return;
+    setOpen(openPaneId, false);
+  }
+
+  function render(state) {
+    const panes = new Map((state.panes || []).map((pane) => [pane.id, pane]));
+    for (const surface of surfaceList) {
+      const pane = panes.get(surface.id);
+      const token = pane?.token || null;
+      tokenByPane.set(surface.id, token);
+      const entry = token ? state.usageByToken?.get(token) : null;
+      const result = renderSummary(documentRef, surface.usageSummary, token, entry);
+      surface.usageSummary.setAttribute?.('aria-controls', surface.usageDetails.id);
+      const paneNumber = Number(surface.id.slice(-1)) + 1;
+      surface.usageSummary.setAttribute?.('aria-label', token
+        ? '查看窗格 ' + paneNumber + ' token 用量'
+        : '窗格 ' + paneNumber + ' 当前没有会话');
+      if (openPaneId === surface.id && (result.disabled || openToken !== token)) {
+        setOpen(surface.id, false);
+      }
+      renderDetails(documentRef, surface.usageDetails, result.summary, entry?.stale, entry?.error);
+      if (openPaneId !== surface.id) {
+        surface.usageDetails.hidden = true;
+        surface.usageDetails.setAttribute?.('aria-hidden', 'true');
+      }
+    }
   }
 
   function start() {
     if (started) return;
     started = true;
-    summaryButton.addEventListener('click', toggle);
+    for (const surface of surfaceList) {
+      const handler = (event) => toggle(surface.id, event);
+      clickHandlers.set(surface.id, handler);
+      surface.usageSummary.addEventListener?.('click', handler);
+    }
     windowRef?.addEventListener?.('keydown', onKeyDown);
     documentRef?.addEventListener?.('click', onDocumentClick);
   }
@@ -157,22 +218,19 @@ export function createUsageView({
   function stop() {
     if (!started) return;
     started = false;
-    summaryButton.removeEventListener?.('click', toggle);
+    for (const surface of surfaceList) {
+      surface.usageSummary.removeEventListener?.('click', clickHandlers.get(surface.id));
+    }
+    clickHandlers.clear();
     windowRef?.removeEventListener?.('keydown', onKeyDown);
     documentRef?.removeEventListener?.('click', onDocumentClick);
-    setOpen(false);
+    if (openPaneId) setOpen(openPaneId, false);
   }
 
-  function render(state) {
-    summaryButton.type = 'button';
-    summaryButton.setAttribute('aria-controls', details.id || 'usage-details');
-    summaryButton.setAttribute('aria-expanded', String(open));
-    summaryButton.setAttribute('aria-label', '查看 token 用量详情');
-    summaryChips(documentRef, summaryButton, state);
-    renderDetails(documentRef, details, state);
-    details.hidden = !open;
+  for (const surface of surfaceList) {
+    surface.usageSummary.setAttribute?.('aria-expanded', 'false');
+    surface.usageDetails.hidden = true;
+    surface.usageDetails.setAttribute?.('aria-hidden', 'true');
   }
-
-  setOpen(false);
   return { render, start, stop };
 }

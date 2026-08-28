@@ -11,7 +11,7 @@ import { clampProgress } from '../utils.js';
 import { createPaneController } from '../panes/controller.js';
 
 const REQUIRED_IDS = [
-  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'project-bar', 'btn-add-project',
+  'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project',
   'session-list', 'hidden-panel', 'hidden-count',
   'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
@@ -53,22 +53,6 @@ export function createApplication(deps) {
   const createUsage = controllerFactories.usage || createUsageController;
   const nodes = Object.fromEntries(REQUIRED_IDS.map((id) => [id, requiredElement(documentRef, id)]));
   const state = createState();
-  const usageView = createUsageView({
-    summaryButton: nodes['usage-summary'],
-    details: nodes['usage-details'],
-    documentRef,
-    windowRef,
-  });
-  const usageController = createUsage({
-    state,
-    GetUsageSummary: backend.GetUsageSummary,
-    view: usageView,
-    render: (nextState) => {
-      usageView.render(nextState);
-      sessionController?.refreshUsageLabels();
-    },
-  });
-  usageView.render(state);
   const termOptions = createTermOptionsFn();
   const setStatus = (message, className) => {
     nodes['status-message'].textContent = String(message);
@@ -82,6 +66,8 @@ export function createApplication(deps) {
   };
   let sessionController;
   let paneController;
+  let usageController;
+  let usageView;
   const agentController = createAgent({
     state,
     GetAgents: backend.GetAgents,
@@ -111,7 +97,7 @@ export function createApplication(deps) {
       : undefined,
     storageRef: safeStorage(windowRef),
     onActivate: (token) => {
-      usageController.onActivate(token ?? state.activeToken);
+      usageController?.onActivate(token ?? state.activeToken);
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
     },
@@ -119,7 +105,10 @@ export function createApplication(deps) {
       sessionController?.handleTerminalExit(token);
       paneController?.handleTerminalExit(token);
     },
-    onDispose: (token) => paneController?.removeSession(token),
+    onDispose: (token) => {
+      paneController?.removeSession(token);
+      usageController?.removeToken?.(token);
+    },
   });
   paneController = createPanes({
     state,
@@ -131,11 +120,35 @@ export function createApplication(deps) {
     el,
     setStatus,
     onFocus: (token) => {
-      usageController.onActivate(token);
+      usageController?.onActivate(token);
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
     },
+    onChange: () => {
+      usageView?.render(state);
+      void usageController?.refreshVisible?.({ force: false });
+    },
   });
+  usageView = createUsageView({
+    surfaces: paneController.view.paneSurfaces(),
+    documentRef,
+    windowRef,
+  });
+  usageController = createUsage({
+    state,
+    GetUsageSummary: backend.GetUsageSummary,
+    view: usageView,
+    surfaces: paneController.view.paneSurfaces(),
+    getVisibleAssignments: () => {
+      const visible = new Set(paneController?.getVisiblePaneIds?.() || []);
+      return state.panes.filter((pane) => visible.has(pane.id) && pane.token);
+    },
+    render: (nextState) => {
+      usageView.render(nextState);
+      sessionController?.refreshUsageLabels();
+    },
+  });
+  usageView.render(state);
   sessionController = createSession({
     state,
     backend: {
@@ -167,7 +180,7 @@ export function createApplication(deps) {
     setStatus,
     onProjects: usageController.prefetchProjects,
     onPair: (pendingItem) => {
-      if (state.activeToken === pendingItem.token) usageController.refreshActive();
+      usageController.refreshToken?.(pendingItem.token, { force: true });
     },
   });
   const updateController = createUpdate({
@@ -254,8 +267,8 @@ export function createApplication(deps) {
     subscribe('update:state', (phase) => updateController.handleState(phase));
     subscribe('update:progress', (progress) => updateController.handleProgress(progress));
     agentController.start();
-    usageController.start();
     paneController.start();
+    usageController.start();
     sessionController.start();
     settingsController.start();
     readyPromise = initialize(paneController).then(() => Promise.all([

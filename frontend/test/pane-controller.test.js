@@ -91,6 +91,7 @@ function makeFixture(options = {}) {
   const focuses = [];
   const resizes = [];
   const statuses = [];
+  const changes = [];
   const terminalController = {
     mountSession(token, body) { mounts.push([token, body]); },
     unmountSession(token, pool) { unmounts.push([token, pool]); },
@@ -115,6 +116,7 @@ function makeFixture(options = {}) {
     },
     setStatus: (message, kind) => statuses.push({ message, kind }),
     onFocus: (token) => focuses.push([token, { empty: true }]),
+    onChange: (nextState) => changes.push(nextState),
     requestFrame: (callback) => { frames.push(callback); return frames.length; },
     ResizeObserverCtor: FakeResizeObserver,
   });
@@ -130,6 +132,7 @@ function makeFixture(options = {}) {
     focuses,
     resizes,
     statuses,
+    changes,
     storageValues,
     frames,
     flushFrame: () => frames.shift()?.(),
@@ -149,6 +152,49 @@ test('fixed layouts expose the requested visible pane geometry', () => {
     assert.equal(fixture.terminalRoot.dataset.layoutMode, mode);
     assert.equal(fixture.terminalRoot.dataset.focusedPaneId, 'pane-0', mode);
   }
+});
+
+test('pane headers use current, session, usage, and clear slots without duplicate titles', () => {
+  const fixture = makeFixture();
+  const firstRoot = fixture.controller.view.paneRoot('pane-0');
+  const firstHeader = firstRoot.children[0];
+
+  assert.deepEqual(firstHeader.children.map((child) => child.className), [
+    'terminal-pane-current',
+    'terminal-pane-session',
+    'terminal-pane-usage-summary',
+    'terminal-pane-clear',
+  ]);
+  assert.equal(firstRoot.children[1].className, 'terminal-pane-usage-details');
+  assert.equal(firstRoot.children[2].className, 'terminal-pane-body');
+  assert.equal(firstHeader.children[0].textContent, '当前');
+  assert.equal(firstHeader.children[0].getAttribute('aria-hidden'), 'false');
+  assert.equal(fixture.controller.view.paneRoot('pane-1').children[0].children[0].getAttribute('aria-hidden'), 'true');
+  assert.equal(firstHeader.children.some((child) => child.className === 'terminal-pane-title'), false);
+  assert.equal(firstHeader.children[2].disabled, true);
+});
+
+test('focused pane marker moves without removing its fixed slot', () => {
+  const fixture = makeFixture();
+  fixture.controller.setLayout('split-cols-2');
+  fixture.controller.view.paneBody('pane-1').click();
+
+  assert.equal(fixture.controller.view.paneRoot('pane-0').children[0].children[0].getAttribute('aria-hidden'), 'true');
+  assert.equal(fixture.controller.view.paneRoot('pane-1').children[0].children[0].getAttribute('aria-hidden'), 'false');
+  assert.equal(fixture.controller.view.paneRoot('pane-0').children[0].children[0].hidden, false);
+  assert.equal(fixture.controller.view.paneRoot('pane-1').children[0].children[0].hidden, false);
+});
+
+test('pane mutations notify the usage surface after DOM state is synchronized', () => {
+  const fixture = makeFixture();
+  fixture.controller.initialize();
+
+  assert.ok(fixture.changes.length >= 1);
+  const initialChanges = fixture.changes.length;
+  fixture.controller.setLayout('split-cols-2');
+
+  assert.ok(fixture.changes.length > initialChanges);
+  assert.equal(fixture.changes.at(-1), fixture.state);
 });
 
 test('layout controller restores a valid saved mode and normalizes invalid storage', async () => {
@@ -306,5 +352,5 @@ test('an exited assigned session keeps its pane label and disabled selector opti
   const selected = selector.children.find((option) => option.value === 'a');
   assert.equal(selector.value, 'a');
   assert.equal(selected.disabled, true);
-  assert.equal(fixture.controller.view.paneRoot('pane-0').children[0].children[0].textContent, 'Session a（已退出）');
+  assert.equal(selected.textContent, 'Session a（已退出）');
 });

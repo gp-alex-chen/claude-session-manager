@@ -37,22 +37,44 @@ export function createPaneView(deps) {
     root.setAttribute?.('aria-label', '终端窗格 ' + paneNumber);
 
     const header = el('div', 'terminal-pane-header');
-    const title = el('span', 'terminal-pane-title', '窗格 ' + paneNumber);
+    const current = el('span', 'terminal-pane-current', '当前');
+    current.setAttribute?.('aria-hidden', 'true');
     const selector = el('select', 'terminal-pane-session');
     selector.dataset.paneId = paneId;
-    selector.setAttribute?.('aria-label', title.textContent + '会话');
+    selector.setAttribute?.('aria-label', '终端窗格 ' + paneNumber + '会话');
+    const usageSummary = el('button', 'terminal-pane-usage-summary', '用量 —');
+    usageSummary.type = 'button';
+    usageSummary.disabled = true;
+    usageSummary.setAttribute?.('aria-expanded', 'false');
+    usageSummary.setAttribute?.('aria-controls', `terminal-pane-usage-details-${paneId}`);
+    usageSummary.setAttribute?.('aria-label', '查看窗格 ' + paneNumber + ' token 用量');
+    const usageDetails = el('div', 'terminal-pane-usage-details');
+    usageDetails.id = `terminal-pane-usage-details-${paneId}`;
+    usageDetails.setAttribute?.('role', 'dialog');
+    usageDetails.setAttribute?.('aria-label', '窗格 ' + paneNumber + ' token 用量详情');
+    setHidden(usageDetails, true);
     const clear = el('button', 'terminal-pane-clear', '×');
     clear.type = 'button';
     clear.dataset.paneId = paneId;
     clear.title = '清空窗格（不会关闭会话）';
     clear.setAttribute?.('aria-label', clear.title);
-    header.append(title, selector, clear);
+    header.append(current, selector, usageSummary, clear);
 
     const body = el('div', 'terminal-pane-body');
     body.dataset.paneId = paneId;
-    root.append(header, body);
+    root.append(header, usageDetails, body);
     terminalRoot.appendChild(root);
-    panes.set(paneId, { id: paneId, root, header, title, selector, clear, body });
+    panes.set(paneId, {
+      id: paneId,
+      root,
+      header,
+      current,
+      selector,
+      usageSummary,
+      usageDetails,
+      clear,
+      body,
+    });
 
     body.addEventListener?.('click', () => onPaneFocus?.(paneId));
     selector.addEventListener?.('click', () => onPaneFocus?.(paneId, { focus: false }));
@@ -159,7 +181,13 @@ export function createPaneView(deps) {
       }
       pane.selector.value = paneStateItem.token || '';
       const selected = sessionOptions.find((item) => item.token === paneStateItem.token);
-      pane.title.textContent = selected ? selected.label : '窗格 ' + (Number(pane.id.slice(-1)) + 1);
+      pane.usageSummary.disabled = true;
+      pane.usageSummary.setAttribute?.(
+        'aria-label',
+        selected
+          ? '查看 ' + selected.label + ' token 用量'
+          : '查看窗格 ' + (Number(pane.id.slice(-1)) + 1) + ' token 用量',
+      );
       pane.clear.disabled = !paneStateItem.token;
     }
   }
@@ -167,7 +195,11 @@ export function createPaneView(deps) {
   function setFocusedPane(paneId) {
     if (paneId) terminalRoot.dataset.focusedPaneId = paneId;
     else delete terminalRoot.dataset.focusedPaneId;
-    for (const [id, pane] of panes) pane.root.classList?.toggle('is-focused', id === paneId);
+    for (const [id, pane] of panes) {
+      const focused = id === paneId;
+      pane.root.classList?.toggle('is-focused', focused);
+      pane.current.setAttribute?.('aria-hidden', String(!focused));
+    }
   }
 
   function paneBody(paneId) {
@@ -182,8 +214,30 @@ export function createPaneView(deps) {
     return panes.get(paneId)?.selector || null;
   }
 
+  function paneUsageSummary(paneId) {
+    return panes.get(paneId)?.usageSummary || null;
+  }
+
+  function paneUsageDetails(paneId) {
+    return panes.get(paneId)?.usageDetails || null;
+  }
+
   function paneBodies() {
     return [...panes.values()].map((pane) => ({ id: pane.id, body: pane.body }));
+  }
+
+  function paneSurfaces() {
+    return [...panes.values()].map(({ id, current, selector, usageSummary, usageDetails, clear, body, header, root }) => ({
+      id,
+      current,
+      selector,
+      usageSummary,
+      usageDetails,
+      clear,
+      body,
+      header,
+      root,
+    }));
   }
 
   return {
@@ -194,6 +248,9 @@ export function createPaneView(deps) {
     paneBodies,
     paneRoot,
     paneSelector,
+    paneSurfaces,
+    paneUsageDetails,
+    paneUsageSummary,
     setFocusedPane,
     setLayout,
     start,

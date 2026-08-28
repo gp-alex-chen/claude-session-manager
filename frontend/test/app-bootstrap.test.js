@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createApplication } from '../src/app/bootstrap.js';
 
 const REQUIRED_IDS = [
-  'terminal', 'status-bar', 'status-message', 'usage-summary', 'usage-details', 'project-bar', 'btn-add-project', 'session-list', 'hidden-panel', 'hidden-count',
+  'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project', 'session-list', 'hidden-panel', 'hidden-count',
   'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
@@ -164,6 +164,13 @@ function makeFixture(options = {}) {
       return makeController('usage', {
         onActivate: (token) => calls.routed.push(['usage-activate', token]),
         refreshActive: () => calls.routed.push(['usage-refresh']),
+        refreshVisible: (options) => calls.routed.push([
+          'usage-visible',
+          options,
+          deps.getVisibleAssignments?.(),
+        ]),
+        refreshToken: (token, options) => calls.routed.push(['usage-token', token, options]),
+        removeToken: (token) => calls.routed.push(['usage-remove', token]),
       });
     },
   };
@@ -198,10 +205,10 @@ test('bootstrap creates controllers around one shared state and wires callbacks'
   assert.equal(fixture.calls.factories.usage.state, fixture.app.state);
   assert.deepEqual(fixture.app.state.projects, []);
   assert.equal(typeof fixture.calls.factories.usage.GetUsageSummary, 'function');
+  assert.equal(Array.isArray(fixture.calls.factories.usage.surfaces), true);
   assert.equal(typeof fixture.calls.factories.session.onPair, 'function');
-  const usageChildren = fixture.elements.get('usage-summary').children;
   fixture.calls.factories.agent.setStatus('临时消息', 'ok');
-  assert.equal(fixture.elements.get('usage-summary').children, usageChildren);
+  assert.equal(fixture.elements.get('status-message').textContent, '临时消息');
   fixture.calls.factories.agent.refreshFoldState();
   fixture.calls.factories.terminal.onActivate();
   await fixture.calls.factories.terminal.writeClipboard('复制内容');
@@ -224,6 +231,27 @@ test('bootstrap passes project APIs and the top project add button to the sessio
   for (const name of ['ListProjects', 'ChooseProjectDir', 'AddProject', 'AdoptSession']) {
     assert.equal(typeof sessionDeps.backend[name], 'function', name);
   }
+});
+
+test('bootstrap refreshes visible usage after pane initialization and routes pairing/dispose', async () => {
+  const fixture = makeFixture();
+  fixture.app.state.panes[0].token = 'new-1';
+  await fixture.app.start();
+
+  assert.deepEqual(fixture.calls.routed.find(([name]) => name === 'usage-visible'), [
+    'usage-visible',
+    { force: false },
+    [{ id: 'pane-0', token: 'new-1' }],
+  ]);
+  fixture.calls.factories.session.onPair({ token: 'new-1' });
+  fixture.calls.factories.terminal.onDispose('new-1');
+  assert.deepEqual(fixture.calls.routed.find(([name]) => name === 'usage-token'), [
+    'usage-token', 'new-1', { force: true },
+  ]);
+  assert.deepEqual(fixture.calls.routed.slice(-2), [
+    ['usage-visible', { force: false }, []],
+    ['usage-remove', 'new-1'],
+  ]);
 });
 
 test('start is idempotent and initializes session/settings once', async () => {
@@ -249,8 +277,10 @@ test('runtime and resize events route to the matching controllers', () => {
   fixture.runtimeListeners.get('update:progress')(42);
   fixture.windowListeners.get('resize')();
   assert.deepEqual(fixture.calls.routed, [
+    ['usage-visible', { force: false }, []],
     ['agents', ['agent']], ['data', ['token', 'b64']], ['exit', ['token']],
     ['session-exit', ['token']],
+    ['usage-visible', { force: false }, []],
     ['update-state', '下载中'], ['update-progress', 42],
   ]);
   assert.equal(fixture.calls.resize, 1);

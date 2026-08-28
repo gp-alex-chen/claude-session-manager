@@ -9,6 +9,7 @@ class Node {
     this.listeners = new Map();
     this.attributes = new Map();
     this.hidden = false;
+    this.disabled = false;
     this.className = '';
     this.textContent = '';
     this.id = '';
@@ -29,27 +30,27 @@ class Node {
   dispatch(name, event = {}) { return this.listeners.get(name)?.({ target: this, ...event }); }
 }
 
-function makeFixture() {
+function makeSurface(id) {
+  const summary = new Node();
+  summary.className = 'terminal-pane-usage-summary';
+  const details = new Node();
+  details.className = 'terminal-pane-usage-details';
+  details.id = `terminal-pane-usage-details-${id}`;
+  details.setAttribute('aria-hidden', 'true');
+  return { id, usageSummary: summary, usageDetails: details };
+}
+
+function makeFixture(ids = ['pane-0']) {
   const documentRef = new Node();
   const windowRef = new Node();
-  const summaryButton = new Node();
-  const details = new Node();
-  details.id = 'usage-details';
-  const view = createUsageView({ summaryButton, details, documentRef, windowRef });
-  return { documentRef, windowRef, summaryButton, details, view };
+  documentRef.createElement = () => new Node();
+  const surfaces = ids.map(makeSurface);
+  const view = createUsageView({ surfaces, documentRef, windowRef });
+  return { documentRef, windowRef, surfaces, view };
 }
 
 function textOf(node) {
   return [node.textContent, ...(node.children || []).map(textOf)].join(' ');
-}
-
-function findByClass(node, className) {
-  if (node.className?.split?.(' ').includes(className)) return node;
-  for (const child of node.children || []) {
-    const match = findByClass(child, className);
-    if (match) return match;
-  }
-  return null;
 }
 
 const complete = {
@@ -84,84 +85,132 @@ const complete = {
   },
 };
 
-test('complete summary renders hero metrics, project/session comparison, and request grid', () => {
-  const fixture = makeFixture();
-  fixture.view.render({ usageSummary: complete, usageLoading: false, usageStale: false });
-  assert.deepEqual(fixture.summaryButton.children.map((child) => child.textContent), [
-    '项目 2K', '缓存 27.8%', '会话 100',
-  ]);
-  const detailText = textOf(fixture.details);
-  assert.match(detailText, /Token 用量/);
-  assert.match(detailText, /项目总量\s+2K/);
-  assert.match(detailText, /当前会话\s+100/);
-  assert.match(detailText, /缓存命中\s+27.8%/);
-  assert.match(detailText, /累计指标\s+项目\s+会话/);
-  assert.match(detailText, /新输入\s+1K\s+10/);
-  assert.match(detailText, /输出\s+200\s+20/);
-  assert.match(detailText, /思考 Token\s+7\s+6/);
-  assert.match(detailText, /思考 Token 已包含在输出中/);
-  assert.match(detailText, /本轮请求/);
-  assert.match(detailText, /总量\s+100\s+新输入\s+10\s+输出\s+20/);
-  assert.match(detailText, /缓存层级 · 5m 11 · 1h 12/);
-  assert.equal(findByClass(fixture.details, 'usage-hero-grid')?.children.length, 3);
-  assert.equal(findByClass(fixture.details, 'usage-compare-table')?.children.length, 2);
-  assert.equal(findByClass(fixture.details, 'usage-request-grid')?.children.length, 6);
-});
-
-test('missing session and latest fields render dashes without fake zeros', () => {
-  const fixture = makeFixture();
+test('per-pane view renders each session usage independently', () => {
+  const fixture = makeFixture(['pane-0', 'pane-1']);
   fixture.view.render({
-    usageSummary: { project_found: true, session_found: false, project_total: {} },
-    usageLoading: false,
-    usageStale: false,
+    panes: [{ id: 'pane-0', token: 'a' }, { id: 'pane-1', token: 'b' }],
+    usageByToken: new Map([
+      ['a', { summary: complete, loading: false, waiting: false, stale: false, error: null }],
+      ['b', { summary: { ...complete, session_total: { output_tokens: 8 } }, loading: false, waiting: false, stale: false, error: null }],
+    ]),
   });
-  assert.equal(fixture.summaryButton.children[2].textContent, '会话 —');
-  const detailText = textOf(fixture.details);
-  assert.match(detailText, /当前会话\s+—/);
-  assert.match(detailText, /请求数\s+0\s+—/);
-  assert.match(detailText, /输出\s+0\s+—/);
-  assert.match(detailText, /本轮请求/);
-  assert.match(detailText, /缓存层级 · 5m — · 1h —/);
+
+  assert.equal(fixture.surfaces[0].usageSummary.children[0].textContent, '会话 100');
+  assert.equal(fixture.surfaces[1].usageSummary.children[0].textContent, '会话 8');
+  assert.equal(fixture.surfaces[0].usageSummary.getAttribute('aria-label'), '查看窗格 1 token 用量');
+  assert.equal(fixture.surfaces[1].usageSummary.getAttribute('aria-label'), '查看窗格 2 token 用量');
+  assert.equal(fixture.surfaces[0].usageSummary.disabled, false);
+  assert.equal(fixture.surfaces[1].usageSummary.disabled, false);
+  assert.equal(fixture.surfaces[0].usageDetails.hidden, true);
 });
 
-test('loading, unavailable, and stale states are concise and path-free', () => {
-  const fixture = makeFixture();
-  fixture.view.render({ usageSummary: null, usageLoading: true, usageStale: false });
-  assert.equal(fixture.summaryButton.children[0].textContent, '用量加载中…');
-  fixture.view.render({ usageSummary: null, usageLoading: false, usageStale: false });
-  assert.equal(fixture.summaryButton.children[0].textContent, '用量不可用');
-  fixture.view.render({ usageSummary: complete, usageLoading: false, usageStale: true });
-  assert.equal(fixture.summaryButton.children.at(-1).textContent, '数据较旧');
-  assert.doesNotMatch(fixture.summaryButton.children.map((child) => child.textContent).join(' '), /[A-Z]:\\|\/Users/);
+test('pane summary handles waiting, loading, unavailable, and stale states without paths', () => {
+  const fixture = makeFixture(['pane-0', 'pane-1', 'pane-2', 'pane-3']);
+  fixture.view.render({
+    panes: [
+      { id: 'pane-0', token: 'waiting' },
+      { id: 'pane-1', token: 'loading' },
+      { id: 'pane-2', token: 'failed' },
+      { id: 'pane-3', token: 'stale' },
+    ],
+    usageByToken: new Map([
+      ['waiting', { summary: null, waiting: true, loading: false, stale: false, error: null }],
+      ['loading', { summary: null, waiting: false, loading: true, stale: false, error: null }],
+      ['failed', { summary: null, waiting: false, loading: false, stale: false, error: 'C:\\private\\path' }],
+      ['stale', { summary: complete, waiting: false, loading: false, stale: true, error: 'offline' }],
+    ]),
+  });
+
+  assert.deepEqual(fixture.surfaces.map((surface) => surface.usageSummary.children[0].textContent), [
+    '等待统计', '加载中…', '用量失败', '会话 100 · 较旧',
+  ]);
+  assert.equal(fixture.surfaces[2].usageSummary.disabled, true);
+  assert.doesNotMatch(textOf(fixture.surfaces[2].usageDetails), /C:\\private/);
 });
 
-test('details open with aria state, stay open for internal clicks, and close on Escape/outside', () => {
-  const fixture = makeFixture();
-  fixture.view.render({ usageSummary: complete, usageLoading: false, usageStale: false });
+test('details show project and session metrics and only one pane can be open', () => {
+  const fixture = makeFixture(['pane-0', 'pane-1']);
+  fixture.view.render({
+    panes: [{ id: 'pane-0', token: 'a' }, { id: 'pane-1', token: 'b' }],
+    usageByToken: new Map([
+      ['a', { summary: complete, loading: false, waiting: false, stale: false, error: null }],
+      ['b', { summary: complete, loading: false, waiting: false, stale: false, error: null }],
+    ]),
+  });
   fixture.view.start();
-  fixture.summaryButton.dispatch('click');
-  assert.equal(fixture.details.hidden, false);
-  assert.equal(fixture.summaryButton.getAttribute('aria-expanded'), 'true');
-  const internal = fixture.details.children[0];
+
+  fixture.surfaces[0].usageSummary.dispatch('click');
+  assert.equal(fixture.surfaces[0].usageDetails.hidden, false);
+  assert.equal(fixture.surfaces[0].usageDetails.getAttribute('aria-hidden'), 'false');
+  assert.equal(fixture.surfaces[0].usageSummary.getAttribute('aria-expanded'), 'true');
+  assert.match(textOf(fixture.surfaces[0].usageDetails), /项目总量\s+2K/);
+  assert.match(textOf(fixture.surfaces[0].usageDetails), /当前会话\s+100/);
+  assert.match(textOf(fixture.surfaces[0].usageDetails), /缓存命中\s+27.8%/);
+
+  fixture.surfaces[1].usageSummary.dispatch('click');
+  assert.equal(fixture.surfaces[0].usageDetails.hidden, true);
+  assert.equal(fixture.surfaces[1].usageDetails.hidden, false);
+  const internal = fixture.surfaces[1].usageDetails.children[0];
   fixture.documentRef.dispatch('click', { target: internal });
-  assert.equal(fixture.details.hidden, false);
+  assert.equal(fixture.surfaces[1].usageDetails.hidden, false);
   fixture.windowRef.dispatch('keydown', { key: 'Escape' });
-  assert.equal(fixture.details.hidden, true);
-  fixture.summaryButton.dispatch('click');
-  fixture.documentRef.dispatch('click', { target: new Node() });
-  assert.equal(fixture.details.hidden, true);
+  assert.equal(fixture.surfaces[1].usageDetails.hidden, true);
+  assert.equal(fixture.surfaces[1].usageDetails.getAttribute('aria-hidden'), 'true');
 });
 
-test('view start/stop does not accumulate listeners', () => {
-  const fixture = makeFixture();
+test('reassigning an open pane to another token closes its usage details', () => {
+  const fixture = makeFixture(['pane-0']);
+  fixture.view.render({
+    panes: [{ id: 'pane-0', token: 'a' }],
+    usageByToken: new Map([
+      ['a', { summary: complete, loading: false, waiting: false, stale: false, error: null }],
+      ['b', { summary: complete, loading: false, waiting: false, stale: false, error: null }],
+    ]),
+  });
+  fixture.view.start();
+  fixture.surfaces[0].usageSummary.dispatch('click');
+  assert.equal(fixture.surfaces[0].usageDetails.hidden, false);
+
+  fixture.view.render({
+    panes: [{ id: 'pane-0', token: 'b' }],
+    usageByToken: new Map([
+      ['a', { summary: complete, loading: false, waiting: false, stale: false, error: null }],
+      ['b', { summary: complete, loading: false, waiting: false, stale: false, error: null }],
+    ]),
+  });
+
+  assert.equal(fixture.surfaces[0].usageDetails.hidden, true);
+  assert.equal(fixture.surfaces[0].usageSummary.getAttribute('aria-expanded'), 'false');
+});
+
+test('empty panes disable usage details and external clicks close the popover', () => {
+  const fixture = makeFixture(['pane-0']);
+  fixture.view.render({ panes: [{ id: 'pane-0', token: null }], usageByToken: new Map() });
+  fixture.view.start();
+  assert.equal(fixture.surfaces[0].usageSummary.disabled, true);
+  fixture.surfaces[0].usageSummary.dispatch('click');
+  assert.equal(fixture.surfaces[0].usageDetails.hidden, true);
+  fixture.view.render({
+    panes: [{ id: 'pane-0', token: 'a' }],
+    usageByToken: new Map([['a', { summary: complete, loading: false, waiting: false, stale: false, error: null }]]),
+  });
+  fixture.surfaces[0].usageSummary.dispatch('click');
+  fixture.documentRef.dispatch('click', { target: new Node() });
+  assert.equal(fixture.surfaces[0].usageDetails.hidden, true);
+});
+
+test('view start and stop do not accumulate listeners', () => {
+  const fixture = makeFixture(['pane-0', 'pane-1']);
   fixture.view.start();
   fixture.view.start();
-  assert.equal(fixture.summaryButton.listeners.size, 1);
+  assert.equal(fixture.surfaces[0].usageSummary.listeners.size, 1);
+  assert.equal(fixture.surfaces[1].usageSummary.listeners.size, 1);
   assert.equal(fixture.windowRef.listeners.size, 1);
   assert.equal(fixture.documentRef.listeners.size, 1);
   fixture.view.stop();
   fixture.view.stop();
-  assert.equal(fixture.summaryButton.listeners.size, 0);
+  assert.equal(fixture.surfaces[0].usageSummary.listeners.size, 0);
+  assert.equal(fixture.surfaces[1].usageSummary.listeners.size, 0);
   assert.equal(fixture.windowRef.listeners.size, 0);
   assert.equal(fixture.documentRef.listeners.size, 0);
 });

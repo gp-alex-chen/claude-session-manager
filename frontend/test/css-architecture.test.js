@@ -86,7 +86,13 @@ test('terminal styles define all fixed pane geometries', () => {
   assert.match(terminal, /terminal-pane-slot\.is-focused::after\s*\{\s*border-color:\s*var\(--accent\)/);
   assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-header[\s\S]*background:\s*var\(--accent-soft\)/);
   assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-header[\s\S]*box-shadow:\s*inset 3px 0 0 var\(--accent\)/);
-  assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-title::after[\s\S]*content:\s*'当前'/);
+  assert.match(terminal, /terminal-pane-current[\s\S]*visibility:\s*hidden/);
+  assert.match(terminal, /terminal-pane-current[\s\S]*width:\s*32px/);
+  assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-current[\s\S]*visibility:\s*visible/);
+  assert.match(terminal, /terminal-pane-usage-summary[\s\S]*width:\s*88px/);
+  assert.match(terminal, /terminal-pane-usage-summary[\s\S]*flex:\s*0 0 88px/);
+  assert.match(terminal, /terminal-pane-usage-details[\s\S]*position:\s*absolute/);
+  assert.doesNotMatch(terminal, /terminal-pane-title::after/);
 });
 
 test('complete selectors are owned by one CSS module', () => {
@@ -179,19 +185,29 @@ test('token usage surface owns accessible popover, compact groups, and responsiv
   const terminal = read('terminal.css');
   const sidebar = read('sidebar.css');
   assert.match(terminal, /#status-message/);
-  assert.match(terminal, /#usage-summary[^{}]*\{[\s\S]*?transition:[^;]*90ms/);
-  assert.match(terminal, /#usage-details[^{}]*\{[\s\S]*?transition:[^;]*180ms[^;]*cubic-bezier\(\.2,0,0,1\)/);
-  assert.match(terminal, /max-height:\s*min\(420px/);
-  assert.match(terminal, /#usage-summary[\s\S]*?border-radius:\s*999px[\s\S]*?background:/);
+  assert.match(terminal, /\.terminal-pane-usage-details[^{}]*\{[\s\S]*?transition:[^;]*180ms[^;]*cubic-bezier\(\.2,0,0,1\)/);
+  assert.match(terminal, /\.terminal-pane-usage-details[\s\S]*?max-height:\s*calc\(100% - 41px\)/);
+  assert.match(terminal, /terminal-pane-usage-summary[\s\S]*?border-radius:\s*var\(--radius-sm\)[\s\S]*?background:/);
   assert.match(terminal, /\.usage-hero-grid[\s\S]*?display:\s*grid/);
   assert.match(terminal, /\.usage-compare-table/);
   assert.match(terminal, /\.usage-request-grid[\s\S]*?grid-template-columns/);
   assert.match(terminal, /@keyframes\s+usage-details-in[\s\S]*?opacity:\s*0[\s\S]*?transform:[\s\S]*?opacity:\s*1/);
-  assert.match(terminal, /#usage-details:not\(\[hidden\]\)[\s\S]*?animation:\s*usage-details-in\s+180ms/);
-  assert.match(terminal, /@media\s*\(max-width:\s*700px\)[\s\S]*?\.usage-session-chip\s*\{\s*display:\s*none/);
+  assert.match(terminal, /\.terminal-pane-usage-details:not\(\[hidden\]\)[\s\S]*?animation:\s*usage-details-in\s+180ms/);
   assert.match(terminal, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition:\s*none[\s\S]*?animation:\s*none/);
   assert.match(sidebar, /\.group-usage/);
   assert.doesNotMatch(terminal, /#status-bar\.(ok|warn)/);
+});
+
+test('token usage is pane-local and no longer mounted in the top status bar', () => {
+  const terminal = read('terminal.css');
+  const html = fs.readFileSync(path.join(sourceDir, 'index.html'), 'utf8');
+  assert.match(terminal, /terminal-pane-usage-summary/);
+  assert.match(terminal, /terminal-pane-usage-details/);
+  assert.doesNotMatch(terminal, /#usage-summary/);
+  assert.doesNotMatch(terminal, /#usage-details/);
+  assert.doesNotMatch(html, /id="usage-summary"/);
+  assert.doesNotMatch(html, /id="usage-details"/);
+  assert.match(html, /id="status-message"/);
 });
 
 test('obsolete settings menu selectors are gone from production sources', () => {

@@ -14,7 +14,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function makeFixture(responses = []) {
+function makeFixture(responses = [], options = {}) {
   const state = createAppState();
   const calls = [];
   const intervals = [];
@@ -32,6 +32,9 @@ function makeFixture(responses = []) {
       return timer;
     },
     clearIntervalFn: (timer) => cleared.push(timer),
+    getVisibleAssignments: options.getVisibleAssignments,
+    nowFn: options.nowFn,
+    render: options.render,
   });
   return { state, controller, calls, intervals, cleared };
 }
@@ -59,18 +62,17 @@ test('real session activation sends its real ID and project directory', async ()
   assert.equal(fixture.state.usageSessionID, 'real-1');
 });
 
-test('unpaired new token sends empty session ID but keeps terminal directory', async () => {
-  const response = deferred();
-  const fixture = makeFixture([response]);
+test('unpaired new token waits without sending an empty session ID', async () => {
+  const fixture = makeFixture();
   realTerminal(fixture.state, 'new-1', 'C:/work');
   fixture.state.pendingNew.push({ token: 'new-1', dir: 'C:/work' });
   fixture.controller.start();
 
   fixture.controller.onActivate('new-1');
-  assert.deepEqual(fixture.calls, [{ sessionID: '', projectDir: 'C:/work' }]);
-  response.resolve({ project_total: { input_tokens: 2 } });
+  assert.deepEqual(fixture.calls, []);
   await settle();
   assert.equal(fixture.state.usageProjectDir, 'C:/work');
+  assert.equal(fixture.state.usageByToken.get('new-1').waiting, true);
 });
 
 test('switching A to B prevents an older response from overwriting B', async () => {
@@ -149,23 +151,21 @@ test('start and stop are idempotent with one independent five-second timer', () 
 });
 
 test('pairing a new token changes the request identity to the real session', async () => {
-  const pending = deferred();
   const paired = deferred();
-  const fixture = makeFixture([pending, paired]);
+  const fixture = makeFixture([paired]);
   realTerminal(fixture.state, 'new-1', 'dir-a');
   fixture.state.pendingNew.push({ token: 'new-1', dir: 'dir-a' });
   fixture.controller.start();
   fixture.controller.onActivate('new-1');
+  assert.deepEqual(fixture.calls, []);
   fixture.state.newToReal.set('new-1', 'real-1');
   fixture.state.realToNew.set('real-1', 'new-1');
   fixture.state.sessionDirs.set('real-1', 'dir-a');
   fixture.controller.refreshActive();
   assert.deepEqual(fixture.calls, [
-    { sessionID: '', projectDir: 'dir-a' },
     { sessionID: 'real-1', projectDir: 'dir-a' },
   ]);
 
-  pending.resolve({ project_total: { input_tokens: 1 } });
   paired.resolve({ project_total: { input_tokens: 2 } });
   await settle();
   assert.equal(fixture.state.usageSessionID, 'real-1');
@@ -219,6 +219,23 @@ test('active refresh wins over an older prefetch for the same project', async ()
   assert.equal(fixture.state.usageSummary.project_total.input_tokens, 20);
 });
 
+test('usage render observes the project cache from the same successful response', async () => {
+  const response = deferred();
+  const renderedProjectTotals = [];
+  const fixture = makeFixture([response], {
+    render: (state) => renderedProjectTotals.push(
+      state.usageByProject.get('dir-a')?.project_total?.input_tokens,
+    ),
+  });
+  realTerminal(fixture.state, 'A', 'dir-a');
+  fixture.controller.start();
+  fixture.controller.onActivate('A');
+  response.resolve({ project_found: true, session_found: true, project_total: { input_tokens: 12 } });
+  await settle();
+
+  assert.equal(renderedProjectTotals.at(-1), 12);
+});
+
 test('prefetch failure keeps the existing project cache and stop blocks late writes', async () => {
   const failed = deferred();
   const fixture = makeFixture([failed]);
@@ -231,11 +248,186 @@ test('prefetch failure keeps the existing project cache and stop blocks late wri
   assert.equal(fixture.state.usageByProject.get('dir-a').project_total.input_tokens, 8);
 });
 
+test('refreshVisible requests each assigned real session independently', async () => {
+  const first = deferred();
+  const second = deferred();
+  const fixture = makeFixture([first, second], {
+    getVisibleAssignments: () => [{ token: 'A' }, { token: 'B' }],
+  });
+  realTerminal(fixture.state, 'A', 'dir-a');
+  realTerminal(fixture.state, 'B', 'dir-b');
+  fixture.controller.start();
+
+  fixture.controller.refreshVisible();
+  assert.deepEqual(fixture.calls, [
+    { sessionID: 'A', projectDir: 'dir-a' },
+    { sessionID: 'B', projectDir: 'dir-b' },
+  ]);
+  second.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 20 } });
+  first.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 10 } });
+  await settle();
+  assert.equal(fixture.state.usageByToken.get('A').summary.session_total.output_tokens, 10);
+  assert.equal(fixture.state.usageByToken.get('B').summary.session_total.output_tokens, 20);
+});
+
+test('refreshVisible deduplicates an in-flight request for the same token', () => {
+  const response = deferred();
+  const fixture = makeFixture([response], {
+    getVisibleAssignments: () => [{ token: 'A' }],
+  });
+  realTerminal(fixture.state, 'A', 'dir-a');
+  fixture.controller.start();
+
+  fixture.controller.refreshVisible();
+  fixture.controller.refreshVisible();
+
+  assert.deepEqual(fixture.calls, [{ sessionID: 'A', projectDir: 'dir-a' }]);
+});
+
+test('cached usage becomes stale before its refresh request completes', async () => {
+  const first = deferred();
+  const second = deferred();
+  let now = 1_000;
+  const fixture = makeFixture([first, second], { nowFn: () => now });
+  realTerminal(fixture.state, 'A', 'dir-a');
+  fixture.controller.start();
+  fixture.controller.onActivate('A');
+  first.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 10 } });
+  await settle();
+
+  now = 16_001;
+  fixture.controller.refreshToken('A', { force: false });
+
+  assert.equal(fixture.state.usageByToken.get('A').stale, true);
+  assert.equal(fixture.state.usageByToken.get('A').loading, true);
+  second.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 11 } });
+  await settle();
+  assert.equal(fixture.state.usageByToken.get('A').stale, false);
+});
+
+test('an in-flight refresh still marks cached usage stale after the threshold', async () => {
+  const first = deferred();
+  const second = deferred();
+  let now = 1_000;
+  const fixture = makeFixture([first, second], {
+    getVisibleAssignments: () => [{ token: 'A' }],
+    nowFn: () => now,
+  });
+  realTerminal(fixture.state, 'A', 'dir-a');
+  fixture.controller.start();
+  fixture.controller.onActivate('A');
+  first.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 10 } });
+  await settle();
+
+  now = 6_001;
+  fixture.controller.refreshToken('A', { force: false });
+  now = 16_001;
+  fixture.controller.refreshVisible();
+
+  assert.equal(fixture.state.usageByToken.get('A').stale, true);
+  assert.equal(fixture.calls.length, 2);
+  second.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 11 } });
+  await settle();
+  assert.equal(fixture.state.usageByToken.get('A').stale, false);
+});
+
+test('refreshVisible waits for an unpaired new token without calling the backend', () => {
+  const fixture = makeFixture([], {
+    getVisibleAssignments: () => [{ token: 'new-1' }],
+  });
+  realTerminal(fixture.state, 'new-1', 'dir-a');
+  fixture.state.pendingNew.push({ token: 'new-1', dir: 'dir-a' });
+  fixture.controller.start();
+
+  fixture.controller.refreshVisible();
+
+  assert.deepEqual(fixture.calls, []);
+  assert.equal(fixture.state.usageByToken.get('new-1').waiting, true);
+});
+
+test('per-token failures do not mark another visible session stale', async () => {
+  const first = deferred();
+  const second = deferred();
+  const fixture = makeFixture([first, second], {
+    getVisibleAssignments: () => [{ token: 'A' }, { token: 'B' }],
+  });
+  realTerminal(fixture.state, 'A', 'dir-a');
+  realTerminal(fixture.state, 'B', 'dir-b');
+  fixture.controller.start();
+  fixture.controller.refreshVisible();
+  first.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 10 } });
+  await settle();
+  second.reject(new Error('offline'));
+  await settle();
+
+  assert.equal(fixture.state.usageByToken.get('A').stale, false);
+  assert.equal(fixture.state.usageByToken.get('A').summary.session_total.output_tokens, 10);
+  assert.equal(fixture.state.usageByToken.get('B').error, 'offline');
+  assert.equal(fixture.state.usageByToken.get('B').stale, false);
+});
+
+test('a successful older project request is retained when a newer one fails', async () => {
+  const first = deferred();
+  const second = deferred();
+  const fixture = makeFixture([first, second], {
+    getVisibleAssignments: () => [{ token: 'A' }, { token: 'B' }],
+  });
+  realTerminal(fixture.state, 'A', 'dir-a');
+  realTerminal(fixture.state, 'B', 'dir-a');
+  fixture.controller.start();
+  fixture.controller.refreshVisible();
+
+  second.reject(new Error('newer request offline'));
+  await settle();
+  first.resolve({ project_found: true, session_found: true, project_total: { input_tokens: 10 } });
+  await settle();
+
+  assert.equal(fixture.state.usageByProject.get('dir-a').project_total.input_tokens, 10);
+});
+
+test('pairing refreshes a waiting token with the real session identity', async () => {
+  const paired = deferred();
+  const fixture = makeFixture([paired], {
+    getVisibleAssignments: () => [{ token: 'new-1' }],
+  });
+  realTerminal(fixture.state, 'new-1', 'dir-a');
+  fixture.state.pendingNew.push({ token: 'new-1', dir: 'dir-a' });
+  fixture.controller.start();
+  fixture.controller.refreshVisible();
+
+  fixture.state.newToReal.set('new-1', 'real-1');
+  fixture.state.realToNew.set('real-1', 'new-1');
+  fixture.state.sessionDirs.set('real-1', 'dir-a');
+  fixture.controller.refreshToken('new-1', { force: true });
+  assert.deepEqual(fixture.calls, [{ sessionID: 'real-1', projectDir: 'dir-a' }]);
+  paired.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 2 } });
+  await settle();
+  assert.equal(fixture.state.usageByToken.get('new-1').identity.sessionID, 'real-1');
+  assert.equal(fixture.state.usageByToken.get('new-1').summary.session_total.output_tokens, 2);
+});
+
+test('removeToken invalidates its cache and late response', async () => {
+  const response = deferred();
+  const fixture = makeFixture([response], {
+    getVisibleAssignments: () => [{ token: 'A' }],
+  });
+  realTerminal(fixture.state, 'A', 'dir-a');
+  fixture.controller.start();
+  fixture.controller.refreshVisible();
+  fixture.controller.removeToken('A');
+  response.resolve({ project_found: true, session_found: true, session_total: { output_tokens: 9 } });
+  await settle();
+
+  assert.equal(fixture.state.usageByToken.has('A'), false);
+});
+
 test('state usage containers are independent', () => {
   const first = createAppState();
   const second = createAppState();
   first.usageByProject.set('dir', { project_total: { input_tokens: 1 } });
+  first.usageByToken.set('token', { summary: { project_total: { input_tokens: 1 } } });
   first.usageSummary = { project_total: { input_tokens: 1 } };
   assert.equal(second.usageByProject.size, 0);
+  assert.equal(second.usageByToken.size, 0);
   assert.equal(second.usageSummary, null);
 });

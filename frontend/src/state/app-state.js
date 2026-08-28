@@ -36,6 +36,7 @@ export function createAppState() {
     usageError: null,
     usageStale: false,
     usageByProject: new Map(),
+    usageByToken: new Map(),
     projects: [],
   };
 }

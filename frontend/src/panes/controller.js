@@ -35,6 +35,7 @@ export function createPaneController(deps) {
     el,
     setStatus,
     onFocus,
+    onChange,
   } = deps;
   const requestFrame = deps.requestFrame || ((callback) => {
     if (typeof globalThis.requestAnimationFrame === 'function') return globalThis.requestAnimationFrame(callback);
@@ -134,6 +135,7 @@ export function createPaneController(deps) {
     }
     view.updatePanes(state.panes, [...optionsByToken.values()]);
     view.setFocusedPane(state.focusedPaneId);
+    onChange?.(state);
   }
 
   function mountVisibleSessions(options = {}) {

@@ -190,10 +190,6 @@ export function createTerminalController(deps) {
     if (!session.term) makeTerminal(session);
     fitAndSync(session);
     session.term.focus();
-    setStatus?.(
-      '当前会话: ' + session.labelText + (session.exited ? '（已退出）' : ''),
-      session.exited ? 'warn' : 'ok',
-    );
   }
 
   function focusSession(token, options = {}) {
@@ -205,10 +201,6 @@ export function createTerminalController(deps) {
     if (!session.term) makeTerminal(session);
     if (session.visible && options.resize !== false) fitAndSync(session);
     if (options.focus !== false) session.term.focus();
-    setStatus?.(
-      '当前会话: ' + session.labelText + (session.exited ? '（已退出）' : ''),
-      session.exited ? 'warn' : 'ok',
-    );
     return true;
   }
 
