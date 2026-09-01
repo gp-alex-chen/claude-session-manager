@@ -5,6 +5,7 @@ import {
   LAYOUT_MODES,
   PANE_IDS,
   allPresets,
+  dividerVisibility,
   getPreset,
   isValidLayoutMode,
   normalizeLayoutMode,
@@ -32,4 +33,13 @@ test('layout descriptors have stable labels and invalid values fall back to sing
   assert.deepEqual(allPresets().map((preset) => preset.mode), [
     'single', 'split-rows-2', 'split-cols-2', 'split-main-left-3', 'grid-2x2',
   ]);
+});
+
+test('layout descriptors own the divider visibility for every layout', () => {
+  assert.deepEqual(dividerVisibility('single'), { vertical: false, horizontal: false });
+  assert.deepEqual(dividerVisibility('split-rows-2'), { vertical: false, horizontal: true });
+  assert.deepEqual(dividerVisibility('split-cols-2'), { vertical: true, horizontal: false });
+  assert.deepEqual(dividerVisibility('split-main-left-3'), { vertical: true, horizontal: true });
+  assert.deepEqual(dividerVisibility('grid-2x2'), { vertical: true, horizontal: true });
+  assert.deepEqual(dividerVisibility('invalid'), { vertical: false, horizontal: false });
 });

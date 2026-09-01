@@ -35,6 +35,14 @@ const PRESETS = Object.freeze({
   }),
 });
 
+const DIVIDER_VISIBILITY = Object.freeze({
+  single: Object.freeze({ vertical: false, horizontal: false }),
+  'split-rows-2': Object.freeze({ vertical: false, horizontal: true }),
+  'split-cols-2': Object.freeze({ vertical: true, horizontal: false }),
+  'split-main-left-3': Object.freeze({ vertical: true, horizontal: true }),
+  'grid-2x2': Object.freeze({ vertical: true, horizontal: true }),
+});
+
 export function isValidLayoutMode(mode) {
   return typeof mode === 'string' && Object.prototype.hasOwnProperty.call(PRESETS, mode);
 }
@@ -53,6 +61,10 @@ export function visiblePaneIds(mode) {
 
 export function paneLabel(mode) {
   return getPreset(mode).label;
+}
+
+export function dividerVisibility(mode) {
+  return DIVIDER_VISIBILITY[normalizeLayoutMode(mode)];
 }
 
 export function allPresets() {

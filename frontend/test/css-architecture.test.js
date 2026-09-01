@@ -41,7 +41,11 @@ test('all CSS variable references have a token declaration or dynamic ownership'
   const declared = new Set([
     ...read('themes.css').matchAll(/--([\w-]+)\s*:/g),
   ].map((match) => match[1]));
-  const dynamic = new Set(['dot', 'term-bg', 'theme-bg', 'theme-fg']);
+  const dynamic = new Set([
+    'dot', 'term-bg', 'theme-bg', 'theme-fg',
+    'terminal-split-columns-first', 'terminal-split-columns-second',
+    'terminal-split-rows-first', 'terminal-split-rows-second',
+  ]);
   for (const file of fs.readdirSync(stylesDir).filter((name) => name.endsWith('.css'))) {
     const source = read(file);
     for (const [, name] of source.matchAll(/var\(--([\w-]+)/g)) {
@@ -64,7 +68,7 @@ test('controller-driven classes and states remain represented in split styles', 
   }
 });
 
-test('terminal styles define all fixed pane geometries', () => {
+test('terminal styles define adjustable pane geometries and divider tracks', () => {
   const terminal = read('terminal.css');
   for (const mode of ['single', 'split-rows-2', 'split-cols-2', 'split-main-left-3', 'grid-2x2']) {
     assert.match(terminal, new RegExp(`#terminal\\[data-layout-mode="${mode}"\\]`), mode);
@@ -72,14 +76,20 @@ test('terminal styles define all fixed pane geometries', () => {
   const menuBlock = terminal.match(/\.terminal-layout-menu\s*\{([\s\S]*?)\}/)?.[1] || '';
   assert.match(menuBlock, /top:\s*calc\(100% \+ 7px\)/);
   assert.match(menuBlock, /bottom:\s*auto/);
-  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-0"\]\s*\{\s*grid-area:\s*1 \/ 1 \/ 3 \/ 2;/);
-  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-1"\]\s*\{\s*grid-area:\s*1 \/ 2;/);
-  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-2"\]\s*\{\s*grid-area:\s*2 \/ 2;/);
-  assert.match(terminal, /#terminal\[data-layout-mode="grid-2x2"\] \[data-pane-id="pane-3"\]\s*\{\s*grid-area:\s*2 \/ 2;/);
+  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-0"\]\s*\{\s*grid-area:\s*1 \/ 1 \/ 4 \/ 2;/);
+  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-1"\]\s*\{\s*grid-area:\s*1 \/ 3;/);
+  assert.match(terminal, /#terminal\[data-layout-mode="split-main-left-3"\] \[data-pane-id="pane-2"\]\s*\{\s*grid-area:\s*3 \/ 3;/);
+  assert.match(terminal, /#terminal\[data-layout-mode="grid-2x2"\] \[data-pane-id="pane-3"\]\s*\{\s*grid-area:\s*3 \/ 3;/);
   assert.match(terminal, /split-main-left-3[^}]*[\s\S]*pane-0/);
   assert.match(terminal, /terminal-pane-body \.term-host\.is-mounted/);
   assert.match(terminal, /#terminal\.terminal-layout[\s\S]*background:\s*var\(--bg\)/);
-  assert.match(terminal, /#terminal\.terminal-layout[\s\S]*gap:\s*6px/);
+  assert.match(terminal, /#terminal\.terminal-layout[\s\S]*gap:\s*0/);
+  assert.match(terminal, /terminal-pane-divider-vertical[\s\S]*cursor:\s*col-resize/);
+  assert.match(terminal, /terminal-pane-divider-horizontal[\s\S]*cursor:\s*row-resize/);
+  assert.match(terminal, /terminal-pane-divider:hover::before/);
+  assert.match(terminal, /terminal-pane-divider\.is-dragging::before/);
+  assert.match(terminal, /--terminal-split-columns-first/);
+  assert.match(terminal, /--terminal-split-rows-first/);
   assert.match(terminal, /terminal-pane-slot[\s\S]*border:\s*1px solid transparent/);
   assert.match(terminal, /terminal-pane-slot::after[\s\S]*z-index:\s*10/);
   assert.match(terminal, /terminal-pane-slot::after[\s\S]*pointer-events:\s*none/);

@@ -1,7 +1,16 @@
 import { createPaneView } from './view.js';
-import { normalizeLayoutMode, visiblePaneIds } from './presets.js';
+import {
+  LAYOUT_MODES,
+  dividerVisibility,
+  normalizeLayoutMode,
+  visiblePaneIds,
+} from './presets.js';
 
 const LAYOUT_STORAGE_KEY = 'terminal-layout-mode';
+const SPLIT_STORAGE_KEY = 'terminal-layout-split-ratios';
+const SPLIT_MIN_RATIO = 0.16;
+const SPLIT_MAX_RATIO = 0.84;
+const SPLIT_DIVIDER_TRACK_SIZE = 8;
 
 function readStorage(storage, key) {
   try { return storage?.getItem(key) || null; } catch (error) { return null; }
@@ -9,6 +18,50 @@ function readStorage(storage, key) {
 
 function writeStorage(storage, key, value) {
   try { storage?.setItem(key, value); } catch (error) { /* optional storage */ }
+}
+
+function clampSplitRatio(value, fallback = 0.5) {
+  const numeric = Number(value);
+  const ratio = Number.isFinite(numeric) ? numeric : fallback;
+  return Math.min(SPLIT_MAX_RATIO, Math.max(SPLIT_MIN_RATIO, ratio));
+}
+
+function splitPair(value) {
+  const first = clampSplitRatio(value?.first);
+  return { first, second: 1 - first };
+}
+
+function defaultSplitRatios() {
+  return Object.fromEntries(LAYOUT_MODES.map((mode) => [mode, {
+    vertical: splitPair(),
+    horizontal: splitPair(),
+  }]));
+}
+
+function readSplitRatios(storage) {
+  const defaults = defaultSplitRatios();
+  const raw = readStorage(storage, SPLIT_STORAGE_KEY);
+  if (!raw) return defaults;
+  try {
+    const parsed = JSON.parse(raw);
+    for (const mode of LAYOUT_MODES) {
+      if (!parsed?.[mode] || typeof parsed[mode] !== 'object') continue;
+      defaults[mode] = {
+        vertical: splitPair(parsed[mode].vertical),
+        horizontal: splitPair(parsed[mode].horizontal),
+      };
+    }
+  } catch (error) {
+    return defaults;
+  }
+  return defaults;
+}
+
+function persistedSplitRatios(ratios) {
+  return Object.fromEntries(LAYOUT_MODES.map((mode) => [mode, {
+    vertical: { first: ratios[mode].vertical.first },
+    horizontal: { first: ratios[mode].horizontal.first },
+  }]));
 }
 
 function paneById(state, id) {
@@ -46,9 +99,12 @@ export function createPaneController(deps) {
   let sessionOptions = [];
   let started = false;
   let currentMode = normalizeLayoutMode(readStorage(storageRef, LAYOUT_STORAGE_KEY));
+  const splitRatios = readSplitRatios(storageRef);
   let layoutSwitching = false;
   let layoutFramePending = false;
   let resizeFramePending = false;
+  let geometryFramePending = false;
+  let dividerDrag = null;
   const resizeTargets = new Set();
 
   const view = createPaneView({
@@ -66,6 +122,8 @@ export function createPaneController(deps) {
       showSession(token, { paneId, focus: true });
     },
     onClearPane: (paneId) => clearPane(paneId),
+    onDividerPointerDown: (axis, event) => startDividerDrag(axis, event),
+    onDividerKeydown: (axis, event) => handleDividerKeydown(axis, event),
   });
 
   const resizeObserver = typeof ResizeObserverCtor === 'function'
@@ -125,8 +183,109 @@ export function createPaneController(deps) {
     return options;
   }
 
+  function persistSplitRatios() {
+    writeStorage(storageRef, SPLIT_STORAGE_KEY, JSON.stringify(persistedSplitRatios(splitRatios)));
+  }
+
+  function scheduleGeometryResize() {
+    if (geometryFramePending) return;
+    geometryFramePending = true;
+    requestFrame(() => {
+      geometryFramePending = false;
+      resizeVisible();
+    });
+  }
+
+  function setSplitRatio(axis, value, options = {}) {
+    const mode = normalizeLayoutMode(state.layoutMode);
+    const pair = splitRatios[mode]?.[axis];
+    if (!pair) return null;
+    const first = clampSplitRatio(value);
+    splitRatios[mode][axis] = splitPair({ first });
+    view.setSplitRatios(splitRatios[mode]);
+    if (options.persist !== false) persistSplitRatios();
+    if (options.resize !== false) scheduleGeometryResize();
+    return first;
+  }
+
+  function startDividerDrag(axis, event = {}) {
+    const mode = normalizeLayoutMode(state.layoutMode);
+    if (!dividerVisibility(mode)[axis]) return;
+    if (event.button !== undefined && event.button !== 0) return;
+
+    const rect = terminalRoot.getBoundingClientRect?.();
+    const dimension = axis === 'vertical' ? rect?.width : rect?.height;
+    const point = axis === 'vertical' ? event.clientX : event.clientY;
+    if (!Number.isFinite(dimension) || dimension <= SPLIT_DIVIDER_TRACK_SIZE
+      || !Number.isFinite(point)) return;
+
+    const divider = view.divider(axis);
+    dividerDrag = {
+      axis,
+      mode,
+      pointerId: event.pointerId,
+      startPoint: point,
+      startRatio: splitRatios[mode][axis].first,
+      availableSize: dimension - SPLIT_DIVIDER_TRACK_SIZE,
+      target: event.currentTarget || divider,
+    };
+    event.preventDefault?.();
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    view.setDividerDragging?.(axis, true);
+    documentRef.addEventListener?.('pointermove', onDividerPointerMove);
+    documentRef.addEventListener?.('pointerup', finishDividerDrag);
+    documentRef.addEventListener?.('pointercancel', finishDividerDrag);
+  }
+
+  function pointerBelongsToDividerDrag(event) {
+    if (!dividerDrag) return false;
+    if (dividerDrag.pointerId === undefined || event.pointerId === undefined) return true;
+    return dividerDrag.pointerId === event.pointerId;
+  }
+
+  function onDividerPointerMove(event = {}) {
+    if (!pointerBelongsToDividerDrag(event)) return;
+    const point = dividerDrag.axis === 'vertical' ? event.clientX : event.clientY;
+    if (!Number.isFinite(point)) return;
+    const next = dividerDrag.startRatio
+      + (point - dividerDrag.startPoint) / dividerDrag.availableSize;
+    setSplitRatio(dividerDrag.axis, next);
+    event.preventDefault?.();
+  }
+
+  function finishDividerDrag(event = {}) {
+    if (!dividerDrag || (event.type && !pointerBelongsToDividerDrag(event))) return;
+    const current = dividerDrag;
+    current.target?.releasePointerCapture?.(current.pointerId);
+    view.setDividerDragging?.(current.axis, false);
+    documentRef.removeEventListener?.('pointermove', onDividerPointerMove);
+    documentRef.removeEventListener?.('pointerup', finishDividerDrag);
+    documentRef.removeEventListener?.('pointercancel', finishDividerDrag);
+    dividerDrag = null;
+  }
+
+  function handleDividerKeydown(axis, event = {}) {
+    const mode = normalizeLayoutMode(state.layoutMode);
+    if (!dividerVisibility(mode)[axis]) return;
+    const key = event.key;
+    const step = event.shiftKey ? 0.05 : 0.02;
+    const current = splitRatios[mode][axis].first;
+    let next = null;
+    if (key === 'Home') next = SPLIT_MIN_RATIO;
+    else if (key === 'End') next = SPLIT_MAX_RATIO;
+    else if (axis === 'vertical' && key === 'ArrowLeft') next = current - step;
+    else if (axis === 'vertical' && key === 'ArrowRight') next = current + step;
+    else if (axis === 'horizontal' && key === 'ArrowUp') next = current - step;
+    else if (axis === 'horizontal' && key === 'ArrowDown') next = current + step;
+    if (next === null) return;
+    event.preventDefault?.();
+    setSplitRatio(axis, next);
+  }
+
   function syncView() {
-    view.setLayout(state.layoutMode);
+    const mode = normalizeLayoutMode(state.layoutMode);
+    view.setLayout(mode);
+    view.setSplitRatios(splitRatios[mode]);
     const optionsByToken = new Map(sessionOptionList().map((item) => [item.token, item]));
     for (const option of sessionOptions) {
       const current = optionsByToken.get(option.token);
@@ -319,10 +478,12 @@ export function createPaneController(deps) {
   function stop() {
     if (!started) return;
     started = false;
+    finishDividerDrag();
     view.stop();
     resizeObserver?.disconnect?.();
     resizeTargets.clear();
     resizeFramePending = false;
+    geometryFramePending = false;
   }
 
   syncView();

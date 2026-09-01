@@ -27,11 +27,16 @@ class FakeNode {
     this.classList = new FakeClassList();
     this.listeners = new Map();
     this.attributes = new Map();
-    this.style = { setProperty() {} };
+    this.style = {
+      values: new Map(),
+      setProperty: (name, value) => this.style.values.set(name, String(value)),
+      getPropertyValue: (name) => this.style.values.get(name) || '',
+    };
     this.hidden = false;
     this.disabled = false;
     this.value = '';
     this.textContent = '';
+    this.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100 });
   }
   append(...children) { children.forEach((child) => this.appendChild(child)); }
   appendChild(child) {
@@ -86,6 +91,9 @@ function makeFixture(options = {}) {
   const frames = [];
   const storageValues = new Map();
   if (options.layoutMode) storageValues.set('terminal-layout-mode', options.layoutMode);
+  if (options.splitRatios) {
+    storageValues.set('terminal-layout-split-ratios', JSON.stringify(options.splitRatios));
+  }
   const mounts = [];
   const unmounts = [];
   const focuses = [];
@@ -127,6 +135,7 @@ function makeFixture(options = {}) {
     state,
     controller,
     terminalRoot,
+    documentRef,
     mounts,
     unmounts,
     focuses,
@@ -152,6 +161,113 @@ test('fixed layouts expose the requested visible pane geometry', () => {
     assert.equal(fixture.terminalRoot.dataset.layoutMode, mode);
     assert.equal(fixture.terminalRoot.dataset.focusedPaneId, 'pane-0', mode);
   }
+});
+
+test('split layouts expose only the divider orientation they need', () => {
+  const fixture = makeFixture();
+  const vertical = fixture.controller.view.divider('vertical');
+  const horizontal = fixture.controller.view.divider('horizontal');
+
+  assert.equal(vertical.hidden, true);
+  assert.equal(horizontal.hidden, true);
+
+  fixture.controller.setLayout('split-cols-2');
+  assert.equal(vertical.hidden, false);
+  assert.equal(horizontal.hidden, true);
+  assert.equal(vertical.getAttribute('role'), 'separator');
+  assert.equal(vertical.getAttribute('aria-orientation'), 'vertical');
+  assert.equal(vertical.getAttribute('aria-label'), '调整左右窗格宽度');
+
+  fixture.controller.setLayout('split-rows-2');
+  assert.equal(vertical.hidden, true);
+  assert.equal(horizontal.hidden, false);
+  assert.equal(horizontal.getAttribute('aria-orientation'), 'horizontal');
+  assert.equal(horizontal.getAttribute('aria-label'), '调整上下窗格高度');
+
+  fixture.controller.setLayout('grid-2x2');
+  assert.equal(vertical.hidden, false);
+  assert.equal(horizontal.hidden, false);
+});
+
+test('pointer dragging adjusts a vertical divider, persists it, and resizes visible terminals', () => {
+  const fixture = makeFixture();
+  fixture.controller.setLayout('split-cols-2');
+  fixture.flushFrame();
+  const divider = fixture.controller.view.divider('vertical');
+  let prevented = false;
+
+  divider.dispatchEvent({
+    type: 'pointerdown',
+    button: 0,
+    pointerId: 7,
+    clientX: 50,
+    clientY: 20,
+    currentTarget: divider,
+    preventDefault: () => { prevented = true; },
+  });
+  assert.equal(prevented, true);
+  assert.equal(fixture.terminalRoot.classList.contains('is-resizing'), true);
+
+  fixture.documentRef.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 7,
+    clientX: 70,
+    clientY: 20,
+    preventDefault() {},
+  });
+  const ratio = Number.parseFloat(
+    fixture.terminalRoot.style.getPropertyValue('--terminal-split-columns-first'),
+  );
+  assert.ok(ratio > 0.7 && ratio < 0.73, ratio);
+  assert.equal(fixture.frames.length, 1);
+
+  fixture.flushFrame();
+  assert.deepEqual(fixture.resizes.at(-1), ['a', 'b']);
+  fixture.documentRef.dispatchEvent({ type: 'pointerup', pointerId: 7 });
+  assert.equal(fixture.terminalRoot.classList.contains('is-resizing'), false);
+
+  const persisted = JSON.parse(fixture.storageValues.get('terminal-layout-split-ratios'));
+  assert.deepEqual(persisted['split-cols-2'].vertical, { first: ratio });
+});
+
+test('horizontal divider keyboard controls clamp and resize its row split', () => {
+  const fixture = makeFixture();
+  fixture.controller.setLayout('split-rows-2');
+  const divider = fixture.controller.view.divider('horizontal');
+  let prevented = 0;
+
+  divider.dispatchEvent({ type: 'keydown', key: 'ArrowDown', shiftKey: false, preventDefault: () => { prevented += 1; } });
+  assert.equal(divider.getAttribute('aria-valuenow'), '52');
+  divider.dispatchEvent({ type: 'keydown', key: 'Home', preventDefault: () => { prevented += 1; } });
+  assert.equal(divider.getAttribute('aria-valuenow'), '16');
+  divider.dispatchEvent({ type: 'keydown', key: 'End', preventDefault: () => { prevented += 1; } });
+  assert.equal(divider.getAttribute('aria-valuenow'), '84');
+  divider.dispatchEvent({ type: 'keydown', key: 'ArrowLeft', preventDefault: () => { prevented += 1; } });
+  assert.equal(divider.getAttribute('aria-valuenow'), '84');
+  assert.equal(prevented, 3);
+});
+
+test('saved split ratios restore independently for each layout', () => {
+  const fixture = makeFixture({
+    splitRatios: {
+      'split-cols-2': { vertical: { first: 0.72 } },
+      'split-rows-2': { horizontal: { first: 0.28 } },
+    },
+  });
+
+  fixture.controller.setLayout('split-cols-2');
+  assert.equal(fixture.controller.view.divider('vertical').getAttribute('aria-valuenow'), '72');
+  assert.equal(
+    fixture.terminalRoot.style.getPropertyValue('--terminal-split-columns-first'),
+    '0.72fr',
+  );
+
+  fixture.controller.setLayout('split-rows-2');
+  assert.equal(fixture.controller.view.divider('horizontal').getAttribute('aria-valuenow'), '28');
+  assert.equal(
+    fixture.terminalRoot.style.getPropertyValue('--terminal-split-rows-first'),
+    '0.28fr',
+  );
 });
 
 test('pane headers use current, session, usage, and clear slots without duplicate titles', () => {

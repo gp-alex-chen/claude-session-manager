@@ -1,4 +1,9 @@
-import { allPresets, normalizeLayoutMode, PANE_IDS } from './presets.js';
+import {
+  allPresets,
+  dividerVisibility,
+  normalizeLayoutMode,
+  PANE_IDS,
+} from './presets.js';
 
 function defaultElement(documentRef, tag, className, text) {
   const element = documentRef.createElement(tag);
@@ -22,6 +27,8 @@ export function createPaneView(deps) {
     onPaneFocus,
     onSessionChange,
     onClearPane,
+    onDividerPointerDown,
+    onDividerKeydown,
   } = deps;
 
   terminalRoot.classList?.add('terminal-layout');
@@ -83,6 +90,27 @@ export function createPaneView(deps) {
       event.stopPropagation?.();
       onClearPane?.(paneId);
     });
+  }
+
+  const dividers = new Map();
+  for (const axis of ['vertical', 'horizontal']) {
+    const divider = el('div', `terminal-pane-divider terminal-pane-divider-${axis}`);
+    divider.dataset.dividerAxis = axis;
+    divider.tabIndex = 0;
+    divider.setAttribute?.('role', 'separator');
+    divider.setAttribute?.('aria-orientation', axis);
+    divider.setAttribute?.(
+      'aria-label',
+      axis === 'vertical' ? '调整左右窗格宽度' : '调整上下窗格高度',
+    );
+    divider.setAttribute?.('aria-valuemin', '16');
+    divider.setAttribute?.('aria-valuemax', '84');
+    divider.setAttribute?.('aria-valuenow', '50');
+    setHidden(divider, true);
+    divider.addEventListener?.('pointerdown', (event) => onDividerPointerDown?.(axis, event));
+    divider.addEventListener?.('keydown', (event) => onDividerKeydown?.(axis, event));
+    terminalRoot.appendChild(divider);
+    dividers.set(axis, divider);
   }
 
   const layoutControl = el('div', 'terminal-layout-control');
@@ -159,11 +187,38 @@ export function createPaneView(deps) {
       pane.root.classList?.toggle('is-visible', isVisible);
       setHidden(pane.root, !isVisible);
     }
+    const visibility = dividerVisibility(normalized);
+    for (const [axis, divider] of dividers) {
+      setHidden(divider, !visibility[axis]);
+    }
     for (const [itemMode, button] of layoutButtons) {
       const selected = itemMode === normalized;
       button.classList?.toggle('is-selected', selected);
       button.setAttribute?.('aria-checked', String(selected));
     }
+  }
+
+  function setSplitRatios(ratios = {}) {
+    const properties = {
+      vertical: ['--terminal-split-columns-first', '--terminal-split-columns-second'],
+      horizontal: ['--terminal-split-rows-first', '--terminal-split-rows-second'],
+    };
+    for (const [axis, [firstProperty, secondProperty]] of Object.entries(properties)) {
+      const values = ratios[axis] || {};
+      for (const [property, value] of [[firstProperty, values.first], [secondProperty, values.second]]) {
+        if (!Number.isFinite(value) || value <= 0) continue;
+        terminalRoot.style?.setProperty?.(property, `${value}fr`);
+      }
+      const divider = dividers.get(axis);
+      if (divider && Number.isFinite(values.first)) {
+        divider.setAttribute?.('aria-valuenow', String(Math.round(values.first * 100)));
+      }
+    }
+  }
+
+  function setDividerDragging(axis, dragging) {
+    dividers.get(axis)?.classList?.toggle('is-dragging', dragging);
+    terminalRoot.classList?.toggle('is-resizing', dragging);
   }
 
   function updatePanes(paneState, sessionOptions = []) {
@@ -222,6 +277,10 @@ export function createPaneView(deps) {
     return panes.get(paneId)?.usageDetails || null;
   }
 
+  function divider(axis) {
+    return dividers.get(axis) || null;
+  }
+
   function paneBodies() {
     return [...panes.values()].map((pane) => ({ id: pane.id, body: pane.body }));
   }
@@ -242,6 +301,7 @@ export function createPaneView(deps) {
 
   return {
     hostPool,
+    divider,
     layoutButton,
     layoutMenu,
     paneBody,
@@ -251,6 +311,8 @@ export function createPaneView(deps) {
     paneSurfaces,
     paneUsageDetails,
     paneUsageSummary,
+    setDividerDragging,
+    setSplitRatios,
     setFocusedPane,
     setLayout,
     start,
