@@ -43,6 +43,31 @@ const DIVIDER_VISIBILITY = Object.freeze({
   'grid-2x2': Object.freeze({ vertical: true, horizontal: true }),
 });
 
+const CLEAR_LAYOUT_TRANSITIONS = Object.freeze({
+  single: Object.freeze({}),
+  'split-rows-2': Object.freeze({ 'pane-0': 'single', 'pane-1': 'single' }),
+  'split-cols-2': Object.freeze({ 'pane-0': 'single', 'pane-1': 'single' }),
+  'split-main-left-3': Object.freeze({
+    'pane-0': 'split-rows-2',
+    'pane-1': 'split-cols-2',
+    'pane-2': 'split-cols-2',
+  }),
+  'grid-2x2': Object.freeze({
+    'pane-0': 'split-main-left-3',
+    'pane-1': 'split-main-left-3',
+    'pane-2': 'split-main-left-3',
+    'pane-3': 'split-main-left-3',
+  }),
+});
+
+const PANE_FILL_ORDERS = Object.freeze({
+  single: Object.freeze(['pane-0']),
+  'split-rows-2': Object.freeze(['pane-0', 'pane-1']),
+  'split-cols-2': Object.freeze(['pane-0', 'pane-1']),
+  'split-main-left-3': Object.freeze(['pane-0', 'pane-1', 'pane-2']),
+  'grid-2x2': Object.freeze(['pane-0', 'pane-2', 'pane-1', 'pane-3']),
+});
+
 export function isValidLayoutMode(mode) {
   return typeof mode === 'string' && Object.prototype.hasOwnProperty.call(PRESETS, mode);
 }
@@ -65,6 +90,15 @@ export function paneLabel(mode) {
 
 export function dividerVisibility(mode) {
   return DIVIDER_VISIBILITY[normalizeLayoutMode(mode)];
+}
+
+export function layoutAfterPaneClear(mode, paneId) {
+  const normalized = normalizeLayoutMode(mode);
+  return CLEAR_LAYOUT_TRANSITIONS[normalized]?.[paneId] || normalized;
+}
+
+export function paneFillOrder(mode) {
+  return [...PANE_FILL_ORDERS[normalizeLayoutMode(mode)]];
 }
 
 export function allPresets() {

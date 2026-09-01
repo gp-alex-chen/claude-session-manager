@@ -8,6 +8,8 @@ import {
   dividerVisibility,
   getPreset,
   isValidLayoutMode,
+  layoutAfterPaneClear,
+  paneFillOrder,
   normalizeLayoutMode,
   visiblePaneIds,
 } from '../src/panes/presets.js';
@@ -42,4 +44,26 @@ test('layout descriptors own the divider visibility for every layout', () => {
   assert.deepEqual(dividerVisibility('split-main-left-3'), { vertical: true, horizontal: true });
   assert.deepEqual(dividerVisibility('grid-2x2'), { vertical: true, horizontal: true });
   assert.deepEqual(dividerVisibility('invalid'), { vertical: false, horizontal: false });
+});
+
+test('four-pane layout fills the top and bottom positions before the second column', () => {
+  assert.deepEqual(paneFillOrder('single'), ['pane-0']);
+  assert.deepEqual(paneFillOrder('split-main-left-3'), ['pane-0', 'pane-1', 'pane-2']);
+  assert.deepEqual(paneFillOrder('grid-2x2'), ['pane-0', 'pane-2', 'pane-1', 'pane-3']);
+  assert.deepEqual(paneFillOrder('invalid'), ['pane-0']);
+});
+
+test('pane clear transitions cover every supported layout and pane position', () => {
+  for (const paneId of ['pane-0', 'pane-1']) {
+    assert.equal(layoutAfterPaneClear('split-rows-2', paneId), 'single');
+    assert.equal(layoutAfterPaneClear('split-cols-2', paneId), 'single');
+  }
+  assert.equal(layoutAfterPaneClear('split-main-left-3', 'pane-0'), 'split-rows-2');
+  assert.equal(layoutAfterPaneClear('split-main-left-3', 'pane-1'), 'split-cols-2');
+  assert.equal(layoutAfterPaneClear('split-main-left-3', 'pane-2'), 'split-cols-2');
+  for (const paneId of ['pane-0', 'pane-1', 'pane-2', 'pane-3']) {
+    assert.equal(layoutAfterPaneClear('grid-2x2', paneId), 'split-main-left-3');
+  }
+  assert.equal(layoutAfterPaneClear('single', 'pane-0'), 'single');
+  assert.equal(layoutAfterPaneClear('grid-2x2', 'unknown'), 'grid-2x2');
 });

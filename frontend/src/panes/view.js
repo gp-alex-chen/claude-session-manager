@@ -63,7 +63,7 @@ export function createPaneView(deps) {
     const clear = el('button', 'terminal-pane-clear', '×');
     clear.type = 'button';
     clear.dataset.paneId = paneId;
-    clear.title = '清空窗格（不会关闭会话）';
+    clear.title = '清空窗格并收缩布局（不会关闭会话）';
     clear.setAttribute?.('aria-label', clear.title);
     header.append(current, selector, usageSummary, clear);
 

@@ -439,7 +439,9 @@ export function createSessionController(deps) {
       return;
     }
     if (!Array.isArray(open)) return;
-    const paneIds = paneController?.getVisiblePaneIds?.() || [];
+    const paneIds = paneController?.getPaneFillOrder?.()
+      || paneController?.getVisiblePaneIds?.()
+      || [];
     let restoreIndex = 0;
     let restored = false;
     for (const id of open) {

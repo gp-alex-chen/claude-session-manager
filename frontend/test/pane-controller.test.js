@@ -338,12 +338,24 @@ test('changing layout keeps the selected mode across stop and start', async () =
   assert.equal(fixture.controller.getVisiblePaneIds().length, 4);
 });
 
+test('reselecting four-pane layout is idempotent and preserves exact pane assignments', () => {
+  const fixture = makeFixture();
+  fixture.controller.initialize();
+  fixture.controller.setLayout('grid-2x2');
+  const first = fixture.state.panes.map((pane) => pane.token);
+
+  fixture.controller.setLayout('grid-2x2');
+
+  assert.deepEqual(first, ['a', 'c', 'b', 'd']);
+  assert.deepEqual(fixture.state.panes.map((pane) => pane.token), first);
+});
+
 test('layout changes retain sessions in stable order and clear panes removed by the preset', () => {
   const fixture = makeFixture();
   fixture.controller.initialize();
   fixture.controller.setLayout('grid-2x2');
 
-  assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['a', 'c', 'b', 'd']);
   fixture.controller.setLayout('split-main-left-3');
   assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['a', 'b', 'c', null]);
   assert.deepEqual(fixture.unmounts.map(([token]) => token), ['d']);
@@ -378,7 +390,7 @@ test('showing an existing session focuses its original pane and never duplicates
   assert.deepEqual(fixture.focuses.at(-1), ['a', { focus: true }]);
 });
 
-test('clearing a pane unmounts its session without killing it and focuses a remaining pane', () => {
+test('clearing a pane collapses a two-pane layout to single and keeps the other session', () => {
   const fixture = makeFixture();
   fixture.controller.initialize();
   fixture.controller.setLayout('split-cols-2');
@@ -386,9 +398,68 @@ test('clearing a pane unmounts its session without killing it and focuses a rema
   fixture.controller.showSession('b', { paneId: 'pane-1' });
   fixture.controller.clearPane('pane-1');
 
-  assert.equal(fixture.state.panes[1].token, null);
+  assert.equal(fixture.state.layoutMode, 'single');
+  assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['a', null, null, null]);
   assert.deepEqual(fixture.unmounts.map(([token]) => token), ['b']);
   assert.deepEqual(fixture.focuses.at(-1), ['a', { focus: true }]);
+});
+
+test('clearing the main pane of a three-pane layout keeps the remaining panes stacked', () => {
+  const fixture = makeFixture();
+  fixture.controller.initialize();
+  fixture.controller.setLayout('split-main-left-3');
+  fixture.controller.clearPane('pane-0');
+
+  assert.equal(fixture.state.layoutMode, 'split-rows-2');
+  assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['b', 'c', null, null]);
+  assert.deepEqual(fixture.unmounts.map(([token]) => token), ['a']);
+});
+
+test('clearing a side pane of a three-pane layout keeps the main and remaining side pane side by side', () => {
+  const fixture = makeFixture();
+  fixture.controller.initialize();
+  fixture.controller.setLayout('split-main-left-3');
+  fixture.controller.clearPane('pane-1');
+
+  assert.equal(fixture.state.layoutMode, 'split-cols-2');
+  assert.deepEqual(fixture.state.panes.map((pane) => pane.token), ['a', 'c', null, null]);
+  assert.deepEqual(fixture.unmounts.map(([token]) => token), ['b']);
+});
+
+test('clearing a non-focused pane keeps focus on the surviving session after reflow', () => {
+  const fixture = makeFixture();
+  fixture.controller.initialize();
+  fixture.controller.setLayout('split-main-left-3');
+  fixture.controller.view.paneBody('pane-2').click();
+  fixture.controller.clearPane('pane-1');
+
+  assert.equal(fixture.state.layoutMode, 'split-cols-2');
+  assert.equal(fixture.state.focusedPaneId, 'pane-1');
+  assert.equal(fixture.state.activeToken, 'c');
+  assert.deepEqual(fixture.focuses.at(-1), ['c', { focus: true }]);
+});
+
+test('clearing any four-pane slot collapses to three panes without reassigning the cleared session', () => {
+  for (const paneId of ['pane-0', 'pane-1', 'pane-2', 'pane-3']) {
+    const fixture = makeFixture();
+    fixture.controller.initialize();
+    fixture.controller.setLayout('grid-2x2');
+    const clearedToken = fixture.state.panes.find((pane) => pane.id === paneId).token;
+    fixture.controller.clearPane(paneId);
+
+    assert.equal(fixture.state.layoutMode, 'split-main-left-3', paneId);
+    const expectedTokens = {
+      'pane-0': ['b', 'c', 'd', null],
+      'pane-1': ['a', 'b', 'd', null],
+      'pane-2': ['a', 'c', 'd', null],
+      'pane-3': ['a', 'b', 'c', null],
+    }[paneId];
+    assert.deepEqual(fixture.state.panes.map((pane) => pane.token), expectedTokens, paneId);
+    assert.equal(fixture.state.panes.some((pane) => pane.token === clearedToken), false, paneId);
+    assert.equal(fixture.controller.getVisiblePaneIds().length, 3, paneId);
+    assert.equal(fixture.storageValues.get('terminal-layout-mode'), 'split-main-left-3', paneId);
+    assert.deepEqual(fixture.unmounts.map(([token]) => token), [clearedToken], paneId);
+  }
 });
 
 test('assigning a session to an occupied pane unmounts the displaced session', () => {

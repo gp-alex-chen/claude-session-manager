@@ -579,6 +579,32 @@ test('pane-aware opening assigns sessions without using the legacy single-termin
   ]);
 });
 
+test('pane-aware restoration uses the layout-specific four-pane fill order', async () => {
+  const calls = [];
+  const paneController = {
+    showSession: (token, options) => { calls.push(['show', token, options]); return true; },
+    getVisiblePaneIds: () => ['pane-0', 'pane-1', 'pane-2', 'pane-3'],
+    getPaneFillOrder: () => ['pane-0', 'pane-2', 'pane-1', 'pane-3'],
+    focusFirstAssigned: () => calls.push(['focus-first']),
+    setSessionOptions: () => {},
+  };
+  const fixture = makeFixture({
+    paneController,
+    listResults: [[session('one'), session('two'), session('three'), session('four')]],
+    GetOpenSessions: async () => ['one', 'two', 'three', 'four'],
+  });
+
+  await fixture.controller.initialize();
+
+  assert.deepEqual(calls, [
+    ['show', 'one', { paneId: 'pane-0', focus: false }],
+    ['show', 'two', { paneId: 'pane-2', focus: false }],
+    ['show', 'three', { paneId: 'pane-1', focus: false }],
+    ['show', 'four', { paneId: 'pane-3', focus: false }],
+    ['focus-first'],
+  ]);
+});
+
 test('pane-aware restoration does not replace earlier sessions when more are open than panes', async () => {
   const calls = [];
   const starts = [];

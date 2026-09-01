@@ -2,7 +2,9 @@ import { createPaneView } from './view.js';
 import {
   LAYOUT_MODES,
   dividerVisibility,
+  layoutAfterPaneClear,
   normalizeLayoutMode,
+  paneFillOrder,
   visiblePaneIds,
 } from './presets.js';
 
@@ -75,6 +77,14 @@ function uniqueTokens(tokens) {
     seen.add(token);
     return true;
   });
+}
+
+function assignedTokensInFillOrder(state) {
+  const panesById = new Map(state.panes.map((pane) => [pane.id, pane]));
+  return uniqueTokens([
+    ...paneFillOrder(state.layoutMode).map((id) => panesById.get(id)?.token),
+    ...state.panes.map((pane) => pane.token),
+  ]);
 }
 
 export function createPaneController(deps) {
@@ -157,14 +167,15 @@ export function createPaneController(deps) {
     return state.panes.find((pane) => pane.token === token) || null;
   }
 
-  function firstEmptyPane(ids = visibleIds()) {
+  function firstEmptyPane(ids = paneFillOrder(state.layoutMode)) {
     return ids.map((id) => paneById(state, id)).find((pane) => pane && !pane.token) || null;
   }
 
-  function runningUnassignedTokens() {
+  function runningUnassignedTokens(excludedTokens = new Set()) {
     const assigned = new Set(state.panes.map((pane) => pane.token).filter(Boolean));
     return [...state.terminals.values()]
-      .filter((session) => session && !session.exited && !assigned.has(session.token))
+      .filter((session) => session && !session.exited
+        && !assigned.has(session.token) && !excludedTokens.has(session.token))
       .map((session) => session.token);
   }
 
@@ -374,9 +385,21 @@ export function createPaneController(deps) {
   function clearPane(paneId, options = {}) {
     const pane = paneById(state, paneId);
     if (!pane) return false;
+    const focusedToken = paneById(state, state.focusedPaneId)?.token || null;
     const token = pane.token;
     pane.token = null;
     if (token) terminalController.unmountSession?.(token, view.hostPool);
+
+    const nextMode = layoutAfterPaneClear(state.layoutMode, paneId);
+    if (token && options.collapse !== false && nextMode !== state.layoutMode) {
+      setLayout(nextMode, {
+        excludeTokens: [token],
+        focusOptions: options.focus === false ? { focus: false, resize: false } : {},
+        focusedToken,
+      });
+      return true;
+    }
+
     syncView();
     if (options.focus !== false && state.focusedPaneId === paneId) focusFirstAssigned();
     return Boolean(token);
@@ -395,29 +418,42 @@ export function createPaneController(deps) {
     return true;
   }
 
-  function setLayout(mode) {
+  function setLayout(mode, options = {}) {
     const normalized = normalizeLayoutMode(mode);
-    const oldTokens = uniqueTokens(state.panes.map((pane) => pane.token));
-    const candidates = uniqueTokens([...oldTokens, ...runningUnassignedTokens()]);
+    const excludedTokens = new Set(
+      options.excludeTokens instanceof Set
+        ? options.excludeTokens
+        : (options.excludeTokens || []),
+    );
+    const oldTokens = assignedTokensInFillOrder(state);
+    const candidates = uniqueTokens([
+      ...oldTokens,
+      ...runningUnassignedTokens(excludedTokens),
+    ]).filter((token) => !excludedTokens.has(token));
     const ids = visiblePaneIds(normalized);
-    const nextTokens = ids.map((id, index) => candidates[index] || null);
-    const nextAssigned = new Set(nextTokens.filter(Boolean));
+    const fillOrder = paneFillOrder(normalized);
+    const nextTokens = fillOrder.map((id, index) => ({ id, token: candidates[index] || null }));
+    const nextAssigned = new Set(nextTokens.map(({ token }) => token).filter(Boolean));
     layoutSwitching = true;
     for (const token of oldTokens) {
       if (!nextAssigned.has(token)) terminalController.unmountSession?.(token, view.hostPool);
     }
     for (const pane of state.panes) pane.token = null;
-    ids.forEach((id, index) => {
+    nextTokens.forEach(({ id, token }) => {
       const pane = paneById(state, id);
-      if (pane) pane.token = nextTokens[index];
+      if (pane) pane.token = token;
     });
     state.layoutMode = normalized;
     currentMode = normalized;
-    if (!ids.includes(state.focusedPaneId)) state.focusedPaneId = ids[0];
+    const focusedPane = options.focusedToken
+      ? state.panes.find((pane) => pane.token === options.focusedToken && ids.includes(pane.id))
+      : null;
+    if (focusedPane) state.focusedPaneId = focusedPane.id;
+    else if (!ids.includes(state.focusedPaneId)) state.focusedPaneId = ids[0];
     mountVisibleSessions({ fit: false });
     syncView();
     writeStorage(storageRef, LAYOUT_STORAGE_KEY, normalized);
-    focusFirstAssigned({ focus: false, resize: false });
+    focusFirstAssigned(options.focusOptions || { focus: false, resize: false });
     if (!layoutFramePending) {
       layoutFramePending = true;
       requestFrame(() => {
@@ -494,6 +530,7 @@ export function createPaneController(deps) {
     focusFirstAssigned,
     focusPane,
     getVisiblePaneIds: visibleIds,
+    getPaneFillOrder: () => paneFillOrder(state.layoutMode),
     handleTerminalExit,
     initialize,
     removeSession,
