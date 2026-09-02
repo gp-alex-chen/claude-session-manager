@@ -126,6 +126,7 @@ function makeFixture(options = {}) {
   const projectCalls = [];
   const projectAddCalls = [];
   const chooserCalls = [];
+  const folderCalls = [];
   const adoptionCalls = [];
   let projectIndex = 0;
   const listResults = options.listResults || [[]];
@@ -158,6 +159,7 @@ function makeFixture(options = {}) {
       return options.chosenDir || '';
     }),
     AddProject: options.AddProject || (async (dir) => { projectAddCalls.push(dir); }),
+    OpenFolder: options.OpenFolder || (async (dir) => { folderCalls.push(dir); }),
   };
   const intervals = [];
   const cleared = [];
@@ -194,6 +196,7 @@ function makeFixture(options = {}) {
     state, controller, backend, terminals, statuses, intervals, cleared, listCalls,
     listRoot, addProjectButton, terminalController, projectCalls, projectAddCalls,
     chooserCalls, openCalls,
+    documentRef, folderCalls,
     adoptionCalls,
     paneController,
     get renderCount() { return renderCount; },
@@ -267,6 +270,43 @@ test('session rows keep their custom context menu and prevent the native menu', 
     x: 12,
     y: 34,
     target: { type: 'session', id: 'session-1', dir: 'work', name: 'session-1' },
+  });
+});
+
+test('directory group heads open the custom context menu for their folder', () => {
+  const listRoot = new FakeNode();
+  let opened = null;
+  renderSessionList({
+    listRoot,
+    list: [session('session-1', 'C:\\work\\project')],
+    state: createAppState(),
+    agentController: { classifyAgent: () => 'idle' },
+    el: (tag, className, text) => {
+      const node = new FakeNode();
+      node.className = className;
+      node.textContent = text || '';
+      return node;
+    },
+    onStartNew() {},
+    onToggleGroup() {},
+    onOpen() {},
+    onClose() {},
+    onContextMenu: (x, y, target) => { opened = { x, y, target }; },
+  });
+
+  const head = listRoot.children[0].children[0];
+  const event = {
+    clientX: 12,
+    clientY: 34,
+    preventDefault() { this.prevented = true; },
+  };
+  head.listeners.get('contextmenu')(event);
+
+  assert.equal(event.prevented, true);
+  assert.deepEqual(opened, {
+    x: 12,
+    y: 34,
+    target: { type: 'directory', dir: 'C:\\work\\project' },
   });
 });
 
@@ -352,6 +392,28 @@ test('a saved project with no sessions renders one empty group', () => {
 
   assert.equal(listRoot.children.filter((node) => node.className === 'group').length, 1);
   assert.equal(listRoot.children[0].children[1].children.length, 0);
+});
+
+test('directory context menu calls the backend to open the project folder', async () => {
+  const dir = 'C:\\work\\open-me';
+  const fixture = makeFixture({ projectResults: [[dir]], listResults: [[]] });
+
+  await fixture.controller.initialize();
+
+  const head = fixture.listRoot.children[0].children[0];
+  const event = {
+    clientX: 12,
+    clientY: 34,
+    preventDefault() { this.prevented = true; },
+  };
+  head.listeners.get('contextmenu')(event);
+  const menu = fixture.documentRef.body.children.find((node) => node.id === 'ctx-menu');
+
+  assert.equal(event.prevented, true);
+  assert.equal(menu.children.length, 1);
+  assert.equal(menu.children[0].textContent, '打开文件夹');
+  await menu.children[0].click();
+  assert.deepEqual(fixture.folderCalls, [dir]);
 });
 
 test('a project and a session with the same directory render one group', () => {

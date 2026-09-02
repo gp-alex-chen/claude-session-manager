@@ -4,11 +4,22 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+var openFolderFn = defaultOpenFolder
+
+func defaultOpenFolder(dir string) error {
+	cmd := exec.Command("explorer.exe", dir)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
 
 func normalizeAppProjectDir(dir string) (string, error) {
 	dir = strings.TrimSpace(dir)
@@ -68,4 +79,19 @@ func (a *App) DeleteProject(dir string) error {
 		return err
 	}
 	return a.store.DeleteProject(normalized)
+}
+
+func (a *App) OpenFolder(dir string) error {
+	normalized, err := normalizeAppProjectDir(dir)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(normalized)
+	if err != nil {
+		return fmt.Errorf("项目目录不可用 %q: %w", normalized, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("项目路径不是目录: %q", normalized)
+	}
+	return openFolderFn(normalized)
 }

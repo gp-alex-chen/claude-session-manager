@@ -160,6 +160,7 @@ export function createApplication(deps) {
       AdoptSession: backend.AdoptSession,
       StartSession: backend.StartSession,
       StartNew: backend.StartNew,
+      OpenFolder: backend.OpenFolder,
       GetOpenSessions: backend.GetOpenSessions,
       ListProjects: backend.ListProjects,
       ChooseProjectDir: backend.ChooseProjectDir,
