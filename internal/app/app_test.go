@@ -569,7 +569,7 @@ func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 		"GetOpenSessions", "GetShell", "ShellInstalled", "SetShell", "ListSessions", "ListHiddenSessions",
 		"StartSession", "StartNew", "AdoptSession", "TermWrite", "TermResize", "TermKill", "NotifyBeep", "DebugLog",
 		"GetAgents", "GetVersion", "GetUsageSummary",
-		"ListProjects", "ChooseProjectDir", "AddProject", "DeleteProject",
+		"ListProjects", "ChooseProjectDir", "AddProject", "DeleteProject", "OpenFolder",
 	}
 	for _, name := range want {
 		if _, ok := typ.MethodByName(name); !ok {
@@ -631,6 +631,42 @@ func TestAddProjectRejectsBlankMissingAndFilePaths(t *testing.T) {
 	for _, dir := range []string{"   ", filepath.Join(root, "missing"), filePath} {
 		if err := a.AddProject(dir); err == nil {
 			t.Fatalf("AddProject(%q) unexpectedly succeeded", dir)
+		}
+	}
+}
+
+func TestOpenFolderNormalizesAndPassesExistingDirectory(t *testing.T) {
+	a, _, _, root := testApp(t)
+	dir := filepath.Join(root, "open-me")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var opened string
+	previous := openFolderFn
+	t.Cleanup(func() { openFolderFn = previous })
+	openFolderFn = func(path string) error {
+		opened = path
+		return nil
+	}
+
+	if err := a.OpenFolder(filepath.Join(dir, ".")); err != nil {
+		t.Fatalf("OpenFolder returned error: %v", err)
+	}
+	if opened != dir {
+		t.Fatalf("opened directory = %q, want %q", opened, dir)
+	}
+}
+
+func TestOpenFolderRejectsBlankMissingAndFilePaths(t *testing.T) {
+	a, _, _, root := testApp(t)
+	filePath := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(filePath, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"   ", filepath.Join(root, "missing"), filePath} {
+		if err := a.OpenFolder(dir); err == nil {
+			t.Fatalf("OpenFolder(%q) unexpectedly succeeded", dir)
 		}
 	}
 }

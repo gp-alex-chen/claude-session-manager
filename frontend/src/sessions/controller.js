@@ -322,13 +322,29 @@ export function createSessionController(deps) {
   function showContextMenu(x, y, target) {
     ctxTarget = target;
     contextMenu.innerHTML = '';
-    if (target.type === 'session') {
+    if (target.type === 'directory') {
+      addContextItem('打开文件夹', () => openFolder(target));
+    } else if (target.type === 'session') {
       addContextItem('重命名…', () => renameSession(target));
       addContextItem('归档（不再显示）', () => deleteSession(target), true);
     }
     contextMenu.style.left = Math.min(x, windowRef.innerWidth - 160) + 'px';
     contextMenu.style.top = Math.min(y, windowRef.innerHeight - 140) + 'px';
     contextMenu.style.display = 'block';
+  }
+
+  async function openFolder(target) {
+    if (typeof backend?.OpenFolder !== 'function') {
+      setStatus('打开文件夹功能不可用', 'warn');
+      return false;
+    }
+    try {
+      await backend.OpenFolder(target.dir);
+      return true;
+    } catch (error) {
+      setStatus('打开文件夹失败: ' + error, 'warn');
+      return false;
+    }
   }
 
   function hideContextMenu() {
@@ -507,6 +523,7 @@ export function createSessionController(deps) {
     loadSessions,
     loadProjects,
     openFromList,
+    openFolder,
     pairNewSessions,
     handleTerminalExit,
     refreshFoldState,

@@ -116,6 +116,10 @@ export function renderSessionList({
       onStartNew(startDir);
     });
     head.addEventListener('click', () => onToggleGroup(identity, group, folder));
+    head.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      onContextMenu(event.clientX, event.clientY, { type: 'directory', dir: startDir });
+    });
     head.append(folder, name, usage, plus);
     group.appendChild(head);
 

@@ -10,7 +10,7 @@ const backend = fs.readFileSync(path.join(frontendDir, 'src/api/backend.js'), 'u
 const expected = [
   'GetAgents', 'GetOpenSessions', 'GetShell', 'ShellInstalled', 'SetShell',
   'NotifyBeep', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
-  'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'TermWrite',
+  'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'OpenFolder', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject',
 ];

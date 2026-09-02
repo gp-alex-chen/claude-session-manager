@@ -16,6 +16,7 @@ export function UnhideSession(id) { return window['go']['app']['App']['UnhideSes
 export function AdoptSession(runtimeToken, sessionID) { return window['go']['app']['App']['AdoptSession'](runtimeToken, sessionID); }
 export function StartNew(dir) { return window['go']['app']['App']['StartNew'](dir); }
 export function StartSession(id, dir) { return window['go']['app']['App']['StartSession'](id, dir); }
+export function OpenFolder(dir) { return window['go']['app']['App']['OpenFolder'](dir); }
 export function TermKill(token) { return window['go']['app']['App']['TermKill'](token); }
 export function TermResize(token, cols, rows) { return window['go']['app']['App']['TermResize'](token, cols, rows); }
 export function TermWrite(token, b64) { return window['go']['app']['App']['TermWrite'](token, b64); }
