@@ -7,7 +7,14 @@ export function createUpdateController(deps) {
     setStatus,
     showToast,
     clampProgress,
+    noticeNode,
+    storage,
+    nowFn = () => new Date(),
+    setTimeoutFn = setTimeout,
+    clearTimeoutFn = clearTimeout,
   } = deps;
+
+  const dailyCheckStorageKey = 'update-last-check-date';
 
   const state = {
     mode: 'idle',
@@ -25,9 +32,52 @@ export function createUpdateController(deps) {
   let progressRegion = null;
   let progressBar = null;
   let warningNode = null;
+  let dailyCheckTimer = null;
+  let dailyCheckTask = null;
+  let dailyCheckStarted = false;
+  let dailyCheckGeneration = 0;
 
   function messageFor(error) {
     return String((error && error.message) || error);
+  }
+
+  function localDateKey(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return year + '-' + month + '-' + day;
+  }
+
+  function readLastCheckDate() {
+    try { return storage?.getItem(dailyCheckStorageKey) || null; } catch (error) { return null; }
+  }
+
+  function writeLastCheckDate(value) {
+    try { storage?.setItem(dailyCheckStorageKey, value); } catch (error) { /* storage is optional */ }
+  }
+
+  function setNotice(info) {
+    if (!noticeNode) return;
+    const visible = Boolean(info && info.hasUpdate);
+    noticeNode.hidden = !visible;
+    noticeNode.setAttribute('aria-hidden', String(!visible));
+    if (visible) {
+      noticeNode.textContent = '有新版本';
+      noticeNode.title = info.latest ? '发现新版本 ' + formatVersion(info.latest) : '发现新版本';
+    } else {
+      noticeNode.textContent = '';
+      noticeNode.title = '';
+    }
+  }
+
+  function millisecondsUntilNextLocalDay(value) {
+    const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    if (Number.isNaN(date.getTime())) return 24 * 60 * 60 * 1000;
+    const next = new Date(date.getTime());
+    next.setHours(24, 0, 0, 0);
+    return Math.max(1000, next.getTime() - date.getTime());
   }
 
   function getSnapshot() {
@@ -35,6 +85,15 @@ export function createUpdateController(deps) {
       ...state,
       info: state.info ? { ...state.info } : null,
     };
+  }
+
+  function restoreSnapshot(snapshot) {
+    Object.assign(state, {
+      ...snapshot,
+      info: snapshot.info ? { ...snapshot.info } : null,
+    });
+    setNotice(state.mode === 'ready' ? state.info : null);
+    render();
   }
 
   function setCurrentVersion(value) {
@@ -49,6 +108,7 @@ export function createUpdateController(deps) {
     state.phase = '';
     state.info = null;
     state.statusText = '';
+    setNotice(null);
     render();
   }
 
@@ -92,8 +152,11 @@ export function createUpdateController(deps) {
     progressBar.textContent = isDownloading ? '下载中 ' + state.pct + '%' : '';
   }
 
-  async function check() {
-    if (state.busy) return;
+  async function check(options = {}) {
+    if (state.busy) return null;
+    const silent = options.silent === true;
+    const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
+    const previousSnapshot = getSnapshot();
     state.mode = 'checking';
     state.busy = true;
     state.phase = '检查中';
@@ -101,6 +164,9 @@ export function createUpdateController(deps) {
     render();
     try {
       const info = await backend.CheckForUpdate();
+      if (!isCurrent()) {
+        return null;
+      }
       if (info && info.hasUpdate) {
         state.mode = 'ready';
         state.busy = false;
@@ -108,10 +174,13 @@ export function createUpdateController(deps) {
         state.statusText = '';
         state.info = { ...info };
         if (info.current) state.currentVersion = formatVersion(info.current);
-        setStatus(
-          '发现新版本 ' + formatVersion(info.latest) + '（当前 ' + formatVersion(info.current) + '）',
-          'warn',
-        );
+        setNotice(info);
+        if (!silent) {
+          setStatus(
+            '发现新版本 ' + formatVersion(info.latest) + '（当前 ' + formatVersion(info.current) + '）',
+            'warn',
+          );
+        }
       } else {
         state.info = null;
         state.busy = false;
@@ -119,17 +188,98 @@ export function createUpdateController(deps) {
         state.phase = '';
         state.statusText = '当前已是最新版本（' + formatVersion(info && info.current || state.currentVersion) + '）';
         if (info && info.current) state.currentVersion = formatVersion(info.current);
-        setStatus('✅ 已是最新版本（' + formatVersion(info && info.current || state.currentVersion) + '）', 'ok');
+        setNotice(null);
+        if (!silent) setStatus('✅ 已是最新版本（' + formatVersion(info && info.current || state.currentVersion) + '）', 'ok');
       }
+      render();
+      return info || null;
     } catch (error) {
+      if (!isCurrent()) {
+        return null;
+      }
+      if (silent && previousSnapshot.mode === 'ready' && previousSnapshot.info) {
+        restoreSnapshot(previousSnapshot);
+        return null;
+      }
       state.info = null;
       state.busy = false;
       state.mode = 'idle';
       state.phase = '';
       state.statusText = '检查失败：' + messageFor(error);
-      setStatus('❌ ' + messageFor(error), 'warn');
+      setNotice(null);
+      if (!silent) setStatus('❌ ' + messageFor(error), 'warn');
+      render();
+      return null;
     }
-    render();
+  }
+
+  async function checkDaily() {
+    const today = localDateKey(nowFn());
+    if (!today || readLastCheckDate() === today) return null;
+    if (dailyCheckTask && dailyCheckTask.generation === dailyCheckGeneration) return dailyCheckTask.promise;
+    dailyCheckTask = null;
+    if (state.busy) return null;
+
+    const task = {
+      date: today,
+      generation: dailyCheckGeneration,
+      previousSnapshot: getSnapshot(),
+      promise: null,
+    };
+    task.promise = check({
+      silent: true,
+      isCurrent: () => task.generation === dailyCheckGeneration,
+    })
+      .then((info) => {
+        if (info && task.generation === dailyCheckGeneration) writeLastCheckDate(task.date);
+        return info;
+      })
+      .finally(() => {
+        if (dailyCheckTask === task) dailyCheckTask = null;
+      });
+    dailyCheckTask = task;
+    return task.promise;
+  }
+
+  async function runDailyCheckAndCatchUp(generation) {
+    const taskDate = dailyCheckTask && dailyCheckTask.generation === generation
+      ? dailyCheckTask.date
+      : localDateKey(nowFn());
+    await checkDaily();
+    if (!dailyCheckStarted || generation !== dailyCheckGeneration) return;
+    const currentDate = localDateKey(nowFn());
+    if (currentDate && currentDate !== taskDate && readLastCheckDate() !== currentDate) {
+      await checkDaily();
+    }
+  }
+
+  function scheduleDailyCheck(generation = dailyCheckGeneration) {
+    if (!dailyCheckStarted || generation !== dailyCheckGeneration) return;
+    if (dailyCheckTimer !== null) clearTimeoutFn(dailyCheckTimer);
+    dailyCheckTimer = setTimeoutFn(async () => {
+      dailyCheckTimer = null;
+      if (!dailyCheckStarted || generation !== dailyCheckGeneration) return;
+      await runDailyCheckAndCatchUp(generation);
+      scheduleDailyCheck(generation);
+    }, millisecondsUntilNextLocalDay(nowFn()));
+  }
+
+  function start() {
+    if (dailyCheckStarted) return;
+    dailyCheckStarted = true;
+    dailyCheckGeneration += 1;
+    const generation = dailyCheckGeneration;
+    void checkDaily();
+    scheduleDailyCheck(generation);
+  }
+
+  function stop() {
+    dailyCheckStarted = false;
+    dailyCheckGeneration += 1;
+    if (dailyCheckTask && state.busy) restoreSnapshot(dailyCheckTask.previousSnapshot);
+    dailyCheckTask = null;
+    if (dailyCheckTimer !== null) clearTimeoutFn(dailyCheckTimer);
+    dailyCheckTimer = null;
   }
 
   async function apply() {
@@ -150,6 +300,7 @@ export function createUpdateController(deps) {
       state.phase = '';
       state.info = null;
       state.statusText = '更新失败：' + messageFor(error);
+      setNotice(null);
       setStatus('❌ 更新失败: ' + messageFor(error), 'warn');
       render();
     }
@@ -162,6 +313,7 @@ export function createUpdateController(deps) {
       state.busy = false;
       state.info = null;
       state.statusText = phase;
+      setNotice(null);
       setStatus('❌ ' + phase, 'warn');
     } else if (phase === '重启中') {
       state.mode = 'applying';
@@ -212,11 +364,14 @@ export function createUpdateController(deps) {
   return {
     apply,
     check,
+    checkDaily,
     getSnapshot,
     handleProgress,
     handleState,
     mount,
     reset,
     setCurrentVersion,
+    start,
+    stop,
   };
 }

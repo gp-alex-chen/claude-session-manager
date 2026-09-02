@@ -13,7 +13,7 @@ import { createPaneController } from '../panes/controller.js';
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project',
   'session-list', 'hidden-panel', 'hidden-count',
-  'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
+  'btn-hidden', 'btn-eye', 'btn-settings', 'update-notice', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
   'settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update',
@@ -192,6 +192,8 @@ export function createApplication(deps) {
     setStatus,
     showToast: (message) => agentController.showToast(message),
     clampProgress,
+    noticeNode: nodes['update-notice'],
+    storage: safeStorage(windowRef),
   });
   const settingsController = createSettings({
     state,
@@ -274,6 +276,7 @@ export function createApplication(deps) {
     usageController.start();
     sessionController.start();
     settingsController.start();
+    updateController.start?.();
     readyPromise = initialize(paneController).then(() => Promise.all([
       initialize(sessionController), initialize(settingsController),
     ]));
@@ -291,6 +294,7 @@ export function createApplication(deps) {
       else runtime.EventsOff?.(name);
     }
     settingsController.stop();
+    updateController.stop?.();
     sessionController.stop();
     paneController.stop();
     usageController.stop();

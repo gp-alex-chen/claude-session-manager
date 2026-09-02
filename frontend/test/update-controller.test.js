@@ -83,6 +83,11 @@ function fixture(options = {}) {
     setStatus: (message, kind) => statuses.push({ message, kind }),
     showToast: (message) => toasts.push(message),
     clampProgress,
+    noticeNode: options.noticeNode,
+    storage: options.storage,
+    nowFn: options.nowFn,
+    setTimeoutFn: options.setTimeoutFn,
+    clearTimeoutFn: options.clearTimeoutFn,
   });
   controller.mount(menu);
   const actionButton = findClass(menu, 'update-action');
@@ -96,6 +101,7 @@ function fixture(options = {}) {
     progressRegion: findClass(menu, 'update-progress-region'),
     progressBar: findClass(menu, 'update-progress-bar'),
     warningNode: findClass(menu, 'update-warning'),
+    noticeNode: options.noticeNode,
     statuses,
     toasts,
     calls,
@@ -130,6 +136,198 @@ test('check no-update and reject states return to retryable idle', async () => {
   assert.equal(rejected.controller.getSnapshot().mode, 'idle');
   assert.equal(rejected.controller.getSnapshot().busy, false);
   assert.match(rejected.statuses.at(-1).message, /offline/);
+});
+
+test('daily check runs once per local date and shows a quiet new-version notice', async () => {
+  const storageValues = new Map();
+  const noticeNode = new FakeNode();
+  noticeNode.hidden = true;
+  let currentDate = new Date('2026-09-02T10:00:00');
+  const fixtureData = fixture({
+    noticeNode,
+    storage: {
+      getItem: (key) => storageValues.get(key) || null,
+      setItem: (key, value) => storageValues.set(key, value),
+    },
+    nowFn: () => currentDate,
+    check: async () => ({ hasUpdate: true, latest: '2.0.0', current: '1.0.0' }),
+  });
+
+  await fixtureData.controller.checkDaily();
+  await fixtureData.controller.checkDaily();
+  assert.equal(fixtureData.calls.check, 1);
+  assert.equal(noticeNode.hidden, false);
+  assert.equal(noticeNode.textContent, '有新版本');
+  assert.equal(fixtureData.statuses.length, 0);
+
+  currentDate = new Date('2026-09-03T10:00:00');
+  await fixtureData.controller.checkDaily();
+  assert.equal(fixtureData.calls.check, 2);
+  assert.equal(storageValues.size, 1);
+  assert.deepEqual([...storageValues.values()], ['2026-09-03']);
+});
+
+test('daily check lifecycle schedules at local midnight and clears its timer', async () => {
+  const storageValues = new Map();
+  const timers = [];
+  const cleared = [];
+  const fixtureData = fixture({
+    storage: {
+      getItem: (key) => storageValues.get(key) || null,
+      setItem: (key, value) => storageValues.set(key, value),
+    },
+    nowFn: () => new Date('2026-09-02T10:00:00'),
+    setTimeoutFn: (callback, delay) => {
+      timers.push({ callback, delay });
+      return timers.length;
+    },
+    clearTimeoutFn: (id) => cleared.push(id),
+  });
+
+  fixtureData.controller.start();
+  fixtureData.controller.start();
+  assert.equal(fixtureData.calls.check, 1);
+  assert.equal(timers.length, 1);
+  assert.ok(timers[0].delay > 0);
+  fixtureData.controller.stop();
+  assert.deepEqual(cleared, [1]);
+});
+
+test('midnight check catches up when the previous date request is still pending', async () => {
+  const storageValues = new Map();
+  const timers = [];
+  const cleared = [];
+  let currentDate = new Date('2026-09-02T23:59:00');
+  let resolveFirst;
+  const noticeNode = new FakeNode();
+  noticeNode.hidden = true;
+  const fixtureData = fixture({
+    noticeNode,
+    storage: {
+      getItem: (key) => storageValues.get(key) || null,
+      setItem: (key, value) => storageValues.set(key, value),
+    },
+    nowFn: () => currentDate,
+    setTimeoutFn: (callback, delay) => {
+      timers.push({ callback, delay });
+      return timers.length;
+    },
+    clearTimeoutFn: (id) => cleared.push(id),
+    check: () => {
+      if (!resolveFirst) {
+        return new Promise((resolve) => {
+          resolveFirst = () => resolve({ hasUpdate: false, current: '1.0.0' });
+        });
+      }
+      return Promise.resolve({ hasUpdate: true, latest: '2.0.0', current: '1.0.0' });
+    },
+  });
+
+  fixtureData.controller.start();
+  assert.equal(fixtureData.calls.check, 1);
+  currentDate = new Date('2026-09-03T00:00:01');
+  const midnight = timers[0].callback();
+  resolveFirst();
+  await midnight;
+
+  assert.equal(fixtureData.calls.check, 2);
+  assert.deepEqual([...storageValues.values()], ['2026-09-03']);
+  assert.equal(noticeNode.hidden, false);
+  fixtureData.controller.stop();
+  assert.deepEqual(cleared, [2]);
+});
+
+test('silent daily failures preserve an existing update notice', async () => {
+  const storageValues = new Map();
+  let currentDate = new Date('2026-09-02T10:00:00');
+  let checks = 0;
+  const noticeNode = new FakeNode();
+  noticeNode.hidden = true;
+  const fixtureData = fixture({
+    noticeNode,
+    storage: {
+      getItem: (key) => storageValues.get(key) || null,
+      setItem: (key, value) => storageValues.set(key, value),
+    },
+    nowFn: () => currentDate,
+    check: async () => {
+      checks += 1;
+      if (checks === 1) return { hasUpdate: true, latest: '2.0.0', current: '1.0.0' };
+      throw new Error('offline');
+    },
+  });
+
+  await fixtureData.controller.checkDaily();
+  currentDate = new Date('2026-09-03T10:00:00');
+  await fixtureData.controller.checkDaily();
+
+  assert.equal(noticeNode.hidden, false);
+  assert.equal(noticeNode.textContent, '有新版本');
+  assert.equal(fixtureData.controller.getSnapshot().mode, 'ready');
+  assert.equal(fixtureData.controller.getSnapshot().info.latest, '2.0.0');
+  assert.deepEqual([...storageValues.values()], ['2026-09-02']);
+  assert.equal(fixtureData.statuses.length, 0);
+});
+
+test('stopping invalidates an in-flight daily check result', async () => {
+  const storageValues = new Map();
+  const timers = [];
+  let resolveCheck;
+  const noticeNode = new FakeNode();
+  noticeNode.hidden = true;
+  const fixtureData = fixture({
+    noticeNode,
+    storage: {
+      getItem: (key) => storageValues.get(key) || null,
+      setItem: (key, value) => storageValues.set(key, value),
+    },
+    setTimeoutFn: (callback) => {
+      timers.push(callback);
+      return timers.length;
+    },
+    clearTimeoutFn: () => {},
+    check: () => new Promise((resolve) => { resolveCheck = resolve; }),
+  });
+
+  fixtureData.controller.start();
+  fixtureData.controller.stop();
+  resolveCheck({ hasUpdate: true, latest: '2.0.0', current: '1.0.0' });
+  await Promise.resolve();
+
+  assert.equal(noticeNode.hidden, true);
+  assert.equal(fixtureData.controller.getSnapshot().mode, 'idle');
+  assert.equal(storageValues.size, 0);
+  assert.equal(timers.length, 1);
+});
+
+test('restarting after stop starts a fresh daily check generation', async () => {
+  const storageValues = new Map();
+  const timers = [];
+  const resolvers = [];
+  const fixtureData = fixture({
+    storage: {
+      getItem: (key) => storageValues.get(key) || null,
+      setItem: (key, value) => storageValues.set(key, value),
+    },
+    nowFn: () => new Date('2026-09-02T10:00:00'),
+    setTimeoutFn: (callback) => {
+      timers.push(callback);
+      return timers.length;
+    },
+    clearTimeoutFn: () => {},
+    check: () => new Promise((resolve) => { resolvers.push(resolve); }),
+  });
+
+  fixtureData.controller.start();
+  fixtureData.controller.stop();
+  fixtureData.controller.start();
+  assert.equal(fixtureData.calls.check, 2);
+
+  resolvers.forEach((resolve) => resolve({ hasUpdate: false, current: '1.0.0' }));
+  await Promise.resolve();
+  await Promise.resolve();
+  fixtureData.controller.stop();
+  assert.equal(timers.length, 2);
 });
 
 test('available update leaves checking mode and action invokes UpdateToLatest', async () => {

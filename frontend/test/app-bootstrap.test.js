@@ -5,7 +5,7 @@ import { createApplication } from '../src/app/bootstrap.js';
 
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project', 'session-list', 'hidden-panel', 'hidden-count',
-  'btn-hidden', 'btn-eye', 'btn-settings', 'settings-menu', 'settings-dialog',
+  'btn-hidden', 'btn-eye', 'btn-settings', 'update-notice', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
   'settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update',
@@ -105,7 +105,7 @@ function makeFixture(options = {}) {
   };
   const calls = {
     factories: {}, starts: {}, stops: {}, initializes: {}, routed: [],
-    resize: 0, cancels: 0, clipboardReads: 0, clipboardWrites: [],
+    resize: 0, cancels: 0, clipboardReads: 0, clipboardWrites: [], dailyStarts: 0, dailyStops: 0,
   };
   const makeController = (name, extra = {}) => {
     calls.starts[name] = 0;
@@ -155,6 +155,8 @@ function makeFixture(options = {}) {
     update: (deps) => {
       calls.factories.update = deps;
       return {
+        start: () => { calls.dailyStarts += 1; },
+        stop: () => { calls.dailyStops += 1; },
         handleState: (value) => calls.routed.push(['update-state', value]),
         handleProgress: (value) => calls.routed.push(['update-progress', value]),
       };
@@ -205,6 +207,7 @@ test('bootstrap creates controllers around one shared state and wires callbacks'
   assert.equal(fixture.calls.factories.usage.state, fixture.app.state);
   assert.deepEqual(fixture.app.state.projects, []);
   assert.equal(typeof fixture.calls.factories.usage.GetUsageSummary, 'function');
+  assert.equal(fixture.calls.factories.update.noticeNode, fixture.elements.get('update-notice'));
   assert.equal(Array.isArray(fixture.calls.factories.usage.surfaces), true);
   assert.equal(typeof fixture.calls.factories.session.onPair, 'function');
   fixture.calls.factories.agent.setStatus('临时消息', 'ok');
@@ -298,6 +301,8 @@ test('stop is idempotent and uses returned event cancellation functions', () => 
   assert.equal(fixture.windowListeners.size, 0);
   assert.equal(fixture.runtimeListeners.size, 0);
   assert.deepEqual(fixture.eventsOff, []);
+  assert.equal(fixture.calls.dailyStarts, 1);
+  assert.equal(fixture.calls.dailyStops, 1);
 });
 
 test('stop falls back to EventsOff when EventsOn returns no cancel function', () => {
