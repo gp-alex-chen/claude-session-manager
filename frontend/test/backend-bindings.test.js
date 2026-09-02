@@ -12,7 +12,7 @@ const expected = [
   'NotifyBeep', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
   'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'OpenFolder', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
-  'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject',
+  'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
@@ -69,5 +69,13 @@ test('directory project wrappers forward arguments unchanged', () => {
   assert.match(
     binding,
     /export function DeleteProject\(dir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['DeleteProject'\]\(dir\);\s*\}/,
+  );
+  assert.match(
+    binding,
+    /export function ListProjectFavorites\(\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['ListProjectFavorites'\]\(\);\s*\}/,
+  );
+  assert.match(
+    binding,
+    /export function SetProjectFavorite\(dir, favorite\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['SetProjectFavorite'\]\(dir, favorite\);\s*\}/,
   );
 });

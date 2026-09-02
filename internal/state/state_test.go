@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestCompatibleRoundTripPreservesAllFields(t *testing.T) {
@@ -284,5 +287,121 @@ func TestProjectMutationsAreIdempotentAndNormalizeDirectories(t *testing.T) {
 	got, err = store.LoadProjects()
 	if err != nil || !reflect.DeepEqual(got, []string{second}) {
 		t.Fatalf("projects after deleting missing = %#v, err=%v", got, err)
+	}
+}
+
+func TestProjectFavoritesPersistWithNewestFirstOrdering(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	store := NewStore(root)
+	if err := store.SaveProjects([]string{first, second}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SetProjectFavorite(first, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProjectFavorite(second, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProjectFavorite(first, true); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.LoadProjectFavorites()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{first, second}) {
+		t.Fatalf("favorites after adding = %#v, want newest first", got)
+	}
+
+	if err := store.SetProjectFavorite(first, false); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewStore(root).LoadProjectFavorites()
+	if err != nil || !reflect.DeepEqual(restarted, []string{second}) {
+		t.Fatalf("favorites after restart = %#v, err=%v", restarted, err)
+	}
+}
+
+func TestProjectPathsSkipEmptyEntriesAndDeduplicateCaseInsensitive(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("project paths use Windows case-insensitive semantics")
+	}
+	root := t.TempDir()
+	project := filepath.Join(root, "Project")
+	doc := map[string][]string{
+		"dirs":      {"", project, strings.ToUpper(project)},
+		"favorites": {" ", strings.ToUpper(project), project},
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "projects.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(root)
+	projects, err := store.LoadProjects()
+	if err != nil || len(projects) != 1 || !strings.EqualFold(projects[0], project) {
+		t.Fatalf("projects with empty/case-variant entries = %#v, err=%v", projects, err)
+	}
+	favorites, err := store.LoadProjectFavorites()
+	if err != nil || len(favorites) != 1 || !strings.EqualFold(favorites[0], project) {
+		t.Fatalf("favorites with empty/case-variant entries = %#v, err=%v", favorites, err)
+	}
+}
+
+func TestProjectDeleteUsesCaseInsensitiveIdentityAndRemovesFavorite(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("project paths use Windows case-insensitive semantics")
+	}
+	root := t.TempDir()
+	project := filepath.Join(root, "Project")
+	store := NewStore(root)
+	if err := store.SaveProjects([]string{project}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProjectFavorite(project, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteProject(strings.ToUpper(project)); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := store.LoadProjects()
+	if err != nil || len(projects) != 0 {
+		t.Fatalf("projects after case-variant delete = %#v, err=%v", projects, err)
+	}
+	favorites, err := store.LoadProjectFavorites()
+	if err != nil || len(favorites) != 0 {
+		t.Fatalf("favorites after case-variant delete = %#v, err=%v", favorites, err)
+	}
+}
+
+func TestProjectMutationsAcrossStoresUseFileLock(t *testing.T) {
+	root := t.TempDir()
+	release, err := lockProjectsFile(filepath.Join(root, ".projects.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	completed := make(chan error, 1)
+	go func() {
+		completed <- NewStore(root).AddProject(filepath.Join(root, "project"))
+	}()
+	select {
+	case err := <-completed:
+		t.Fatalf("project mutation bypassed the cross-store lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-completed; err != nil {
+		t.Fatal(err)
 	}
 }

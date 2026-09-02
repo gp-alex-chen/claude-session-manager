@@ -45,6 +45,23 @@ func (a *App) ListProjects() []string {
 	return projects
 }
 
+func (a *App) ListProjectFavorites() []string {
+	favorites, err := a.store.LoadProjectFavorites()
+	if err != nil {
+		a.DebugLog("读取 projects.json 失败: " + err.Error())
+		return []string{}
+	}
+	return favorites
+}
+
+func (a *App) SetProjectFavorite(dir string, favorite bool) error {
+	normalized, err := normalizeAppProjectDir(dir)
+	if err != nil {
+		return err
+	}
+	return a.store.SetProjectFavorite(normalized, favorite)
+}
+
 func (a *App) ChooseProjectDir() (string, error) {
 	chooseDir := a.chooseDirFn
 	if chooseDir == nil {
@@ -64,11 +81,6 @@ func (a *App) AddProject(dir string) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("项目路径不是目录: %q", normalized)
-	}
-	for _, existing := range a.ListProjects() {
-		if strings.EqualFold(existing, normalized) {
-			return nil
-		}
 	}
 	return a.store.AddProject(normalized)
 }

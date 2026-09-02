@@ -32,7 +32,6 @@ export function createSessionController(deps) {
   let refreshInFlight = false;
   let refreshTimer = null;
   let started = false;
-  let ctxTarget = null;
   let addProjectBound = false;
   let sessionsLoaded = false;
   const pendingAdoptions = new Map();
@@ -239,6 +238,7 @@ export function createSessionController(deps) {
       onOpen: openFromList,
       onClose: closeRealSession,
       onContextMenu: showContextMenu,
+      favoriteProjects: state.projectFavorites,
       usageByProject: state.usageByProject,
     });
     onProjects?.(list);
@@ -285,6 +285,25 @@ export function createSessionController(deps) {
     }
   }
 
+  async function loadProjectFavorites() {
+    if (typeof backend?.ListProjectFavorites !== 'function') {
+      state.projectFavorites = [];
+      if (sessionsLoaded) renderSessions(lastLoaded);
+      return true;
+    }
+    try {
+      const favorites = await backend.ListProjectFavorites();
+      state.projectFavorites = Array.isArray(favorites) ? favorites : [];
+      if (sessionsLoaded) renderSessions(lastLoaded);
+      return true;
+    } catch (error) {
+      state.projectFavorites = [];
+      if (sessionsLoaded) renderSessions(lastLoaded);
+      setStatus('加载项目收藏失败: ' + error, 'warn');
+      return false;
+    }
+  }
+
   async function addProjectFromChooser() {
     if (typeof backend?.ChooseProjectDir !== 'function') return;
     let dir;
@@ -314,15 +333,15 @@ export function createSessionController(deps) {
     const item = el('div', 'ctx-item' + (danger ? ' danger' : ''), label);
     item.addEventListener('click', () => {
       hideContextMenu();
-      callback();
+      return callback();
     });
     contextMenu.appendChild(item);
   }
 
   function showContextMenu(x, y, target) {
-    ctxTarget = target;
     contextMenu.innerHTML = '';
     if (target.type === 'directory') {
+      addContextItem(target.favorite ? '取消收藏' : '添加收藏', () => toggleProjectFavorite(target));
       addContextItem('打开文件夹', () => openFolder(target));
     } else if (target.type === 'session') {
       addContextItem('重命名…', () => renameSession(target));
@@ -331,6 +350,27 @@ export function createSessionController(deps) {
     contextMenu.style.left = Math.min(x, windowRef.innerWidth - 160) + 'px';
     contextMenu.style.top = Math.min(y, windowRef.innerHeight - 140) + 'px';
     contextMenu.style.display = 'block';
+  }
+
+  async function toggleProjectFavorite(target) {
+    if (typeof backend?.SetProjectFavorite !== 'function') {
+      setStatus('项目收藏功能不可用', 'warn');
+      return false;
+    }
+    const favorite = !target.favorite;
+    try {
+      await backend.SetProjectFavorite(target.dir, favorite);
+    } catch (error) {
+      setStatus((favorite ? '添加收藏失败: ' : '取消收藏失败: ') + error, 'warn');
+      return false;
+    }
+    const identity = dirIdentity(target.dir);
+    const current = Array.isArray(state.projectFavorites) ? state.projectFavorites : [];
+    state.projectFavorites = current.filter((dir) => dirIdentity(dir) !== identity);
+    if (favorite) state.projectFavorites.unshift(target.dir);
+    renderSessions(lastLoaded);
+    setStatus(favorite ? '已收藏项目: ' + leafOf(target.dir) : '已取消收藏: ' + leafOf(target.dir), 'ok');
+    return true;
   }
 
   async function openFolder(target) {
@@ -349,7 +389,6 @@ export function createSessionController(deps) {
 
   function hideContextMenu() {
     contextMenu.style.display = 'none';
-    ctxTarget = null;
   }
 
   async function renameSession(target) {
@@ -446,6 +485,7 @@ export function createSessionController(deps) {
 
   async function initialize() {
     await loadProjects();
+    await loadProjectFavorites();
     await agentController.refreshAgents();
     await loadSessions();
     let open;
@@ -522,6 +562,7 @@ export function createSessionController(deps) {
     listSig,
     loadSessions,
     loadProjects,
+    loadProjectFavorites,
     openFromList,
     openFolder,
     pairNewSessions,
@@ -533,6 +574,7 @@ export function createSessionController(deps) {
     renameSession,
     start,
     startNew,
+    toggleProjectFavorite,
     stop,
     syncActiveHighlight,
   };

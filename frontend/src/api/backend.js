@@ -5,5 +5,5 @@ export {
   DebugLog, ListSessions, ListHiddenSessions, RenameSession, DeleteSession,
   UnhideSession, AdoptSession, StartSession, StartNew, OpenFolder, TermWrite, TermResize, TermKill,
   GetVersion, GetUsageSummary, CheckForUpdate, UpdateToLatest,
-  ListProjects, ChooseProjectDir, AddProject, DeleteProject,
+  ListProjects, ListProjectFavorites, SetProjectFavorite, ChooseProjectDir, AddProject, DeleteProject,
 } from '../../wailsjs/go/app/App';

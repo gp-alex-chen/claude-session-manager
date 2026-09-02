@@ -228,7 +228,10 @@ test('bootstrap passes project APIs and the top project add button to the sessio
   assert.ok(fixture.elements.get('project-bar'));
   assert.equal(fixture.calls.factories.session.projectRoot, undefined);
   assert.equal(sessionDeps.addProjectButton, fixture.elements.get('btn-add-project'));
-  for (const name of ['ListProjects', 'ChooseProjectDir', 'AddProject', 'AdoptSession', 'OpenFolder']) {
+  for (const name of [
+    'ListProjects', 'ChooseProjectDir', 'AddProject', 'AdoptSession', 'OpenFolder',
+    'ListProjectFavorites', 'SetProjectFavorite',
+  ]) {
     assert.equal(typeof sessionDeps.backend[name], 'function', name);
   }
 });

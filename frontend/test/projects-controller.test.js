@@ -50,6 +50,10 @@ test('group new-session controls reveal on hover and keyboard focus', () => {
   assert.match(sidebarCSS, /\.plus\s*\{[^}]*pointer-events:\s*none/);
 });
 
+test('favorited project folder icons use the accent color', () => {
+  assert.match(sidebarCSS, /\.folder-icon\.favorite\s*\{[^}]*color:\s*var\(--accent\)/);
+});
+
 test('group session folding uses a transitionable hidden state', () => {
   assert.match(sidebarCSS, /\.session-item\s*\{[^}]*max-height:\s*72px/);
   assert.match(sidebarCSS, /\.session-item\s*\{[^}]*transition:[^}]*max-height/);

@@ -33,6 +33,7 @@ export function renderSessionList({
   listRoot,
   list = [],
   projects = [],
+  favoriteProjects = [],
   state,
   agentController,
   el,
@@ -72,14 +73,36 @@ export function renderSessionList({
     });
   }
 
+  const favoriteOrder = new Map();
+  for (const projectDir of Array.isArray(favoriteProjects) ? favoriteProjects : []) {
+    const identity = dirIdentity(projectDir);
+    if (identity && !favoriteOrder.has(identity)) favoriteOrder.set(identity, favoriteOrder.size);
+  }
+  const orderedGroups = [...groups.values()];
+  orderedGroups.forEach((group, index) => { group.order = index; });
+  orderedGroups.sort((left, right) => {
+    const leftRank = favoriteOrder.get(left.identity);
+    const rightRank = favoriteOrder.get(right.identity);
+    if (leftRank !== undefined || rightRank !== undefined) {
+      if (leftRank === undefined) return 1;
+      if (rightRank === undefined) return -1;
+      return leftRank - rightRank;
+    }
+    return left.order - right.order;
+  });
+
   listRoot.innerHTML = '';
-  for (const { identity, dir, projectDir, items } of groups.values()) {
+  for (const { identity, dir, projectDir, items } of orderedGroups) {
     const startDir = projectDir || dir;
+    const isProject = Boolean(projectDir);
+    const isFavorite = favoriteOrder.has(identity);
     const group = el('div', 'group');
     if (state.collapsedDirs.has(identity)) group.classList.add('collapsed');
     const head = el('div', 'group-head');
     head.dataset.dir = identity;
     const folder = el('span', 'folder-icon');
+    folder.classList.toggle('favorite', isFavorite);
+    folder.title = isFavorite ? '已收藏项目' : (isProject ? '项目文件夹' : '会话目录');
     folder.setAttribute('aria-hidden', 'true');
     folder.innerHTML = [
       '<svg class="folder-open" xmlns="http://www.w3.org/2000/svg" width="16" height="16"',
@@ -96,6 +119,7 @@ export function renderSessionList({
     ].join('');
     const name = el('span', 'group-name', leafOf(dir));
     name.title = dir;
+    head.dataset.favorite = String(isFavorite);
     const summary = projectUsage(usageByProject, dir, identity);
     const usage = el('span', 'group-usage', formatProjectUsage(summary));
     usage.title = formatProjectUsageTitle(summary);
@@ -118,7 +142,9 @@ export function renderSessionList({
     head.addEventListener('click', () => onToggleGroup(identity, group, folder));
     head.addEventListener('contextmenu', (event) => {
       event.preventDefault();
-      onContextMenu(event.clientX, event.clientY, { type: 'directory', dir: startDir });
+      onContextMenu(event.clientX, event.clientY, {
+        type: 'directory', dir: startDir, favorite: isFavorite,
+      });
     });
     head.append(folder, name, usage, plus);
     group.appendChild(head);

@@ -25,6 +25,8 @@ export function GetUsageSummary(sessionID, projectDir) { return window['go']['ap
 export function CheckForUpdate() { return window['go']['app']['App']['CheckForUpdate'](); }
 export function UpdateToLatest() { return window['go']['app']['App']['UpdateToLatest'](); }
 export function ListProjects() { return window['go']['app']['App']['ListProjects'](); }
+export function ListProjectFavorites() { return window['go']['app']['App']['ListProjectFavorites'](); }
+export function SetProjectFavorite(dir, favorite) { return window['go']['app']['App']['SetProjectFavorite'](dir, favorite); }
 export function ChooseProjectDir() { return window['go']['app']['App']['ChooseProjectDir'](); }
 export function AddProject(dir) { return window['go']['app']['App']['AddProject'](dir); }
 export function DeleteProject(dir) { return window['go']['app']['App']['DeleteProject'](dir); }

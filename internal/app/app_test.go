@@ -570,6 +570,7 @@ func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 		"StartSession", "StartNew", "AdoptSession", "TermWrite", "TermResize", "TermKill", "NotifyBeep", "DebugLog",
 		"GetAgents", "GetVersion", "GetUsageSummary",
 		"ListProjects", "ChooseProjectDir", "AddProject", "DeleteProject", "OpenFolder",
+		"ListProjectFavorites", "SetProjectFavorite",
 	}
 	for _, name := range want {
 		if _, ok := typ.MethodByName(name); !ok {
@@ -668,6 +669,31 @@ func TestOpenFolderRejectsBlankMissingAndFilePaths(t *testing.T) {
 		if err := a.OpenFolder(dir); err == nil {
 			t.Fatalf("OpenFolder(%q) unexpectedly succeeded", dir)
 		}
+	}
+}
+
+func TestProjectFavoritesRoundTripThroughApp(t *testing.T) {
+	a, _, _, root := testApp(t)
+	dir := filepath.Join(root, "favorite-project")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddProject(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetProjectFavorite(filepath.Join(dir, "."), true); err != nil {
+		t.Fatal(err)
+	}
+
+	favorites := a.ListProjectFavorites()
+	if !reflect.DeepEqual(favorites, []string{dir}) {
+		t.Fatalf("project favorites = %#v, want %#v", favorites, []string{dir})
+	}
+	if err := a.SetProjectFavorite(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if favorites := a.ListProjectFavorites(); len(favorites) != 0 {
+		t.Fatalf("project favorites after removal = %#v", favorites)
 	}
 }
 

@@ -26,8 +26,13 @@ class FakeNode {
     this.classList = new FakeClassList();
     this.listeners = new Map();
     this.listenerCounts = new Map();
-    this.innerHTML = '';
+    this._innerHTML = '';
     this.textContent = '';
+  }
+  get innerHTML() { return this._innerHTML; }
+  set innerHTML(value) {
+    this._innerHTML = String(value);
+    this.children = [];
   }
   append(...children) {
     for (const child of children) {
@@ -71,7 +76,11 @@ function makeFixture(options = {}) {
   let renderCount = 0;
   Object.defineProperty(listRoot, 'innerHTML', {
     get() { return ''; },
-    set() { renderCount += 1; },
+    set(value) {
+      listRoot._innerHTML = String(value);
+      listRoot.children = [];
+      renderCount += 1;
+    },
   });
   const hiddenPanel = new FakeNode();
   const hiddenCount = new FakeNode();
@@ -127,10 +136,13 @@ function makeFixture(options = {}) {
   const projectAddCalls = [];
   const chooserCalls = [];
   const folderCalls = [];
+  const favoriteCalls = [];
   const adoptionCalls = [];
   let projectIndex = 0;
+  let favoriteIndex = 0;
   const listResults = options.listResults || [[]];
   const projectResults = options.projectResults || [[]];
+  const favoriteResults = options.favoriteResults || [[]];
   const backend = {
     ListSessions: async () => {
       listCalls.push(true);
@@ -160,6 +172,14 @@ function makeFixture(options = {}) {
     }),
     AddProject: options.AddProject || (async (dir) => { projectAddCalls.push(dir); }),
     OpenFolder: options.OpenFolder || (async (dir) => { folderCalls.push(dir); }),
+    ListProjectFavorites: options.ListProjectFavorites || (async () => {
+      const result = favoriteResults[Math.min(favoriteIndex++, favoriteResults.length - 1)];
+      if (result instanceof Error) throw result;
+      return result;
+    }),
+    SetProjectFavorite: options.SetProjectFavorite || (async (dir, favorite) => {
+      favoriteCalls.push([dir, favorite]);
+    }),
   };
   const intervals = [];
   const cleared = [];
@@ -197,6 +217,7 @@ function makeFixture(options = {}) {
     listRoot, addProjectButton, terminalController, projectCalls, projectAddCalls,
     chooserCalls, openCalls,
     documentRef, folderCalls,
+    favoriteCalls,
     adoptionCalls,
     paneController,
     get renderCount() { return renderCount; },
@@ -205,13 +226,20 @@ function makeFixture(options = {}) {
 
 const session = (id, dir = 'work', name = id, time = 'today') => ({ id, dir, name, time });
 
-function renderProjectGroups(projects, list, onStartNew = () => {}, onToggleGroup = () => {}) {
+function renderProjectGroups(
+  projects,
+  list,
+  onStartNew = () => {},
+  onToggleGroup = () => {},
+  favoriteProjects = [],
+) {
   const listRoot = new FakeNode();
   renderSessionList({
     listRoot,
     projects,
     list,
     state: createAppState(),
+    favoriteProjects,
     agentController: { classifyAgent: () => 'idle' },
     el: (tag, className, text) => {
       const node = new FakeNode();
@@ -306,7 +334,9 @@ test('directory group heads open the custom context menu for their folder', () =
   assert.deepEqual(opened, {
     x: 12,
     y: 34,
-    target: { type: 'directory', dir: 'C:\\work\\project' },
+    target: {
+      type: 'directory', dir: 'C:\\work\\project', favorite: false,
+    },
   });
 });
 
@@ -350,6 +380,24 @@ test('group heads show a stateful folder icon and an icon-only new-session butto
   assert.match(head.children[3].innerHTML, /M6 22a2 2/);
   assert.match(head.children[3].innerHTML, /M12 18v-6/);
   assert.match(head.children[2].title, /项目累计 1.02K/);
+});
+
+test('favorited project groups render first and highlight their folder icon', () => {
+  const favorite = 'C:\\work\\favorite';
+  const regular = 'C:\\work\\regular';
+  const listRoot = renderProjectGroups(
+    [regular, favorite],
+    [session('regular', regular), session('favorite', favorite)],
+    () => {},
+    () => {},
+    [favorite],
+  );
+  const groups = listRoot.children.filter((node) => node.className === 'group');
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].children[0].dataset.dir, favorite.toLowerCase().replaceAll('\\', '/'));
+  assert.equal(groups[0].children[0].children[0].classList.contains('favorite'), true);
+  assert.equal(groups[1].children[0].children[0].classList.contains('favorite'), false);
 });
 
 test('collapsed group renders the closed folder variant', () => {
@@ -410,10 +458,117 @@ test('directory context menu calls the backend to open the project folder', asyn
   const menu = fixture.documentRef.body.children.find((node) => node.id === 'ctx-menu');
 
   assert.equal(event.prevented, true);
-  assert.equal(menu.children.length, 1);
-  assert.equal(menu.children[0].textContent, '打开文件夹');
-  await menu.children[0].click();
+  assert.equal(menu.children.length, 2);
+  assert.equal(menu.children[1].textContent, '打开文件夹');
+  await menu.children[1].click();
   assert.deepEqual(fixture.folderCalls, [dir]);
+});
+
+test('a session-only directory group can be favorited', async () => {
+  const dir = 'C:\\work\\session-only';
+  const fixture = makeFixture({
+    projectResults: [[]],
+    listResults: [[session('one', dir)]],
+    favoriteResults: [[]],
+  });
+
+  await fixture.controller.initialize();
+
+  const head = fixture.listRoot.children[0].children[0];
+  head.listeners.get('contextmenu')({
+    clientX: 12,
+    clientY: 34,
+    preventDefault() {},
+  });
+  const menu = fixture.documentRef.body.children.find((node) => node.id === 'ctx-menu');
+
+  assert.equal(menu.children[0].textContent, '添加收藏');
+  await menu.children[0].click();
+
+  assert.deepEqual(fixture.favoriteCalls, [[dir, true]]);
+  assert.deepEqual(fixture.state.projectFavorites, [dir]);
+  const groups = fixture.listRoot.children.filter((node) => node.className === 'group');
+  assert.equal(groups[0].children[0].children[0].classList.contains('favorite'), true);
+});
+
+test('failed directory favorite writes leave the group unchanged', async () => {
+  const dir = 'C:\\work\\favorite-failure';
+  const fixture = makeFixture({
+    projectResults: [[]],
+    listResults: [[session('one', dir)]],
+    favoriteResults: [[]],
+    SetProjectFavorite: async () => { throw new Error('disk full'); },
+  });
+
+  await fixture.controller.initialize();
+  const head = fixture.listRoot.children[0].children[0];
+  head.listeners.get('contextmenu')({ clientX: 12, clientY: 34, preventDefault() {} });
+  const menu = fixture.documentRef.body.children.find((node) => node.id === 'ctx-menu');
+
+  await menu.children[0].click();
+
+  assert.deepEqual(fixture.state.projectFavorites, []);
+  assert.equal(fixture.listRoot.children[0].children[0].children[0].classList.contains('favorite'), false);
+  assert.match(fixture.statuses.at(-1).message, /添加收藏失败/);
+});
+
+test('adding a project favorite pins its group and updates the folder icon', async () => {
+  const favorite = 'C:\\work\\favorite';
+  const regular = 'C:\\work\\regular';
+  const fixture = makeFixture({
+    projectResults: [[regular, favorite]],
+    listResults: [[]],
+    favoriteResults: [[]],
+  });
+
+  await fixture.controller.initialize();
+
+  const regularHead = fixture.listRoot.children[0].children[0];
+  regularHead.listeners.get('contextmenu')({
+    clientX: 12,
+    clientY: 34,
+    preventDefault() { this.prevented = true; },
+  });
+  const menu = fixture.documentRef.body.children.find((node) => node.id === 'ctx-menu');
+
+  assert.equal(menu.children[0].textContent, '添加收藏');
+  await menu.children[0].click();
+
+  assert.deepEqual(fixture.favoriteCalls, [[regular, true]]);
+  assert.deepEqual(fixture.state.projectFavorites, [regular]);
+  const groups = fixture.listRoot.children.filter((node) => node.className === 'group');
+  const favoriteGroup = groups[0];
+  assert.equal(favoriteGroup.children[0].dataset.dir, regular.toLowerCase().replaceAll('\\', '/'));
+  assert.equal(favoriteGroup.children[0].children[0].classList.contains('favorite'), true);
+});
+
+test('a favorited project offers remove favorite and restores normal ordering', async () => {
+  const favorite = 'C:\\work\\favorite';
+  const regular = 'C:\\work\\regular';
+  const fixture = makeFixture({
+    projectResults: [[regular, favorite]],
+    listResults: [[]],
+    favoriteResults: [[favorite]],
+  });
+
+  await fixture.controller.initialize();
+
+  const favoriteHead = fixture.listRoot.children[0].children[0];
+  favoriteHead.listeners.get('contextmenu')({
+    clientX: 12,
+    clientY: 34,
+    preventDefault() {},
+  });
+  const menu = fixture.documentRef.body.children.find((node) => node.id === 'ctx-menu');
+
+  assert.equal(menu.children[0].textContent, '取消收藏');
+  await menu.children[0].click();
+
+  assert.deepEqual(fixture.favoriteCalls, [[favorite, false]]);
+  assert.deepEqual(fixture.state.projectFavorites, []);
+  const groups = fixture.listRoot.children.filter((node) => node.className === 'group');
+  assert.equal(groups[0].children[0].children[1].textContent, 'regular');
+  assert.equal(groups[1].children[0].children[1].textContent, 'favorite');
 });
 
 test('a project and a session with the same directory render one group', () => {

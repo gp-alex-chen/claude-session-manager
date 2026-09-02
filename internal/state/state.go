@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -214,10 +215,15 @@ func (s *Store) LoadOpen() ([]string, error) {
 }
 
 type projectsDocument struct {
-	Dirs []string `json:"dirs"`
+	Dirs      []string `json:"dirs"`
+	Favorites []string `json:"favorites,omitempty"`
 }
 
 func normalizeProjectDir(dir string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return "", errors.New("项目目录不能为空")
+	}
 	return filepath.Abs(filepath.Clean(dir))
 }
 
@@ -225,33 +231,62 @@ func normalizeProjectDirs(dirs []string) ([]string, error) {
 	result := make([]string, 0, len(dirs))
 	seen := make(map[string]struct{}, len(dirs))
 	for _, dir := range dirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
 		normalized, err := normalizeProjectDir(dir)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[normalized]; ok {
+		key := projectPathKey(normalized)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[normalized] = struct{}{}
+		seen[key] = struct{}{}
 		result = append(result, normalized)
 	}
 	return result, nil
 }
 
-func (s *Store) loadProjectsLocked() ([]string, error) {
-	doc := projectsDocument{Dirs: []string{}}
-	found, err := loadJSON(s.projectsPath(), &doc)
+func (s *Store) withProjectsFileLock(fn func() error) error {
+	release, err := lockProjectsFile(filepath.Join(s.dir, ".projects.lock"))
 	if err != nil {
-		return []string{}, err
+		return err
 	}
-	if !found {
-		return []string{}, nil
+	result := fn()
+	if releaseErr := release(); result == nil {
+		return releaseErr
 	}
-	return normalizeProjectDirs(doc.Dirs)
+	return result
 }
 
-func saveProjectsLocked(path string, dirs []string) error {
-	b, err := json.Marshal(projectsDocument{Dirs: dirs})
+func (s *Store) loadProjectsDocumentLocked() (projectsDocument, error) {
+	doc := projectsDocument{Dirs: []string{}, Favorites: []string{}}
+	found, err := loadJSON(s.projectsPath(), &doc)
+	if err != nil {
+		return projectsDocument{Dirs: []string{}, Favorites: []string{}}, err
+	}
+	if !found {
+		return doc, nil
+	}
+	dirs, err := normalizeProjectDirs(doc.Dirs)
+	if err != nil {
+		return projectsDocument{Dirs: []string{}, Favorites: []string{}}, err
+	}
+	favorites, err := normalizeProjectDirs(doc.Favorites)
+	if err != nil {
+		return projectsDocument{Dirs: []string{}, Favorites: []string{}}, err
+	}
+	return projectsDocument{Dirs: dirs, Favorites: favorites}, nil
+}
+
+func (s *Store) loadProjectsLocked() ([]string, error) {
+	doc, err := s.loadProjectsDocumentLocked()
+	return doc.Dirs, err
+}
+
+func saveProjectsDocumentLocked(path string, doc projectsDocument) error {
+	b, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
@@ -271,7 +306,14 @@ func (s *Store) SaveProjects(dirs []string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return saveProjectsLocked(s.projectsPath(), normalized)
+	return s.withProjectsFileLock(func() error {
+		doc, err := s.loadProjectsDocumentLocked()
+		if err != nil {
+			return err
+		}
+		doc.Dirs = normalized
+		return saveProjectsDocumentLocked(s.projectsPath(), doc)
+	})
 }
 
 func (s *Store) AddProject(dir string) error {
@@ -281,17 +323,19 @@ func (s *Store) AddProject(dir string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dirs, err := s.loadProjectsLocked()
-	if err != nil {
-		return err
-	}
-	for _, existing := range dirs {
-		if existing == normalized {
-			return nil
+	return s.withProjectsFileLock(func() error {
+		doc, err := s.loadProjectsDocumentLocked()
+		if err != nil {
+			return err
 		}
-	}
-	dirs = append(dirs, normalized)
-	return saveProjectsLocked(s.projectsPath(), dirs)
+		for _, existing := range doc.Dirs {
+			if sameProjectPath(existing, normalized) {
+				return nil
+			}
+		}
+		doc.Dirs = append(doc.Dirs, normalized)
+		return saveProjectsDocumentLocked(s.projectsPath(), doc)
+	})
 }
 
 func (s *Store) DeleteProject(dir string) error {
@@ -301,23 +345,71 @@ func (s *Store) DeleteProject(dir string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dirs, err := s.loadProjectsLocked()
+	return s.withProjectsFileLock(func() error {
+		doc, err := s.loadProjectsDocumentLocked()
+		if err != nil {
+			return err
+		}
+		filtered := doc.Dirs[:0]
+		removed := false
+		for _, existing := range doc.Dirs {
+			if sameProjectPath(existing, normalized) {
+				removed = true
+				continue
+			}
+			filtered = append(filtered, existing)
+		}
+		if !removed {
+			return nil
+		}
+		doc.Dirs = filtered
+		favorites := doc.Favorites[:0]
+		for _, favorite := range doc.Favorites {
+			if !sameProjectPath(favorite, normalized) {
+				favorites = append(favorites, favorite)
+			}
+		}
+		doc.Favorites = favorites
+		return saveProjectsDocumentLocked(s.projectsPath(), doc)
+	})
+}
+
+func (s *Store) LoadProjectFavorites() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	doc, err := s.loadProjectsDocumentLocked()
+	if err != nil {
+		return []string{}, err
+	}
+	return append([]string(nil), doc.Favorites...), nil
+}
+
+func (s *Store) SetProjectFavorite(dir string, favorite bool) error {
+	normalized, err := normalizeProjectDir(dir)
 	if err != nil {
 		return err
 	}
-	filtered := dirs[:0]
-	removed := false
-	for _, existing := range dirs {
-		if existing == normalized {
-			removed = true
-			continue
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.withProjectsFileLock(func() error {
+		doc, err := s.loadProjectsDocumentLocked()
+		if err != nil {
+			return err
 		}
-		filtered = append(filtered, existing)
-	}
-	if !removed {
-		return nil
-	}
-	return saveProjectsLocked(s.projectsPath(), filtered)
+		filtered := make([]string, 0, len(doc.Favorites)+1)
+		for _, existing := range doc.Favorites {
+			if sameProjectPath(existing, normalized) {
+				continue
+			}
+			filtered = append(filtered, existing)
+		}
+		if favorite {
+			doc.Favorites = append([]string{normalized}, filtered...)
+		} else {
+			doc.Favorites = filtered
+		}
+		return saveProjectsDocumentLocked(s.projectsPath(), doc)
+	})
 }
 
 func (s *Store) SetShell(name string) error {

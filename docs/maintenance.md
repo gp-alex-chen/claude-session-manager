@@ -19,7 +19,7 @@ main.go
 
 - `internal/app`：Wails 公开方法、生命周期、业务编排和更新绑定。
 - `internal/terminal`：ConPTY 启停、读写、resize、close、token 和命令外的进程边界；不依赖 Wails runtime，通过 callbacks 发事件。
-- `internal/state`：兼容 `favorites.json`、`open-sessions.json`、`settings.json` 和 `projects.json` 的 Store。所有读写共用互斥锁，更新在同一锁内完成，写入采用临时文件和原子替换。
+- `internal/state`：兼容 `favorites.json`、`open-sessions.json`、`settings.json` 和 `projects.json` 的 Store。所有读写共用进程内互斥锁，项目文档的修改额外使用 `.projects.lock` 跨进程锁，更新在对应锁内完成，写入采用临时文件和原子替换。
 - `internal/agent`：可启动/取消的 Watcher。后端通常约 1~2 秒拉取 `claude agents --json` 并推送 `agents:update`；前端每 30 秒调用 GetAgents 作为 watcher 缓存兜底，不是每 10 秒直接轮询。
 - `internal/session`：扫描和解析 `~/.claude/projects/**/*.jsonl`。
 - `internal/usage`：解析 Claude usage、按 message ID 去重，并缓存会话/项目 token 汇总；由 App 的 `GetUsageSummary` 暴露只读查询。
@@ -77,14 +77,14 @@ JSON 格式必须保持：
 // settings.json
 {"shell": "cmd"}
 // projects.json
-{"dirs": ["C:\\work\\project"]}
+{"dirs": ["C:\\work\\project"], "favorites": ["C:\\work\\project"]}
 ```
 
-项目配置中的每个元素就是用户选择并保存的工作目录字符串，不是独立的运行时对象。默认文件目录是 exe 同目录；测试通过 TempDir/注入目录隔离用户数据。临时文件替换失败也必须向上返回并清理残留。
+项目配置中的每个元素就是用户选择并保存的工作目录字符串，不是独立的运行时对象；`favorites` 可省略，旧版 `projects.json` 可以直接读取，空白目录项会被忽略。默认文件目录是 exe 同目录；测试通过 TempDir/注入目录隔离用户数据。临时文件替换失败也必须向上返回并清理残留。
 
-项目存储和 App 边界必须保持以下语义：缺失 `projects.json` 返回安全空列表，损坏文件返回安全空列表并保留错误；添加使用规范化目录，重复目录幂等成功；删除不存在的目录也幂等成功。App 的 `ListProjects`、`ChooseProjectDir`、`AddProject`、`OpenFolder`、`DeleteProject` 分别负责读取、打开原生目录选择器、校验并保存目录、校验目录并启动 Windows 文件资源管理器、移除配置。选择取消不保存；打开文件夹只接受存在的目录；删除只移除配置，不删除真实目录、历史会话或终端。
+项目存储和 App 边界必须保持以下语义：缺失 `projects.json` 返回安全空列表，损坏文件返回安全空列表并保留错误；添加、删除和收藏修改在跨进程锁内完成，使用规范化目录 identity，重复目录幂等成功；删除不存在的目录也幂等成功。App 的 `ListProjects`、`ChooseProjectDir`、`AddProject`、`OpenFolder`、`ListProjectFavorites`、`SetProjectFavorite`、`DeleteProject` 分别负责读取、打开原生目录选择器、校验并保存目录、校验目录并启动 Windows 文件资源管理器、读取/更新收藏、移除配置。收藏使用目录规范化值持久化，新收藏置顶，取消收藏幂等；选择取消不保存；打开文件夹只接受存在的目录；删除只移除配置、不删除真实目录、历史会话或终端，并清理对应收藏。
 
-前端启动时先加载项目目录，再按规范化完整路径把它们合并到会话列表；因此没有会话的目录仍以空分组可见，已保存但后来不存在的目录也保持可见。顶部只显示「项目」和加号，选择成功后空目录分组立即出现，目录分组的 `+` 直接复用 `StartNew(dir)`，右键目录分组通过 `OpenFolder` 打开资源管理器，失败时显示状态提示。应用重启后目录从 `projects.json` 恢复，而会话恢复使用会话记录自身的 `dir`，不从项目目录列表推导。前端不提供删除按钮；`DeleteProject` 仅作为后端/绑定兼容能力保留。
+前端启动时先加载项目目录和收藏，再按规范化完整路径把它们合并到会话列表；因此没有会话的目录仍以空分组可见，已保存但后来不存在的目录也保持可见。顶部只显示「项目」和加号，选择成功后空目录分组立即出现，收藏目录分组排在普通目录之前且保持收藏顺序，文件夹图标使用高亮色。项目目录和会话自动生成的目录右键都提供添加/取消收藏和打开文件夹；目录分组的 `+` 直接复用 `StartNew(dir)`，打开文件夹失败时显示状态提示。应用重启后目录和收藏从 `projects.json` 恢复，而会话恢复使用会话记录自身的 `dir`，不从项目目录列表推导。前端不提供删除按钮；`DeleteProject` 仅作为后端/绑定兼容能力保留。
 
 ### Update 状态机
 
@@ -131,7 +131,7 @@ go test ./internal/state ./internal/app
 git diff --check
 ```
 
-这些测试覆盖项目保存/重启读取、缺失或损坏配置、规范化重复目录、单行项目入口、空目录分组、选择取消与添加、目录分组加号、失效目录新建失败，以及 Wails wrapper 方法集合和参数转发。Go/App 测试另外覆盖兼容性 `DeleteProject` 只移除配置、不触碰真实目录和已有会话的边界；前端不提供删除确认或删除按钮。
+这些测试覆盖项目和收藏保存/重启读取、收藏置顶、缺失或损坏配置、规范化重复目录、单行项目入口、空目录分组、选择取消与添加、目录分组加号、项目及会话自动生成目录的右键收藏、失效目录新建失败，以及 Wails wrapper 方法集合和参数转发。Go/App 测试另外覆盖兼容性 `DeleteProject` 只移除配置、不触碰真实目录和已有会话的边界；前端不提供删除确认或删除按钮。
 
 ## 扩展流程
 

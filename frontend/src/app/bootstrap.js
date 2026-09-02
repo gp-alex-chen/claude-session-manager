@@ -163,6 +163,8 @@ export function createApplication(deps) {
       OpenFolder: backend.OpenFolder,
       GetOpenSessions: backend.GetOpenSessions,
       ListProjects: backend.ListProjects,
+      ListProjectFavorites: backend.ListProjectFavorites,
+      SetProjectFavorite: backend.SetProjectFavorite,
       ChooseProjectDir: backend.ChooseProjectDir,
       AddProject: backend.AddProject,
     },

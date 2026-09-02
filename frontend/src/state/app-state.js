@@ -38,5 +38,6 @@ export function createAppState() {
     usageByProject: new Map(),
     usageByToken: new Map(),
     projects: [],
+    projectFavorites: [],
   };
 }
