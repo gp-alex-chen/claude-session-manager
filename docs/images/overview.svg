@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 820" role="img" aria-labelledby="title desc">
+  <title id="title">Claude 会话管理器日间 UI 示意图</title>
+  <desc id="desc">日间模式侧栏展示项目目录与收藏会话，右侧展示上下双屏的 Claude 暖黑终端和可拖动分隔线。</desc>
+  <defs>
+    <clipPath id="app-clip">
+      <rect x="18" y="18" width="1404" height="784" rx="12"/>
+    </clipPath>
+    <filter id="app-shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#5c5146" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="1440" height="820" fill="#f4f2ee"/>
+  <rect x="18" y="18" width="1404" height="784" rx="12" fill="#fbfaf7" filter="url(#app-shadow)"/>
+  <g clip-path="url(#app-clip)" font-family="-apple-system, Segoe UI, Microsoft YaHei, sans-serif">
+    <!-- 日间模式侧栏：暖白面板、灰色文字和陶土橙强调色 -->
+    <rect x="18" y="18" width="316" height="784" fill="#fbfaf7"/>
+    <rect x="333" y="18" width="1" height="784" fill="#dedbd4"/>
+    <rect x="18" y="18" width="316" height="50" fill="#fbfaf7"/>
+    <line x1="18" y1="68" x2="334" y2="68" stroke="#dedbd4"/>
+    <circle cx="35" cy="43" r="5" fill="#c96a4b"/>
+    <circle cx="35" cy="43" r="2" fill="#f8e5de"/>
+    <text x="49" y="48" fill="#2b2926" font-size="13" font-weight="600">Claude 会话管理</text>
+    <rect x="251" y="31" width="59" height="25" rx="7" fill="#f0efea" stroke="#dedbd4"/>
+    <text x="280" y="47" text-anchor="middle" fill="#3d7a4f" font-size="11">归档(2)</text>
+
+    <!-- 项目区域 -->
+    <rect x="18" y="69" width="316" height="49" fill="#fbfaf7"/>
+    <text x="31" y="91" fill="#5f5c56" font-size="11" font-weight="600" letter-spacing=".8">项目</text>
+    <rect x="290" y="80" width="27" height="23" rx="6" fill="#fbfaf7" stroke="#dedbd4"/>
+    <text x="303.5" y="97" text-anchor="middle" fill="#8a867e" font-size="17">+</text>
+    <line x1="18" y1="118" x2="334" y2="118" stroke="#dedbd4"/>
+
+    <!-- 收藏项目组 -->
+    <rect x="28" y="129" width="296" height="35" rx="7" fill="#f4e1db"/>
+    <g transform="translate(40 138)" fill="none" stroke="#c96a4b" stroke-width="1.5" stroke-linejoin="round">
+      <path d="M1 3.5h5l1.8 2H15v9H1z" fill="#f4e1db"/>
+      <path d="M1 5.5h14"/>
+    </g>
+    <text x="64" y="151" fill="#2b2926" font-size="12" font-weight="600">demo-app</text>
+    <text x="244" y="151" fill="#8a867e" font-size="10">12.4k</text>
+    <text x="303" y="151" text-anchor="middle" fill="#c96a4b" font-size="16">+</text>
+
+    <rect x="28" y="166" width="296" height="49" rx="7" fill="#f4f2ee"/>
+    <circle cx="47" cy="184" r="4" fill="#2e8b4e"/>
+    <text x="61" y="188" fill="#2b2926" font-size="13">重构 API</text>
+    <text x="61" y="204" fill="#8a867e" font-size="10">运行中 · demo-app</text>
+    <text x="302" y="189" text-anchor="middle" fill="#c96a4b" font-size="12">×</text>
+
+    <rect x="28" y="219" width="296" height="49" rx="7" fill="#fbfaf7"/>
+    <circle cx="47" cy="237" r="4" fill="#2e8b4e"/>
+    <text x="61" y="241" fill="#2b2926" font-size="13">编写测试</text>
+    <text x="61" y="257" fill="#8a867e" font-size="10">运行中 · demo-app</text>
+    <text x="302" y="242" text-anchor="middle" fill="#8a867e" font-size="12">×</text>
+
+    <!-- 其他目录组 -->
+    <g transform="translate(40 288)" fill="none" stroke="#8a867e" stroke-width="1.5" stroke-linejoin="round">
+      <path d="M1 3.5h5l1.8 2H15v9H1z" fill="#fbfaf7"/>
+      <path d="M1 5.5h14"/>
+    </g>
+    <text x="64" y="301" fill="#5f5c56" font-size="12" font-weight="600">docs-site</text>
+    <text x="244" y="301" fill="#8a867e" font-size="10">3.1k</text>
+    <text x="303" y="301" text-anchor="middle" fill="#8a867e" font-size="16">+</text>
+    <line x1="28" y1="319" x2="324" y2="319" stroke="#ebe9e4"/>
+    <g transform="translate(40 335)" fill="none" stroke="#8a867e" stroke-width="1.5" stroke-linejoin="round">
+      <path d="M1 3.5h5l1.8 2H15v9H1z" fill="#fbfaf7"/>
+      <path d="M1 5.5h14"/>
+    </g>
+    <text x="64" y="348" fill="#5f5c56" font-size="12" font-weight="600">sandbox</text>
+    <text x="244" y="348" fill="#8a867e" font-size="10">空目录</text>
+    <text x="303" y="348" text-anchor="middle" fill="#8a867e" font-size="16">+</text>
+
+    <!-- 侧栏底部 -->
+    <line x1="18" y1="758" x2="334" y2="758" stroke="#dedbd4"/>
+    <rect x="28" y="771" width="75" height="24" rx="7" fill="#f0efea" stroke="#dedbd4"/>
+    <text x="65" y="787" text-anchor="middle" fill="#5f5c56" font-size="12">⚙ 设置</text>
+    <circle cx="121" cy="783" r="4" fill="#c96a4b"/>
+    <text x="132" y="787" fill="#c96a4b" font-size="11" font-weight="600">有新版本</text>
+
+    <!-- 主区域与状态栏 -->
+    <rect x="334" y="18" width="1088" height="31" fill="#ffffff"/>
+    <line x1="334" y1="49" x2="1422" y2="49" stroke="#dedbd4"/>
+    <text x="348" y="38" fill="#8a867e" font-size="12">已选择会话：2 · 点击左侧会话切换</text>
+    <rect x="1351" y="22" width="58" height="23" rx="7" fill="#f0efea" stroke="#dedbd4"/>
+    <text x="1380" y="37" text-anchor="middle" fill="#5f5c56" font-size="12">布局⌄</text>
+
+    <!-- 终端区域：对应默认 Claude 暖黑终端主题 -->
+    <rect x="334" y="49" width="1088" height="753" fill="#141412"/>
+
+    <!-- 上方终端窗格 -->
+    <rect x="334" y="49" width="1088" height="28" fill="#2b211d"/>
+    <rect x="334" y="49" width="3" height="28" fill="#c96a4b"/>
+    <line x1="334" y1="77" x2="1422" y2="77" stroke="#3a332d"/>
+    <text x="344" y="67" fill="#c96a4b" font-size="10" font-weight="600">当前</text>
+    <rect x="382" y="53" width="868" height="20" rx="5" fill="#1e1e1c" stroke="#3a332d"/>
+    <text x="392" y="67" fill="#b9b4aa" font-size="11">重构 API</text>
+    <text x="1233" y="67" text-anchor="end" fill="#9d9a94" font-size="10">用量 12.4k</text>
+    <text x="1398" y="68" text-anchor="middle" fill="#9d9a94" font-size="16">×</text>
+    <text x="354" y="107" fill="#9d9a94" font-family="Cascadia Mono, Consolas, monospace" font-size="13">C:\workspace\demo-app&gt; claude</text>
+    <text x="354" y="139" fill="#e8e6e1" font-family="Cascadia Mono, Consolas, monospace" font-size="13">检查服务层接口，并列出下一步重构计划</text>
+    <text x="354" y="171" fill="#8fb996" font-family="Cascadia Mono, Consolas, monospace" font-size="13">✓ 已完成 3 个文件的分析</text>
+    <text x="354" y="203" fill="#9d9a94" font-family="Cascadia Mono, Consolas, monospace" font-size="13">等待下一条指令…</text>
+
+    <!-- 上下分屏控制线；默认低对比度，鼠标悬停时会变为 accent -->
+    <rect x="334" y="413" width="1088" height="8" fill="#141412"/>
+    <rect x="334" y="416" width="1088" height="2" fill="#3a332d"/>
+    <rect x="842" y="414" width="72" height="6" rx="3" fill="#c96a4b" opacity=".9"/>
+
+    <!-- 下方终端窗格 -->
+    <rect x="334" y="421" width="1088" height="28" fill="#121212"/>
+    <line x1="334" y1="449" x2="1422" y2="449" stroke="#2b2926"/>
+    <rect x="350" y="425" width="868" height="20" rx="5" fill="#1e1e1c" stroke="#2b2926"/>
+    <text x="360" y="439" fill="#9d9a94" font-size="11">编写测试</text>
+    <text x="1202" y="439" text-anchor="end" fill="#9d9a94" font-size="10">用量 8.7k</text>
+    <text x="1398" y="440" text-anchor="middle" fill="#6f6c66" font-size="16">×</text>
+    <text x="354" y="479" fill="#9d9a94" font-family="Cascadia Mono, Consolas, monospace" font-size="13">C:\workspace\demo-app&gt; claude</text>
+    <text x="354" y="511" fill="#e8e6e1" font-family="Cascadia Mono, Consolas, monospace" font-size="13">为刚才的改动补充单元测试</text>
+    <text x="354" y="543" fill="#8fb996" font-family="Cascadia Mono, Consolas, monospace" font-size="13">✓ 发现 2 个待覆盖分支</text>
+    <text x="354" y="575" fill="#e8e6e1" font-family="Cascadia Mono, Consolas, monospace" font-size="13">正在生成测试用例<tspan fill="#d97757">▋</tspan></text>
+  </g>
+  <rect x="18" y="18" width="1404" height="784" rx="12" fill="none" stroke="#dedbd4"/>
+</svg>
