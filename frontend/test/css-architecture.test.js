@@ -70,6 +70,16 @@ test('controller-driven classes and states remain represented in split styles', 
 
 test('terminal styles define adjustable pane geometries and divider tracks', () => {
   const terminal = read('terminal.css');
+  const terminalPaneBlock = splitBlock(terminal, '#terminal-pane');
+  const terminalBlock = splitBlock(terminal, '#terminal');
+  assert.match(terminalPaneBlock, /min-height:\s*0/);
+  assert.match(terminalBlock, /min-height:\s*0/);
+  const terminalHostBlock = splitBlock(terminal, '\\.term-host');
+  assert.match(terminalHostBlock, /inset:\s*10px 2px 10px 10px/);
+  assert.match(terminalHostBlock, /border:\s*0/);
+  assert.match(terminal, /#terminal \.terminal-pane-body \.term-host\s*\{\s*position:\s*absolute;\s*inset:\s*10px 2px 10px 10px;/);
+  assert.match(terminal, /\.term-host \.xterm \.xterm-viewport\s*\{[\s\S]*?scrollbar-width:\s*none/);
+  assert.match(terminal, /\.term-host \.xterm \.xterm-viewport::-webkit-scrollbar\s*\{[\s\S]*?width:\s*0/);
   for (const mode of ['single', 'split-rows-2', 'split-cols-2', 'split-main-left-3', 'grid-2x2']) {
     assert.match(terminal, new RegExp(`#terminal\\[data-layout-mode="${mode}"\\]`), mode);
   }

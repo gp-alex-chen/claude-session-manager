@@ -63,6 +63,7 @@ class FakeTerm {
     this.options = { ...options };
     this.cols = 80;
     this.rows = 24;
+    this._core = { viewport: { scrollBarWidth: 15 } };
     this.writes = [];
     this.pastes = [];
     this.disposed = false;
@@ -171,6 +172,13 @@ function createFixture(options = {}) {
     flushFrame: () => frames.shift()?.(),
   };
 }
+
+test('hidden terminal scrollbar clears xterm viewport compensation', () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture);
+
+  assert.equal(session.term._core.viewport.scrollBarWidth, 0);
+});
 
 function openAndActivate(fixture, token = 'session-1') {
   fixture.controller.openTab(token, token);
@@ -333,7 +341,7 @@ test('applyFontSize updates active and hidden terminals while new terminals inhe
   assert.equal(active.fit.fitCalls, activeFits + 1);
   assert.equal(hidden.fit.fitCalls, hiddenFits);
   assert.equal(fixture.resizes.length, resizeCount);
-  assert.deepEqual(fixture.resizes.at(-1), { token: 'active', cols: 79, rows: 24 });
+  assert.deepEqual(fixture.resizes.at(-1), { token: 'active', cols: 80, rows: 24 });
 
   const future = fixture.controller.openTab('future', 'future');
   fixture.controller.makeTerminal(future);

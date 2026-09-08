@@ -42,6 +42,11 @@ export function createTerminalController(deps) {
     backend.TermWrite(session.token, bytesToB64(new TextEncoder().encode(data)));
   }
 
+  function hideNativeScrollbar(term) {
+    const viewport = term?._core?.viewport;
+    if (viewport && typeof viewport.scrollBarWidth === 'number') viewport.scrollBarWidth = 0;
+  }
+
   async function pasteIntoTerm(session) {
     try {
       const text = await clipboardReader();
@@ -113,6 +118,7 @@ export function createTerminalController(deps) {
     const fit = new FitAddonCtor();
     term.loadAddon(fit);
     term.open(session.host);
+    hideNativeScrollbar(term);
     session.term = term;
     session.fit = fit;
     if (!session.visible) term.resize(120, 32);
@@ -159,8 +165,6 @@ export function createTerminalController(deps) {
       if (!session?.term || !session.visible) return;
       session.resizeSuppressed = true;
       session.fit.fit();
-      const cols = Math.max(2, session.term.cols - 1);
-      if (cols !== session.term.cols) session.term.resize(cols, session.term.rows);
     } catch (error) {
       // A hidden or disposed host can fail measurement during a resize.
       return;
