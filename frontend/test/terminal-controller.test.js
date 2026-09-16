@@ -63,7 +63,31 @@ class FakeTerm {
     this.options = { ...options };
     this.cols = 80;
     this.rows = 24;
-    this._core = { viewport: { scrollBarWidth: 15 } };
+    this.composition = {
+      active: false,
+      text: '',
+      keydowns: [],
+      compositionEnds: 0,
+    };
+    const thisTerm = this;
+    this._core = {
+      viewport: { scrollBarWidth: 15 },
+      _compositionHelper: {
+        get isComposing() { return thisTerm.composition.active; },
+        keydown: (event) => {
+          this.composition.keydowns.push(event.keyCode);
+          if (this.composition.active && ![16, 17, 18, 229].includes(event.keyCode)) {
+            this.composition.active = false;
+            this.emitData(this.composition.text);
+          }
+          return !this.composition.active;
+        },
+        compositionend: () => {
+          this.composition.compositionEnds += 1;
+          this.emitData(this.composition.text);
+        },
+      },
+    };
     this.writes = [];
     this.pastes = [];
     this.disposed = false;
@@ -91,7 +115,11 @@ class FakeTerm {
   focus() { this.focused = true; }
   dispose() { this.disposed = true; }
   emitData(data) { this.dataHandler(data); }
-  emitKey(event) { return this.keyHandler(event); }
+  emitKey(event) {
+    const handled = this.keyHandler(event);
+    if (handled && event.type === 'keydown') this._core._compositionHelper.keydown(event);
+    return handled;
+  }
 }
 
 function createFixture(options = {}) {
@@ -426,6 +454,26 @@ test('terminal input preserves UTF-8 and shortcut semantics', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(session.term.pastes, ['粘贴内容', '粘贴内容', '粘贴内容']);
   assert.equal(new TextDecoder().decode(b64ToBytes(fixture.writes.at(-1).b64)), '\n');
+});
+
+test('Shift commits an active IME composition like Enter without duplicating it', () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture, 'session-1');
+  session.term.composition.active = true;
+  session.term.composition.text = 'pinyin';
+
+  const event = {
+    type: 'keydown', key: 'Shift', keyCode: 16,
+    ctrlKey: false, metaKey: false, shiftKey: true,
+    preventDefault() { this.prevented = true; },
+  };
+  assert.equal(session.term.emitKey(event), true);
+  assert.deepEqual(session.term.composition.keydowns, [0]);
+  assert.deepEqual(fixture.writes.map(({ b64 }) => new TextDecoder().decode(b64ToBytes(b64))), ['pinyin']);
+
+  session.term._core._compositionHelper.compositionend();
+  assert.equal(session.term.composition.compositionEnds, 0);
+  assert.deepEqual(fixture.writes.map(({ b64 }) => new TextDecoder().decode(b64ToBytes(b64))), ['pinyin']);
 });
 
 const contextEvent = () => ({

@@ -47,6 +47,48 @@ export function createTerminalController(deps) {
     if (viewport && typeof viewport.scrollBarWidth === 'number') viewport.scrollBarWidth = 0;
   }
 
+  function enableShiftImeCommit(term) {
+    // xterm treats Shift as a modifier while composing, but Sogou uses it to
+    // commit the current pinyin and switch to English. Reuse xterm's existing
+    // early-finalize path with a neutral keyCode, then leave the real Shift
+    // event untouched so the IME can perform its mode switch.
+    const helper = term?._core?._compositionHelper;
+    if (!helper || typeof helper.keydown !== 'function') return;
+
+    const originalKeydown = helper.keydown.bind(helper);
+    const originalCompositionEnd = typeof helper.compositionend === 'function'
+      ? helper.compositionend.bind(helper)
+      : null;
+    const originalCompositionStart = typeof helper.compositionstart === 'function'
+      ? helper.compositionstart.bind(helper)
+      : null;
+    let shiftCommitPending = false;
+
+    helper.keydown = (event) => {
+      const key = typeof event?.key === 'string' ? event.key.toLowerCase() : '';
+      if (event?.type === 'keydown' && key === 'shift' && helper.isComposing) {
+        shiftCommitPending = true;
+        return originalKeydown({ ...event, keyCode: 0 });
+      }
+      return originalKeydown(event);
+    };
+    if (originalCompositionEnd) {
+      helper.compositionend = () => {
+        if (shiftCommitPending) {
+          shiftCommitPending = false;
+          return;
+        }
+        originalCompositionEnd();
+      };
+    }
+    if (originalCompositionStart) {
+      helper.compositionstart = (...args) => {
+        shiftCommitPending = false;
+        return originalCompositionStart(...args);
+      };
+    }
+  }
+
   async function pasteIntoTerm(session) {
     try {
       const text = await clipboardReader();
@@ -119,6 +161,7 @@ export function createTerminalController(deps) {
     term.loadAddon(fit);
     term.open(session.host);
     hideNativeScrollbar(term);
+    enableShiftImeCommit(term);
     session.term = term;
     session.fit = fit;
     if (!session.visible) term.resize(120, 32);
