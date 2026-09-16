@@ -1,7 +1,11 @@
 package updater
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +83,37 @@ func TestPickLatestIncludePre(t *testing.T) {
 	got, ok = pickLatest(list, false)
 	if !ok || got.Tag != "v0.2-wails" {
 		t.Fatalf("!includePre: got %q ok=%v, want v0.2-wails", got.Tag, ok)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func TestCheckIncludesReleaseBodyInInfo(t *testing.T) {
+	const notes = "修复更新提示\n优化下载进度显示"
+	u := New("gp-alex-chen", "claude-session-manager", "claude-terminal.exe", "v0.1-wails")
+	u.Client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Status:        "200 OK",
+				Body:          io.NopCloser(strings.NewReader(`[{"tag_name":"v0.2-wails","body":"修复更新提示\n优化下载进度显示"}]`)),
+				Header:        make(http.Header),
+				ContentLength: -1,
+				Request:       req,
+			}, nil
+		}),
+	}
+
+	info, err := u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.HasUpdate || info.LatestNotes != notes {
+		t.Fatalf("check info did not preserve release notes: %#v", info)
 	}
 }
 

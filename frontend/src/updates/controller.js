@@ -29,8 +29,12 @@ export function createUpdateController(deps) {
   let actionButton = null;
   let versionNode = null;
   let statusNode = null;
+  let releaseNode = null;
+  let latestVersionNode = null;
+  let releaseBodyNode = null;
   let progressRegion = null;
   let progressBar = null;
+  let progressLabel = null;
   let warningNode = null;
   let dailyCheckTimer = null;
   let dailyCheckTask = null;
@@ -134,6 +138,18 @@ export function createUpdateController(deps) {
     }
     if (versionNode) versionNode.textContent = state.currentVersion;
 
+    const hasRelease = isReady && state.info;
+    if (releaseNode) {
+      releaseNode.hidden = !hasRelease;
+      releaseNode.setAttribute('aria-hidden', String(!hasRelease));
+    }
+    if (hasRelease) {
+      latestVersionNode.textContent = '最新版本 ' + formatVersion(state.info.latest);
+      releaseBodyNode.textContent = String(state.info.latestNotes || '').trim()
+        ? String(state.info.latestNotes)
+        : '此版本未提供更新说明。';
+    }
+
     const defaultStatus = state.mode === 'checking'
       ? '正在检查 GitHub 上是否有新版…'
       : state.mode === 'ready'
@@ -148,8 +164,10 @@ export function createUpdateController(deps) {
     progressRegion.hidden = !isDownloading;
     progressRegion.setAttribute('aria-hidden', String(!isDownloading));
     progressBar.setAttribute('aria-valuenow', String(state.pct));
+    progressBar.setAttribute('aria-valuetext', isDownloading ? '下载中 ' + state.pct + '%' : '');
     progressBar.style.width = state.pct + '%';
-    progressBar.textContent = isDownloading ? '下载中 ' + state.pct + '%' : '';
+    progressBar.textContent = '';
+    progressLabel.textContent = isDownloading ? '下载中 ' + state.pct + '%' : '';
   }
 
   async function check(options = {}) {
@@ -345,6 +363,15 @@ export function createUpdateController(deps) {
     versionNode = el('div', 'update-current-version');
     statusNode = el('p', 'update-status');
     statusNode.setAttribute('aria-live', 'polite');
+    releaseNode = el('section', 'update-release');
+    releaseNode.setAttribute('aria-label', '更新详情');
+    releaseNode.hidden = true;
+    latestVersionNode = el('p', 'update-latest-version');
+    const releaseTitleNode = el('h4', 'update-release-title', '更新说明');
+    releaseBodyNode = el('div', 'update-release-body');
+    releaseBodyNode.setAttribute('role', 'region');
+    releaseBodyNode.setAttribute('aria-label', '更新说明内容');
+    releaseNode.append(latestVersionNode, releaseTitleNode, releaseBodyNode);
     actionButton = el('button', 'update-action', '检查更新');
     actionButton.type = 'button';
     progressRegion = el('div', 'update-progress-region');
@@ -354,9 +381,12 @@ export function createUpdateController(deps) {
     progressBar.setAttribute('aria-valuemin', '0');
     progressBar.setAttribute('aria-valuemax', '100');
     progressRegion.appendChild(progressBar);
+    progressLabel = el('span', 'update-progress-label');
+    progressLabel.setAttribute('aria-hidden', 'true');
+    progressRegion.appendChild(progressLabel);
     warningNode = el('p', 'update-warning', '运行中的会话进程会结束，更新后应用将自动重启。');
     actionButton.addEventListener('click', onActionClick);
-    card.append(title, description, versionNode, statusNode, actionButton, progressRegion, warningNode);
+    card.append(title, description, versionNode, statusNode, releaseNode, actionButton, progressRegion, warningNode);
     panel.appendChild(card);
     render();
   }

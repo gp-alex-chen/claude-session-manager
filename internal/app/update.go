@@ -32,7 +32,7 @@ const (
 // GetVersion 返回当前版本（-ldflags -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=<tag> 注入；
 // 未注入时为 "dev"，表示手工/开发构建）。
 // CheckForUpdate 手动检查更新：查询 GitHub Releases 里最新 wails 正式版。
-// 返回 updater.Info（前端据此展示"发现新版本/已是最新"）。
+// 返回 updater.Info（前端据此展示版本、更新说明以及"发现新版本/已是最新"）。
 func (a *App) CheckForUpdate() (*updater.Info, error) {
 	u := a.updater()
 	ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)

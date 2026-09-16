@@ -194,7 +194,10 @@ test('settings layout adapts and update progress includes a track', () => {
   assert.match(menus, /@media\s*\(max-width:\s*480px\)/);
   assert.match(menus, /\.settings-nav[\s\S]*flex-direction:\s*row/);
   assert.match(menus, /\.settings-progress-region|\.update-progress-region[\s\S]*background:\s*var\(--panel-3\)/);
-  assert.match(menus, /\.update-progress-bar[\s\S]*background:\s*var\(--accent\)/);
+  assert.match(menus, /\.update-progress-region[\s\S]*position:\s*relative/);
+  assert.match(menus, /\.update-progress-bar[\s\S]*background:\s*var\(--accent-hover\)/);
+  assert.match(menus, /\.update-progress-label[\s\S]*background:\s*var\(--menu-bg\)/);
+  assert.match(menus, /\.update-progress-label[\s\S]*color:\s*var\(--text\)/);
   assert.match(menus, /\.settings-font-size-control[\s\S]*display:\s*flex/);
   assert.match(menus, /\.settings-font-size-value/);
   assert.match(menus, /\.settings-font-size-button:disabled/);

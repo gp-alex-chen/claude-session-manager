@@ -100,6 +100,10 @@ function fixture(options = {}) {
     statusNode: findClass(menu, 'update-status'),
     progressRegion: findClass(menu, 'update-progress-region'),
     progressBar: findClass(menu, 'update-progress-bar'),
+    progressLabel: findClass(menu, 'update-progress-label'),
+    releaseNode: findClass(menu, 'update-release'),
+    latestVersionNode: findClass(menu, 'update-latest-version'),
+    releaseBodyNode: findClass(menu, 'update-release-body'),
     warningNode: findClass(menu, 'update-warning'),
     noticeNode: options.noticeNode,
     statuses,
@@ -342,6 +346,19 @@ test('available update leaves checking mode and action invokes UpdateToLatest', 
   assert.equal(fixtureData.controller.getSnapshot().mode, 'idle');
 });
 
+test('available update renders the latest release notes as plain text', async () => {
+  const notes = '修复更新提示\n优化下载进度显示';
+  const fixtureData = fixture({
+    check: async () => ({ hasUpdate: true, latest: '2.0.0', current: '1.0.0', latestNotes: notes }),
+  });
+
+  await fixtureData.controller.check();
+  assert.ok(fixtureData.releaseNode);
+  assert.equal(fixtureData.releaseNode.hidden, false);
+  assert.equal(fixtureData.latestVersionNode.textContent, '最新版本 v2.0.0');
+  assert.equal(fixtureData.releaseBodyNode.textContent, notes);
+});
+
 test('ready information survives remount and remains actionable', async () => {
   let applied = 0;
   const fixtureData = fixture({
@@ -387,6 +404,11 @@ test('progress is clamped and download state renders a percentage', () => {
     assert.equal(fixtureData.actionButton.disabled, true);
     assert.equal(fixtureData.progressRegion.hidden, false);
     assert.equal(fixtureData.progressBar.getAttribute('aria-valuenow'), '0');
+    assert.ok(fixtureData.progressLabel);
+    assert.equal(fixtureData.progressBar.textContent, '');
+    assert.equal(fixtureData.progressLabel.textContent, '下载中 0%');
+    assert.equal(fixtureData.progressRegion.children.includes(fixtureData.progressLabel), true);
+    assert.equal(fixtureData.progressBar.children.includes(fixtureData.progressLabel), false);
     assert.match(fixtureData.statusNode.textContent, /下载中 0%/);
     resolveApply();
     await applying;

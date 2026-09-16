@@ -38,8 +38,9 @@ const (
 
 // Release GitHub Release 的最小字段（仅用于筛选最新 wails 版）。
 type Release struct {
-	Tag string `json:"tag_name"`
-	Pre bool   `json:"prerelease"`
+	Tag  string `json:"tag_name"`
+	Pre  bool   `json:"prerelease"`
+	Body string `json:"body"`
 }
 
 // Info 检查结果，直接序列化给前端展示/决策。
@@ -52,6 +53,8 @@ type Info struct {
 	LatestTag string `json:"latestTag"`
 	// URL 资产直链
 	URL string `json:"url"`
+	// LatestNotes 最新 Release 的更新说明（原文按纯文本展示）
+	LatestNotes string `json:"latestNotes"`
 	// HasUpdate 是否存在比本机更新的正式版
 	HasUpdate bool `json:"hasUpdate"`
 }
@@ -115,6 +118,7 @@ func (u *Updater) Check(ctx context.Context) (*Info, error) {
 	info.Latest = rel.Tag
 	info.LatestTag = rel.Tag
 	info.URL = u.downloadURL(rel.Tag)
+	info.LatestNotes = rel.Body
 	info.HasUpdate = compareToCurrent(u.Current, rel.Tag)
 	return info, nil
 }
