@@ -31,6 +31,11 @@ class FakeNode {
     children.forEach((child) => { child.parentNode = this; this.children.push(child); });
   }
   appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  replaceChildren(...children) {
+    this.children = [];
+    this.textContent = '';
+    this.append(...children);
+  }
   addEventListener(name, callback) { this.listeners.set(name, callback); }
   removeEventListener(name, callback) {
     if (!callback || this.listeners.get(name) === callback) this.listeners.delete(name);
@@ -120,6 +125,14 @@ function findClass(root, className) {
     if (found) return found;
   }
   return null;
+}
+
+function descendants(root) {
+  return (root.children || []).flatMap((child) => [child, ...descendants(child)]);
+}
+
+function nodeText(root) {
+  return String(root.textContent || '') + (root.children || []).map(nodeText).join('');
 }
 
 test('check no-update and reject states return to retryable idle', async () => {
@@ -346,7 +359,7 @@ test('available update leaves checking mode and action invokes UpdateToLatest', 
   assert.equal(fixtureData.controller.getSnapshot().mode, 'idle');
 });
 
-test('available update renders the latest release notes as plain text', async () => {
+test('available update renders the latest release notes as safe text', async () => {
   const notes = '修复更新提示\n优化下载进度显示';
   const fixtureData = fixture({
     check: async () => ({ hasUpdate: true, latest: '2.0.0', current: '1.0.0', latestNotes: notes }),
@@ -356,7 +369,26 @@ test('available update renders the latest release notes as plain text', async ()
   assert.ok(fixtureData.releaseNode);
   assert.equal(fixtureData.releaseNode.hidden, false);
   assert.equal(fixtureData.latestVersionNode.textContent, '最新版本 v2.0.0');
-  assert.equal(fixtureData.releaseBodyNode.textContent, notes);
+  assert.ok(nodeText(fixtureData.releaseBodyNode).includes('修复更新提示'));
+  assert.ok(nodeText(fixtureData.releaseBodyNode).includes('优化下载进度显示'));
+});
+
+test('release notes format headings, lists and safe links without interpreting HTML', async () => {
+  const notes = '## 更新内容\n\n- 修复 `Shift` 输入\n- [完整记录](https://github.com/example/notes)\n\n<script>alert(1)</script>\n[危险](javascript:alert(1))';
+  const fixtureData = fixture({
+    check: async () => ({ hasUpdate: true, latest: '2.0.0', current: '1.0.0', latestNotes: notes }),
+  });
+  await fixtureData.controller.check();
+  const nodes = descendants(fixtureData.releaseBodyNode);
+  assert.ok(nodes.some((node) => node.tagName === 'H5' && nodeText(node) === '更新内容'));
+  assert.equal(nodes.filter((node) => node.tagName === 'LI').length, 2);
+  assert.ok(nodes.some((node) => node.tagName === 'CODE' && node.textContent === 'Shift'));
+  const links = nodes.filter((node) => node.tagName === 'A');
+  assert.equal(links.length, 1);
+  assert.equal(links[0].getAttribute('href'), 'https://github.com/example/notes');
+  assert.equal(links[0].getAttribute('rel'), 'noopener noreferrer');
+  assert.ok(nodes.some((node) => node.textContent.includes('<script>alert(1)</script>')));
+  assert.equal(nodes.some((node) => node.tagName === 'SCRIPT'), false);
 });
 
 test('ready information survives remount and remains actionable', async () => {
@@ -409,7 +441,11 @@ test('progress is clamped and download state renders a percentage', () => {
     assert.equal(fixtureData.progressLabel.textContent, '下载中 0%');
     assert.equal(fixtureData.progressRegion.children.includes(fixtureData.progressLabel), true);
     assert.equal(fixtureData.progressBar.children.includes(fixtureData.progressLabel), false);
-    assert.match(fixtureData.statusNode.textContent, /下载中 0%/);
+    assert.equal(fixtureData.statusNode.hidden, true);
+    assert.equal(fixtureData.statusNode.textContent, '');
+    fixtureData.controller.handleState('正在替换程序');
+    assert.equal(fixtureData.statusNode.hidden, false);
+    assert.equal(fixtureData.statusNode.textContent, '正在替换程序');
     resolveApply();
     await applying;
   });

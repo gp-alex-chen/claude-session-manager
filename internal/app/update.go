@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/updater"
@@ -78,17 +79,25 @@ func (a *App) UpdateToLatest() error {
 
 	// 更新前收尾：持久化"当前打开的会话"（供新版恢复），再关闭全部 ConPTY
 	// （关闭 = claude 进程终止；闭眼前不再等待任务，符合"立即生效"的用户预期）
-	if err := a.persistOpenSessions(); err != nil {
-		a.log("更新前持久化打开会话失败: " + err.Error())
-	}
-	a.closeAllTerms()
-
-	runtime.EventsEmit(runtimeCtx, "update:state", "重启中")
-	if err := u.Apply(tmp, true); err != nil {
+	if err := a.applyDownloadedUpdate(tmp, u.Apply, func() {
+		runtime.EventsEmit(runtimeCtx, "update:state", "重启中")
+	}); err != nil {
 		runtime.EventsEmit(runtimeCtx, "update:state", "更新失败")
 		return err
 	}
 	return nil // 正常情况下不会走到：Apply 成功会启动新版并 os.Exit
+}
+
+func (a *App) applyDownloadedUpdate(downloaded string, apply func(string, bool) error, onReady func()) error {
+	if err := a.persistOpenSessions(); err != nil {
+		a.log("更新前持久化打开会话失败: " + err.Error())
+		return fmt.Errorf("无法保存打开的会话，已取消更新: %w", err)
+	}
+	a.closeAllTerms()
+	if onReady != nil {
+		onReady()
+	}
+	return apply(downloaded, true)
 }
 
 // updater 组装本项目更新器。
@@ -97,11 +106,17 @@ func (a *App) updater() *updater.Updater {
 }
 
 // cleanupUpdateArtifacts 清理更新器留下的残留文件（在主函数启动时调用）：
-//   - <exe>.old：上次自替换成功后旧版程序（新版已跑起来，旧文件不再需要）；
+//   - <exe>.old：旧版兼容残留；
+//   - <exe>.update-*.old：带随机后缀的旧版程序；
 //   - <exe>.new：上次下载被中断/失败留下的临时文件。
 func CleanupUpdateArtifacts() {
 	if self, err := os.Executable(); err == nil {
 		_ = os.Remove(self + ".old")
+		if backups, globErr := filepath.Glob(self + ".update-*.old"); globErr == nil {
+			for _, backup := range backups {
+				_ = os.Remove(backup)
+			}
+		}
 		_ = os.Remove(self + ".new")
 	}
 }

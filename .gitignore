@@ -6,6 +6,7 @@ frontend/dist/
 .codex-build/
 *.exe
 *.exe.old
+*.exe.update-*.old
 *.exe.new
 *.test
 *.exe~

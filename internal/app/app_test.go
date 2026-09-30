@@ -483,6 +483,80 @@ func TestAdoptedSessionSurvivesShutdownAndRestoresByRealID(t *testing.T) {
 	}
 }
 
+func TestUpdatePersistenceFailureKeepsRunningSession(t *testing.T) {
+	a, _, _, dir := testApp(t)
+	blocker := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("block"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.store = state.NewStore(blocker)
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func([]string) error { return nil },
+		func(string, string, int, int, []string) (terminal.Pty, error) { return newShutdownPty(), nil },
+	)
+	if err := a.terms.Start("restore-me", "cmd", dir); err != nil {
+		t.Fatal(err)
+	}
+	applied := false
+	ready := false
+	err := a.applyDownloadedUpdate("downloaded.exe", func(string, bool) error {
+		applied = true
+		return nil
+	}, func() {
+		ready = true
+	})
+	if err == nil || !a.terms.IsRunning("restore-me") || applied || ready {
+		t.Fatalf("failed persistence should preserve running session: err=%v running=%v applied=%v ready=%v", err, a.terms.IsRunning("restore-me"), applied, ready)
+	}
+	a.closeAllTerms()
+}
+
+func TestUpdateShutdownPersistStartupRestore(t *testing.T) {
+	a, store, _, dir := testApp(t)
+	a.terms = terminal.NewManagerWithStart(
+		terminal.Callbacks{},
+		func(ids []string) error { return store.SaveOpen(ids) },
+		func(string, string, int, int, []string) (terminal.Pty, error) { return newShutdownPty(), nil },
+	)
+	if err := a.terms.Start("restore-me", "cmd", dir); err != nil {
+		t.Fatal(err)
+	}
+	applied := false
+	if err := a.applyDownloadedUpdate("downloaded.exe", func(string, bool) error {
+		applied = true
+		return nil
+	}, func() {
+		if a.terms.IsRunning("restore-me") {
+			t.Fatal("restart announced before the terminal closed")
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !applied || a.terms.IsRunning("restore-me") {
+		t.Fatalf("update did not close session after persistence: applied=%v", applied)
+	}
+	a.shutdown(context.Background())
+	restored := NewAppWithStore(store)
+	started := []string{}
+	restored.startPTYFn = func(token, _, _ string) error {
+		started = append(started, token)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	restored.startup(ctx)
+	for _, id := range restored.GetOpenSessions() {
+		if _, err := restored.StartSession(id, dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restored.shutdown(context.Background())
+	if !reflect.DeepEqual(started, []string{"restore-me"}) {
+		t.Fatalf("restored sessions = %v", started)
+	}
+}
+
 func TestAdoptSessionRejectsInvalidBoundary(t *testing.T) {
 	a, _, _, _ := testApp(t)
 	for _, tt := range []struct {

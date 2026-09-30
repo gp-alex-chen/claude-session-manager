@@ -13,7 +13,7 @@ Windows 原生 Claude 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成
 - 顶部只保留一行「项目」和加号；保存的工作目录直接并入左侧会话列表，空目录也会显示，目录分组的 `+` 使用该目录创建新会话。
 - 左下角「⚙ 设置」管理日间/夜间 UI 主题、8 套终端主题和底层 Shell（cmd / pwsh）。
 - 终端支持单屏、上下/左右双屏、三分屏和四分屏；分屏控制线可拖动调整比例，清空窗格时会按布局自动收缩。
-- 设置中的「更新」只检查 GitHub Releases 的 `v*-wails` 正式版本；应用每天自动检查一次，也可手动检查、显示下载进度并自动替换重启。
+- 设置中的「更新」只检查 GitHub Releases 的 `v*-wails` 正式版本；应用每天自动检查一次，也可手动查看更新说明、显示下载进度并自动替换重启。
 - 本地状态包括 `favorites.json`、`open-sessions.json`、`settings.json` 和 `projects.json`，默认位于 exe 同目录。
 
 ## 快速使用
@@ -89,6 +89,7 @@ frontend/wailsjs/                提交到仓库的 Wails 兼容绑定 wrapper
 frontend/test/                   Node 内置测试（纯逻辑与 fake DOM）
 assets/                          源资源；syso 留在 main 包目录
 docs/maintenance.md              维护、测试与扩展手册
+docs/releases/                  按 tag 保存的中文更新说明
 ```
 
 ## 可复现开发命令
@@ -101,9 +102,10 @@ npm run build
 cd ..
 go test ./...
 go vet ./...
+New-Item -ItemType Directory -Force .codex-build | Out-Null
 go build -tags "webview2 production" `
-  -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=v0.2-wails" `
-  -o claude-terminal.exe .
+  -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=dev" `
+  -o .codex-build/claude-terminal-dev.exe .
 ```
 
 `-H windowsgui` 生成 GUI 子系统版本；调试时可去掉它。普通 Go 单元测试使用 fake、临时目录和依赖注入，不需要本机 Claude 会话。真实环境测试明确使用 integration tag：
@@ -150,14 +152,18 @@ git diff --check
 
 ## 发布与更新
 
-CI 对 `v*-wails` tag 构建 `claude-terminal.exe` 并发布 GitHub Release；`-pre`/`-rc` tag 标为预发布。手动触发可构建 artifact，但不会创建 release。应用更新只选择 `v*-wails` 正式版本，版本通过 `internal/app.Version` 注入。
+CI 对 `v*-wails` tag 构建 `claude-terminal.exe` 并发布 GitHub Release；`-pre`/`-rc` tag 标为预发布。手动触发可构建 artifact，但不会创建 release。应用更新只选择 `v*-wails` 正式版本，版本通过 `internal/app.Version` 注入。打 tag 前必须提交同名的 `docs/releases/<tag>.md` 中文说明；缺少该文件时 CI 不会发布 Release。
 
-```bash
-git tag v0.2-wails
-git push origin v0.2-wails
+```powershell
+$tag = Read-Host '输入新的正式版 tag（例如 v0.11-wails）'
+if ($tag -notmatch '^v\d+(?:\.\d+){1,2}-wails$') { throw 'tag 格式错误' }
+if (git tag --list $tag) { throw 'tag 已存在' }
+if (-not (Test-Path "docs/releases/$tag.md")) { throw '缺少中文更新说明' }
+git tag -a $tag -m $tag
+git push origin $tag
 ```
 
-更新是粗粒度 PE 头校验，不提供签名/哈希验证；应用目录必须可写。更新前会结束 ConPTY，会话清单先持久化，重启后恢复。
+更新会核对 GitHub Release 资产的 SHA256、下载大小和 PE 头，但目前没有代码签名验证；应用目录必须可写。会话清单保存成功后才会结束 ConPTY，重启后恢复。
 
 ## 已知限制
 

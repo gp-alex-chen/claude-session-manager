@@ -267,6 +267,7 @@
 .update-warning { margin: 0 0 8px; font-size: 11px; line-height: 1.45; color: var(--text-faint); }
 .update-current-version { color: var(--text); font-weight: 600; }
 .update-status { min-height: 16px; }
+.update-status[hidden] { display: none; }
 .update-release {
   margin: 0 0 10px;
   padding: 9px 10px;
@@ -294,8 +295,20 @@
   color: var(--text-dim);
   font-size: 11px;
   line-height: 1.45;
-  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
+.update-release-body p,
+.update-release-body ul,
+.update-release-body h5,
+.update-release-body h6 { margin: 0 0 6px; }
+.update-release-body > :last-child { margin-bottom: 0; }
+.update-release-heading { color: var(--text); font-size: 11px; font-weight: 600; }
+.update-release-list { padding-left: 18px; }
+.update-release-list li + li { margin-top: 3px; }
+.update-release-link { color: var(--text); text-decoration: underline; text-decoration-color: var(--accent); }
+.update-release-link:hover { color: var(--accent-hover); }
+.update-release-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.update-release-code { color: var(--text); font-family: Consolas, monospace; }
 .update-action {
   padding: 8px 14px;
   border: 1px solid var(--border-strong);

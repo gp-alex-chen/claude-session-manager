@@ -1,4 +1,5 @@
 import { formatVersion } from '../utils.js';
+import { renderReleaseNotes } from './release-notes.js';
 
 export function createUpdateController(deps) {
   const {
@@ -32,6 +33,7 @@ export function createUpdateController(deps) {
   let releaseNode = null;
   let latestVersionNode = null;
   let releaseBodyNode = null;
+  let renderedNotes = null;
   let progressRegion = null;
   let progressBar = null;
   let progressLabel = null;
@@ -145,9 +147,11 @@ export function createUpdateController(deps) {
     }
     if (hasRelease) {
       latestVersionNode.textContent = '最新版本 ' + formatVersion(state.info.latest);
-      releaseBodyNode.textContent = String(state.info.latestNotes || '').trim()
-        ? String(state.info.latestNotes)
-        : '此版本未提供更新说明。';
+      const notes = String(state.info.latestNotes || '');
+      if (renderedNotes !== notes) {
+        renderReleaseNotes(releaseBodyNode, notes, el);
+        renderedNotes = notes;
+      }
     }
 
     const defaultStatus = state.mode === 'checking'
@@ -155,9 +159,11 @@ export function createUpdateController(deps) {
       : state.mode === 'ready'
         ? '发现新版本 ' + formatVersion(state.info.latest)
         : isApplying
-          ? (isDownloading ? '下载中 ' + state.pct + '%' : (state.phase || '正在准备更新…'))
+          ? (state.phase || '正在准备更新…')
           : '点击检查 GitHub 上是否有新版（v*-wails）';
-    statusNode.textContent = state.statusText || defaultStatus;
+    statusNode.hidden = isDownloading;
+    statusNode.setAttribute('aria-hidden', String(isDownloading));
+    statusNode.textContent = isDownloading ? '' : (state.statusText || defaultStatus);
 
     warningNode.hidden = !isReady;
     warningNode.setAttribute('aria-hidden', String(!isReady));
@@ -369,6 +375,7 @@ export function createUpdateController(deps) {
     latestVersionNode = el('p', 'update-latest-version');
     const releaseTitleNode = el('h4', 'update-release-title', '更新说明');
     releaseBodyNode = el('div', 'update-release-body');
+    renderedNotes = null;
     releaseBodyNode.setAttribute('role', 'region');
     releaseBodyNode.setAttribute('aria-label', '更新说明内容');
     releaseNode.append(latestVersionNode, releaseTitleNode, releaseBodyNode);

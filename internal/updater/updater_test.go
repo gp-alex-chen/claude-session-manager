@@ -2,8 +2,12 @@ package updater
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,7 +104,7 @@ func TestCheckIncludesReleaseBodyInInfo(t *testing.T) {
 			return &http.Response{
 				StatusCode:    http.StatusOK,
 				Status:        "200 OK",
-				Body:          io.NopCloser(strings.NewReader(`[{"tag_name":"v0.2-wails","body":"修复更新提示\n优化下载进度显示"}]`)),
+				Body:          io.NopCloser(strings.NewReader(`[{"tag_name":"v0.2-wails","body":"修复更新提示\n优化下载进度显示","assets":[{"name":"claude-terminal.exe","state":"uploaded","digest":"sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}]}]`)),
 				Header:        make(http.Header),
 				ContentLength: -1,
 				Request:       req,
@@ -114,6 +118,133 @@ func TestCheckIncludesReleaseBodyInInfo(t *testing.T) {
 	}
 	if !info.HasUpdate || info.LatestNotes != notes {
 		t.Fatalf("check info did not preserve release notes: %#v", info)
+	}
+}
+
+func TestCheckCarriesPublishedAssetDigest(t *testing.T) {
+	const digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+	u := New("gp-alex-chen", "claude-session-manager", "claude-terminal.exe", "v0.1-wails")
+	u.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := `[{"tag_name":"v0.2-wails","assets":[{"name":"claude-terminal.exe","state":"uploaded","digest":"` + digest + `"}]}]`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
+	})}
+	info, err := u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SHA256 != strings.TrimPrefix(digest, "sha256:") {
+		t.Fatalf("SHA256 = %q, want published digest", info.SHA256)
+	}
+}
+
+func TestDownloadRejectsUnknownLengthBeyondLimit(t *testing.T) {
+	u := New("gp-alex-chen", "claude-session-manager", "claude-terminal.exe", "dev")
+	u.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("MZoversized")), ContentLength: -1, Header: make(http.Header), Request: req}, nil
+	})}
+	dest := filepath.Join(t.TempDir(), "update.exe")
+	err := u.downloadTo(context.Background(), &Info{URL: "https://example.test/update.exe", SHA256: strings.Repeat("0", 64)}, dest, nil, 4)
+	if err == nil || !strings.Contains(err.Error(), "过大") {
+		t.Fatalf("unknown-length response exceeded byte limit: %v", err)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("temporary download remains after limit error: %v", statErr)
+	}
+}
+
+func TestDownloadRejectsDigestMismatch(t *testing.T) {
+	u := New("gp-alex-chen", "claude-session-manager", "claude-terminal.exe", "dev")
+	u.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("MZwrong")), ContentLength: 7, Header: make(http.Header), Request: req}, nil
+	})}
+	dest := filepath.Join(t.TempDir(), "update.exe")
+	info := &Info{URL: "https://example.test/update.exe", SHA256: strings.Repeat("0", 64)}
+	completed := false
+	if err := u.DownloadTo(context.Background(), info, dest, func(percent int, _, _ int64) {
+		if percent == 100 {
+			completed = true
+		}
+	}); err == nil {
+		t.Fatal("download with mismatched published digest was accepted")
+	}
+	if completed {
+		t.Fatal("corrupt download reported 100% before verification")
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("temporary download remains after digest error: %v", statErr)
+	}
+}
+
+func TestDownloadAcceptsMatchingPublishedDigest(t *testing.T) {
+	const payload = "MZvalid"
+	u := New("gp-alex-chen", "claude-session-manager", "claude-terminal.exe", "dev")
+	u.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(payload)), ContentLength: int64(len(payload)), Header: make(http.Header), Request: req}, nil
+	})}
+	dest := filepath.Join(t.TempDir(), "update.exe")
+	digest := sha256.Sum256([]byte(payload))
+	info := &Info{URL: "https://example.test/update.exe", SHA256: fmt.Sprintf("%x", digest)}
+	if err := u.DownloadTo(context.Background(), info, dest, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil || string(got) != payload {
+		t.Fatalf("download = %q, err = %v", got, err)
+	}
+}
+
+func TestReplaceAndStartRestoresOldExecutableOnLaunchFailure(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "claude-terminal.exe")
+	downloaded := self + ".new"
+	if err := os.WriteFile(self, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(downloaded, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := replaceAndStart(self, downloaded, func(string) error { return errors.New("launch failed") })
+	if err == nil {
+		t.Fatal("expected launch failure")
+	}
+	oldBytes, err := os.ReadFile(self)
+	if err != nil || string(oldBytes) != "old" {
+		t.Fatalf("old executable was not restored: %q, %v", oldBytes, err)
+	}
+	newBytes, err := os.ReadFile(downloaded)
+	if err != nil || string(newBytes) != "new" {
+		t.Fatalf("new executable was not staged for retry: %q, %v", newBytes, err)
+	}
+}
+
+func TestReplaceAndStartUsesUniqueOldExecutableNames(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "claude-terminal.exe")
+	downloaded := self + ".new"
+	backups := []string{}
+	for _, content := range []string{"first", "second"} {
+		if err := os.WriteFile(self, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(downloaded, []byte("next"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		backup, err := replaceAndStart(self, downloaded, func(string) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(backup)
+		if err != nil || string(got) != content {
+			t.Fatalf("backup = %q, err = %v", got, err)
+		}
+		backups = append(backups, backup)
+	}
+	if backups[0] == backups[1] {
+		t.Fatalf("backup path was reused: %q", backups[0])
+	}
+	first, err := os.ReadFile(backups[0])
+	if err != nil || string(first) != "first" {
+		t.Fatalf("earlier backup was overwritten: %q, %v", first, err)
 	}
 }
 

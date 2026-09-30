@@ -90,7 +90,7 @@ JSON 格式必须保持：
 
 前端更新 controller 的模式是 `idle -> checking -> ready -> applying -> idle`。检查失败、下载失败、应用失败都解除 busy/disabled 并允许重试；ready 信息跨菜单关闭/重开保留。进度经过 clamp，`重启中` 显示 toast。后端更新前持久化打开清单并关闭 ConPTY，更新成功后新进程恢复会话。
 
-更新源只认 `v*-wails` 正式 Release；`.old`/`.new` 是 Windows 自替换的临时残留，启动时清理。更新只做非空和 MZ 头等粗校验，不做签名或哈希验证；exe 目录需要可写。
+更新源只认 `v*-wails` 正式 Release；`.old`、`.update-*.old` 和 `.new` 是 Windows 自替换的临时残留，启动时尝试清理。旧程序备份带随机后缀，避免上次备份因旧进程尚未退出而阻止下一次更新。更新核对 Release 资产 SHA256、实际下载大小和 MZ 头，但不做代码签名验证；exe 目录需要可写。更新前保存打开会话失败时不会关闭终端或替换程序。
 
 ## 构建、测试与环境
 
@@ -104,9 +104,10 @@ npm run build
 cd ..
 go test ./...
 go vet ./...
+New-Item -ItemType Directory -Force .codex-build | Out-Null
 go build -tags "webview2 production" `
   -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=dev" `
-  -o claude-terminal.exe .
+  -o .codex-build/claude-terminal-dev.exe .
 ```
 
 真实环境测试使用明确的 integration tag：
@@ -143,6 +144,6 @@ git diff --check
 
 ## 发布与限制
 
-CI 对 PR/main 只做 validate；`v*-wails` tag 或手动触发才运行 Windows 交叉构建。tag 构建上传 `claude-terminal.exe`，只有 tag 发布 GitHub Release；手动触发只保留 artifact。
+CI 对 PR/main 只做 validate；`v*-wails` tag 或手动触发才运行 Windows 交叉构建。tag 构建上传 `claude-terminal.exe`，只有 tag 发布 GitHub Release；手动触发只保留 artifact。发布前把中文说明写入 `docs/releases/<tag>.md` 并随代码提交；CI 从该文件填充 Release 正文，文件缺失或为空时发布失败。正式版说明可用标题、无序列表、粗体、行内代码和 HTTPS 链接；应用会以安全的 DOM 节点展示这些格式，其他 Markdown 会作为普通文字显示。
 
 ConPTY 会结束更新前的会话进程，但 open-sessions 清单会供新版恢复。Claude 的 `/theme auto` 可能因 conhost 背景查询误判亮色，需要在 Claude 内手动 `/theme light`。未读状态是内存态。pwsh 必须是 PowerShell 7 的 `pwsh`，不可用时回退 cmd。

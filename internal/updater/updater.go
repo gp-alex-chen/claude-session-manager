@@ -5,18 +5,20 @@
 //
 // 链路：GitHub API 查最新正式版 -> 从 Release 下载 exe -> 替换自身
 // -> 自动重启进新版（Windows 上运行中的 exe 允许改名不允许删除，
-// 因此当前程序先改名 .old，新文件落地到原名，再启动新版并退出）。
+// 因此当前程序先改名为带随机后缀的 .old，新文件落地到原名，再启动新版并退出）。
 package updater
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -38,9 +40,16 @@ const (
 
 // Release GitHub Release 的最小字段（仅用于筛选最新 wails 版）。
 type Release struct {
-	Tag  string `json:"tag_name"`
-	Pre  bool   `json:"prerelease"`
-	Body string `json:"body"`
+	Tag    string         `json:"tag_name"`
+	Pre    bool           `json:"prerelease"`
+	Body   string         `json:"body"`
+	Assets []ReleaseAsset `json:"assets"`
+}
+
+type ReleaseAsset struct {
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Digest string `json:"digest"`
 }
 
 // Info 检查结果，直接序列化给前端展示/决策。
@@ -53,7 +62,9 @@ type Info struct {
 	LatestTag string `json:"latestTag"`
 	// URL 资产直链
 	URL string `json:"url"`
-	// LatestNotes 最新 Release 的更新说明（原文按纯文本展示）
+	// SHA256 GitHub Release 资产元数据中的校验值
+	SHA256 string `json:"sha256"`
+	// LatestNotes 最新 Release 的更新说明（前端安全展示有限 Markdown）
 	LatestNotes string `json:"latestNotes"`
 	// HasUpdate 是否存在比本机更新的正式版
 	HasUpdate bool `json:"hasUpdate"`
@@ -115,9 +126,26 @@ func (u *Updater) Check(ctx context.Context) (*Info, error) {
 		// 没有任何 wails 正式版发布：视为无更新
 		return info, nil
 	}
+	var digest string
+	for _, asset := range rel.Assets {
+		if asset.Name != u.Asset || asset.State != "uploaded" {
+			continue
+		}
+		value, found := strings.CutPrefix(asset.Digest, "sha256:")
+		decoded, err := hex.DecodeString(value)
+		if !found || err != nil || len(decoded) != sha256.Size {
+			return nil, fmt.Errorf("检查更新失败：%s 的可执行文件缺少有效 SHA256 校验值", rel.Tag)
+		}
+		digest = strings.ToLower(value)
+		break
+	}
+	if digest == "" {
+		return nil, fmt.Errorf("检查更新失败：%s 缺少可下载的 %s", rel.Tag, u.Asset)
+	}
 	info.Latest = rel.Tag
 	info.LatestTag = rel.Tag
 	info.URL = u.downloadURL(rel.Tag)
+	info.SHA256 = digest
 	info.LatestNotes = rel.Body
 	info.HasUpdate = compareToCurrent(u.Current, rel.Tag)
 	return info, nil
@@ -130,8 +158,15 @@ func (u *Updater) downloadURL(tag string) string {
 
 // DownloadTo 从信息指定的 Release 直链把资产流式下载到 dest，
 // 期间通过 progress 回调回报百分比（每变化 1% 回调一次）。
-// 下载完成会做基本校验（非空 + PE 头），失败时清理 dest。
+// 下载完成会校验非空、PE 头和发布资产 SHA256，失败时清理 dest。
 func (u *Updater) DownloadTo(ctx context.Context, info *Info, dest string, progress ProgressFunc) error {
+	return u.downloadTo(ctx, info, dest, progress, maxDownload)
+}
+
+func (u *Updater) downloadTo(ctx context.Context, info *Info, dest string, progress ProgressFunc, maxBytes int64) error {
+	if info == nil || len(info.SHA256) != sha256.Size*2 {
+		return fmt.Errorf("下载更新失败：缺少发布资产的 SHA256 校验值")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.URL, nil)
 	if err != nil {
 		return err
@@ -147,7 +182,7 @@ func (u *Updater) DownloadTo(ctx context.Context, info *Info, dest string, progr
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载更新失败: HTTP %s", resp.Status)
 	}
-	if total := resp.ContentLength; total > maxDownload {
+	if total := resp.ContentLength; total > maxBytes {
 		return fmt.Errorf("更新包过大（%d 字节），已中止", total)
 	}
 
@@ -157,6 +192,7 @@ func (u *Updater) DownloadTo(ctx context.Context, info *Info, dest string, progr
 	}
 	total := resp.ContentLength
 	written := int64(0)
+	hash := sha256.New()
 	lastPct := -1
 	buf := make([]byte, 256<<10)
 	// 循环读流写盘：不用 io.Copy 是为了拿到字节数做进度
@@ -165,14 +201,23 @@ func (u *Updater) DownloadTo(ctx context.Context, info *Info, dest string, progr
 		var n int
 		n, readErr = resp.Body.Read(buf)
 		if n > 0 {
+			if written+int64(n) > maxBytes {
+				_ = f.Close()
+				_ = os.Remove(dest)
+				return fmt.Errorf("更新包过大（超过 %d 字节），已中止", maxBytes)
+			}
 			if _, werr := f.Write(buf[:n]); werr != nil {
 				_ = f.Close()
 				_ = os.Remove(dest)
 				return fmt.Errorf("写入临时文件失败: %w", werr)
 			}
 			written += int64(n)
+			_, _ = hash.Write(buf[:n])
 			if progress != nil && total > 0 {
 				pct := int(written * 100 / total)
+				if pct >= 100 {
+					pct = 99 // 校验成功后才报告完成
+				}
 				if pct != lastPct {
 					lastPct = pct
 					progress(pct, written, total)
@@ -202,6 +247,13 @@ func (u *Updater) DownloadTo(ctx context.Context, info *Info, dest string, progr
 		_ = os.Remove(dest)
 		return fmt.Errorf("下载的文件不是有效的可执行程序，已中止")
 	}
+	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), info.SHA256) {
+		_ = os.Remove(dest)
+		return fmt.Errorf("下载的文件与发布资产 SHA256 不一致，已中止")
+	}
+	if progress != nil {
+		progress(100, written, total)
+	}
 	return nil
 }
 
@@ -210,38 +262,59 @@ func (u *Updater) DownloadTo(ctx context.Context, info *Info, dest string, progr
 //
 // Windows 特征：运行中的 exe 不可删除/覆写，但允许改名，所以：
 //
-//	当前 exe -> <exe>.old
+//	当前 exe -> <exe>.update-<随机值>.old
 //	<downloaded> -> 当前 exe
 //	（可选）启动新版 + os.Exit
 //
-// 旧文件 .old 留给新版启动时自行清理（见 main.go cleanupUpdateArtifacts）。
+// 旧文件 .old 留给新版启动时自行清理（见 app.CleanupUpdateArtifacts）。
 func (u *Updater) Apply(downloaded string, relaunch bool) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("无法定位当前程序: %w", err)
 	}
-	dir := filepath.Dir(self)
-	final := filepath.Join(dir, filepath.Base(self))
-	old := final + ".old"
-
-	if err := os.Rename(self, old); err != nil {
-		return fmt.Errorf("替换失败（旧程序无法改名）: %w", err)
+	var start func(string) error
+	if relaunch {
+		start = startDetached
 	}
-	if err := os.Rename(downloaded, final); err != nil {
-		// 回滚：尽量恢复旧程序
-		_ = os.Rename(old, self)
-		return fmt.Errorf("替换失败（新程序无法落地）: %w", err)
+	if _, err := replaceAndStart(self, downloaded, start); err != nil {
+		return err
 	}
-
 	if !relaunch {
 		return nil
-	}
-	if err := startDetached(final); err != nil {
-		return fmt.Errorf("程序已更新，但自动重启失败，请手动启动 %s: %w", final, err)
 	}
 	// 当前进程使命结束：退出（Unix 上旧 .old 文件同样由新版启动时清理）
 	os.Exit(0)
 	return nil
+}
+
+func replaceAndStart(self, downloaded string, start func(string) error) (string, error) {
+	var suffix [16]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("无法准备更新备份文件名: %w", err)
+	}
+	old := self + ".update-" + hex.EncodeToString(suffix[:]) + ".old"
+	if err := os.Rename(self, old); err != nil {
+		return "", fmt.Errorf("替换失败（旧程序无法改名）: %w", err)
+	}
+	if err := os.Rename(downloaded, self); err != nil {
+		if restoreErr := os.Rename(old, self); restoreErr != nil {
+			return old, fmt.Errorf("新程序无法落地: %w；旧程序恢复失败: %v", err, restoreErr)
+		}
+		return "", fmt.Errorf("替换失败（新程序无法落地）: %w", err)
+	}
+	if start == nil {
+		return old, nil
+	}
+	if err := start(self); err != nil {
+		if stageErr := os.Rename(self, downloaded); stageErr != nil {
+			return old, fmt.Errorf("新版启动失败: %w；无法移走新程序: %v", err, stageErr)
+		}
+		if restoreErr := os.Rename(old, self); restoreErr != nil {
+			return old, fmt.Errorf("新版启动失败: %w；旧程序恢复失败: %v", err, restoreErr)
+		}
+		return "", fmt.Errorf("新版启动失败，已恢复旧程序: %w", err)
+	}
+	return old, nil
 }
 
 // startDetached 以独立进程启动新版（不继承当前控制台，避免窗口打扰）。
