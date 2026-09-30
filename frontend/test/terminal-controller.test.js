@@ -65,28 +65,38 @@ class FakeTerm {
     this.rows = 24;
     this.composition = {
       active: false,
-      text: '',
       keydowns: [],
       compositionEnds: 0,
     };
+    this.textarea = { value: '' };
     const thisTerm = this;
     this._core = {
       viewport: { scrollBarWidth: 15 },
+      _keyDownSeen: false,
       _compositionHelper: {
+        _compositionPosition: { start: 0, end: 0 },
         get isComposing() { return thisTerm.composition.active; },
         keydown: (event) => {
           this.composition.keydowns.push(event.keyCode);
           if (this.composition.active && ![16, 17, 18, 229].includes(event.keyCode)) {
             this.composition.active = false;
-            this.emitData(this.composition.text);
+            const { start, end } = this._core._compositionHelper._compositionPosition;
+            this.emitData(this.textarea.value.substring(start, end));
           }
           return !this.composition.active;
         },
         compositionend: () => {
           this.composition.compositionEnds += 1;
-          this.emitData(this.composition.text);
+          this.composition.active = false;
+          this.emitData(this.textarea.value);
         },
       },
+    };
+    this._core._keyDown = (event) => {
+      this._core._keyDownSeen = true;
+      const handled = this.keyHandler(event);
+      if (handled && event.type === 'keydown') this._core._compositionHelper.keydown(event);
+      return handled;
     };
     this.writes = [];
     this.pastes = [];
@@ -115,10 +125,10 @@ class FakeTerm {
   focus() { this.focused = true; }
   dispose() { this.disposed = true; }
   emitData(data) { this.dataHandler(data); }
-  emitKey(event) {
-    const handled = this.keyHandler(event);
-    if (handled && event.type === 'keydown') this._core._compositionHelper.keydown(event);
-    return handled;
+  emitKey(event) { return this._core._keyDown(event); }
+  emitInput(event) {
+    if (event.data && event.inputType === 'insertText'
+      && (!event.composed || !this._core._keyDownSeen)) this.emitData(event.data);
   }
 }
 
@@ -456,24 +466,64 @@ test('terminal input preserves UTF-8 and shortcut semantics', async () => {
   assert.equal(new TextDecoder().decode(b64ToBytes(fixture.writes.at(-1).b64)), '\n');
 });
 
-test('Shift commits an active IME composition like Enter without duplicating it', () => {
+test('Shift leaves xterm input fallback available for a Sogou composed commit', () => {
   const fixture = createFixture();
   const session = openAndActivate(fixture, 'session-1');
   session.term.composition.active = true;
-  session.term.composition.text = 'pinyin';
 
-  const event = {
+  session.term.emitKey({
     type: 'keydown', key: 'Shift', keyCode: 16,
     ctrlKey: false, metaKey: false, shiftKey: true,
     preventDefault() { this.prevented = true; },
-  };
-  assert.equal(session.term.emitKey(event), true);
-  assert.deepEqual(session.term.composition.keydowns, [0]);
-  assert.deepEqual(fixture.writes.map(({ b64 }) => new TextDecoder().decode(b64ToBytes(b64))), ['pinyin']);
+  });
+  assert.equal(session.term.composition.active, true);
+  assert.deepEqual(session.term.composition.keydowns, [16]);
+  assert.equal(session.term._core._keyDownSeen, false);
+  session.term.emitInput({ data: 'abcd', inputType: 'insertText', composed: true });
 
+  assert.deepEqual(fixture.writes.map(({ b64 }) => new TextDecoder().decode(b64ToBytes(b64))), ['abcd']);
+});
+
+test('legacy Shift keyCode preserves the composed input fallback', () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture, 'session-1');
+  session.term.composition.active = true;
+
+  session.term.emitKey({
+    type: 'keydown', key: 'Process', keyCode: 16,
+    ctrlKey: false, metaKey: false, shiftKey: true,
+  });
+  session.term.emitInput({ data: 'abcd', inputType: 'insertText', composed: true });
+
+  assert.deepEqual(fixture.writes.map(({ b64 }) => new TextDecoder().decode(b64ToBytes(b64))), ['abcd']);
+});
+
+test('Shift preserves an already-seen keydown while other keys still arm the input guard', () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture, 'session-1');
+  const core = session.term._core;
+
+  core._keyDownSeen = true;
+  session.term.emitKey({ type: 'keydown', key: 'Shift', keyCode: 16 });
+  assert.equal(core._keyDownSeen, true);
+
+  core._keyDownSeen = false;
+  session.term.emitKey({ type: 'keydown', key: 'a', keyCode: 65 });
+  assert.equal(core._keyDownSeen, true);
+  session.term.emitInput({ data: 'a', inputType: 'insertText', composed: true });
+  assert.deepEqual(fixture.writes, []);
+});
+
+test('native compositionend still commits text when no input event arrives', () => {
+  const fixture = createFixture();
+  const session = openAndActivate(fixture, 'session-1');
+  session.term.composition.active = true;
+  session.term.emitKey({ type: 'keydown', key: 'Shift', keyCode: 16 });
+  session.term.textarea.value = '中文';
   session.term._core._compositionHelper.compositionend();
-  assert.equal(session.term.composition.compositionEnds, 0);
-  assert.deepEqual(fixture.writes.map(({ b64 }) => new TextDecoder().decode(b64ToBytes(b64))), ['pinyin']);
+
+  assert.equal(session.term.composition.compositionEnds, 1);
+  assert.deepEqual(fixture.writes.map(({ b64 }) => new TextDecoder().decode(b64ToBytes(b64))), ['中文']);
 });
 
 const contextEvent = () => ({
