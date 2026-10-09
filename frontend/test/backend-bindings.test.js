@@ -15,7 +15,7 @@ const expected = [
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',
   'LoadPreferences', 'SetPreference',
   'ListSessionsForProviders', 'ListHiddenSessionsForProviders',
-  'GetOpenSessionRefs',
+  'GetOpenSessionRefs', 'GetAccountQuota',
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
@@ -58,6 +58,11 @@ test('usage wrapper forwards both arguments unchanged', () => {
     binding,
     /export function GetUsageSummary\(sessionID, projectDir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetUsageSummary'\]\(sessionID, projectDir\);\s*\}/,
   );
+});
+
+test('quota wrapper forwards provider and refresh intent unchanged', () => {
+  assert.match(binding,
+    /export function GetAccountQuota\(provider, force\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetAccountQuota'\]\(provider, force\);\s*\}/);
 });
 
 test('agent creation wrapper forwards provider and directory unchanged', () => {

@@ -11,6 +11,9 @@ import (
 func (a *App) newProviderRegistry(withCodex bool) *provider.Registry {
 	r := provider.NewRegistry()
 	_ = r.Register(&provider.ClaudeAdapter{History: a.sessionSnapshotDetailed, GetStatus: a.claudeAgents, GetUsage: a.claudeUsage,
+		GetQuota: func(ctx context.Context) (provider.QuotaSnapshot, error) {
+			return provider.ReadClaudeQuota(ctx, a.lookPath)
+		},
 		RenameNative: func(ctx context.Context, id, name, dir string) error {
 			err := provider.RenameClaude(ctx, a.lookPath, id, name, dir)
 			if err == nil && a.sessionCatalog != nil {

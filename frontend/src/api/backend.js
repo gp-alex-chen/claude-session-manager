@@ -4,7 +4,7 @@ export {
   GetAgents, GetOpenSessions, GetOpenSessionRefs, GetShell, ShellInstalled, SetShell, NotifyBeep,
   DebugLog, ListSessions, ListHiddenSessions, ListSessionsForProviders, ListHiddenSessionsForProviders, RenameSession, DeleteSession,
   UnhideSession, AdoptSession, StartSession, StartNew, StartNewAgent, ListAgentProviders, OpenFolder, TermWrite, TermResize, TermKill,
-  GetVersion, GetUsageSummary, CheckForUpdate, UpdateToLatest,
+  GetVersion, GetUsageSummary, GetAccountQuota, CheckForUpdate, UpdateToLatest,
   LoadPreferences, SetPreference,
   ListProjects, ListProjectFavorites, SetProjectFavorite, ChooseProjectDir, AddProject, DeleteProject,
 } from '../../wailsjs/go/app/App';

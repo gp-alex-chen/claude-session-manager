@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "npm run build:claude-helper && esbuild src/main.js --bundle --outfile=dist/main.js --minify && node -e \"require('fs').copyFileSync('src/index.html','dist/index.html')\"",
+    "build": "npm run build:claude-helper && npm run build:claude-quota && esbuild src/main.js --bundle --outfile=dist/main.js --minify && node -e \"require('fs').copyFileSync('src/index.html','dist/index.html')\"",
+    "build:claude-quota": "node scripts/build-claude-quota.js",
     "build:claude-helper": "node scripts/build-claude-helper.js",
     "watch": "esbuild src/main.js --bundle --outfile=dist/main.js --sourcemap --watch",
     "test": "node --test test/*.test.js"

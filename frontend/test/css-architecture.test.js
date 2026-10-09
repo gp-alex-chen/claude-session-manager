@@ -15,7 +15,7 @@ const splitBlock = (source, selector) => {
 test('style entry imports tokens first, base second, and terminal last', () => {
   const entry = read('style.css');
   const imports = [...entry.matchAll(/@import\s+['"]([^'"]+)['"]/g)].map((match) => match[1]);
-  assert.deepEqual(imports, ['./themes.css', './base.css', './sidebar.css', './menus.css', './terminal.css']);
+  assert.deepEqual(imports, ['./themes.css', './base.css', './sidebar.css', './menus.css', './quota.css', './terminal.css']);
   for (const imported of imports) assert.equal(fs.existsSync(path.join(stylesDir, imported)), true);
   assert.equal(entry.replace(/@import\s+['"][^'"]+['"]\s*;/g, '').replace(/\/\*[\s\S]*?\*\//g, '').trim(), '');
   for (const file of fs.readdirSync(stylesDir).filter((name) => name !== 'style.css')) {

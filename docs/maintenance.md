@@ -31,6 +31,16 @@ main.go
 
 搜索和「已打开」是 session controller 内的临时导航状态，只筛选缓存的历史与临时行，不额外请求历史、不改写 provider 基线，也不减少 pane controller 的运行会话选项。搜索匹配会话名/项目目录，结果强制展开但不改写用户的折叠集合；未匹配的历史仍保留身份和名称，用于恢复与状态通知。归档仍使用原有 hidden 语义，独立 dialog 具有背景 inert、焦点循环、Escape/遮罩关闭和来源按钮焦点恢复，搜索不改变来源筛选后的归档总数。
 
+账户额度是独立可选的 `QuotaProvider.AccountQuota(ctx)` 能力，由 `GetAccountQuota(provider, force)` 暴露；不能混入会话/项目的 `UsageProvider` Token 统计。Go 缓存按 provider 合并并发查询，Claude/Codex 的自动刷新与缓存间隔统一为 15 分钟，失败后的自动重试也是 15 分钟；手动刷新最小间隔仍为 30 秒，前端计时器在当前 Agent 查询完成后重新计时；失败最多保留 1 小时的旧数据并标记 `stale/readAt`，确认非订阅登录或已退出登录时清除旧窗口。缓存只在内存中。前端 `quota/controller.js` 以存活的 `state.activeToken` 对应 terminal.provider 为准，跟随聚焦窗格，临时 Codex token 同样适用；无活动窗格时隐藏圆环并停掉轮询，迟到响应只能填充对应 provider 的缓存。
+
+Codex 额度查询使用短生命周期原生 app-server，仅发送 initialize、account/read（不主动刷新令牌）和 account/rateLimits/read；优先多 bucket 响应中的 codex 窗口，缺失时兼容 legacy，额外 bucket 保留 scope 并只出现在详情中。按照 `windowDurationMins` 识别 300/10080 分钟，不猜 primary/secondary 的时长。Claude 使用独立内嵌 SDK quota helper 和用户安装的原生 CLI，只发送 get_usage control，异步输入不 yield 任何用户消息；禁用持久化、项目 settings、用户/项目 hooks 和 MCP，不使用会跳过订阅 OAuth 的 `--bare`，不直接读取认证文件。SDK 固定 0.3.293，实验性接口/响应不兼容时返回不可用，无 slash prompt 或私有 HTTP fallback；helper 源码在 `frontend/src/native/claude-quota*.js`，构建脚本同步生成 `claude_quota_helper.cjs` 及 `docs/claude-quota-third-party-notices.txt`。
+
+额度 helper 有内部 15 秒 watchdog、Go 20 秒外层截止、SDK graceful cleanup，并在 Windows Job Object 下运行。启动 gate 在分配 Job 后才放行，关闭 Job 时清理全部后代；shutdown 取消应用生命周期中的查询。`go test -tags integration ./internal/provider -run TestQuotaHelperWindowsProcessLifecycleIntegration -v` 使用真实 Node/SDK 和假 CLI 验证成功、取消及强制杀 helper 时无孤儿进程，不访问真实用户账户。
+
+Claude `settings.disableAllHooks` 禁止用户/项目/插件 hooks 和 status line，但管理员托管策略中的 hooks 仍受 CLI 自身规则约束。设置 `CLAUDE_QUOTA_NATIVE_INTEGRATION=1` 后运行 `TestClaudeNativeQuotaControlIntegration`，可用已安装 CLI、临时 HOME/config、假 API key 和 loopback HTTP 验证原生控制接口不会调用模型；此测试不验证真实订阅账户的返回值。
+
+`QuotaSnapshot.authMode` 显式标识已确认的 API/订阅模式。Codex 只在 account.type 为 apiKey 时确认 API；Claude 使用 SDK 初始化的 accountInfo 元数据确认已知 API key 来源或云 API backend，未知来源、未登录及单独 rate_limits_available=false 不作为 API 证据。已确认 API 返回 unsupported 并保留提示；Go 对非 force 查询直接返回缓存，前端停止该 provider 的轮询，焦点切换不重复启动 helper。手动 force 查询仍遵循 30 秒最小间隔；刷新失败保留停查状态，成功识别订阅或其他登录状态后退出 API 停查。暂停状态只在内存中，重启应用会重新识别；当前短生命周期查询不监听登录变化，切换登录后需点击手动刷新。
+
 前端目录：
 
 - `app/bootstrap.js` 统一创建 controller、DOM、事件路由和生命周期。
@@ -39,8 +49,9 @@ main.go
 - `sessions/` 处理项目入口、会话列表目录分组、折叠、归档、恢复和新会话 FIFO 配对；`pairing.js` 和 `view.js` 保持纯逻辑/DOM 边界。
 - `settings/` 管理 UI theme、terminal theme、Shell 和设置菜单异步构建。
 - `updates/` 管理检查/可用/应用状态机、进度和更新菜单。
+- `quota/` 管理当前 Agent 的账户额度圆环、刷新缓存与详情提示。
 - `state/` 是共享业务 state 的唯一来源；controller 不复制 active token、pending 或各类 Map/Set。
-- `styles/` 按 tokens、base、sidebar、menus、terminal 分层；`style.css` 仅负责导入。
+- `styles/` 按 tokens、base、sidebar、menus、quota、terminal 分层；`style.css` 仅负责导入。
 - `frontend/wailsjs/` 是提交到仓库的 Wails-compatible wrapper，`frontend/src/api/backend.js` 是前端唯一绑定边界。
 
 事件路径：

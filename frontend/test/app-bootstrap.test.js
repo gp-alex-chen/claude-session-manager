@@ -11,7 +11,7 @@ const REQUIRED_IDS = [
   'settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update',
   'settings-version',
   'app', 'sidebar', 'sidebar-divider', 'workspace-toolbar', 'workspace-project',
-  'workspace-directory', 'workspace-summary', 'btn-sidebar-toggle',
+  'workspace-directory', 'workspace-summary', 'btn-sidebar-toggle', 'account-quota',
   'session-search', 'btn-opened-only', 'archive-overlay', 'archive-dialog', 'archive-search', 'btn-close-archive',
 ];
 
@@ -180,7 +180,8 @@ function makeFixture(options = {}) {
       });
     },
   };
-  const backend = new Proxy({}, { get: (_, key) => key === 'LoadPreferences' ? (options.LoadPreferences || (async () => ({}))) : () => {} });
+  const backend = new Proxy({}, { get: (_, key) => key === 'LoadPreferences' ? (options.LoadPreferences || (async () => ({})))
+    : key === 'GetAccountQuota' ? options.GetAccountQuota || (() => {}) : () => {} });
   const app = createApplication({
     documentRef,
     windowRef,
@@ -387,4 +388,27 @@ test('a stopped startup cannot initialize controllers after a later restart', as
   assert.equal(fixture.calls.starts.settings, 1);
   assert.equal(fixture.calls.initializes.settings, 1);
   assert.equal(fixture.calls.initializes.session, 1);
+});
+
+test('bootstrap quota follows actual terminal activation and clears on an empty focused pane', async () => {
+  const queries = [];
+  const f = makeFixture({ GetAccountQuota: async (provider) => {
+    queries.push(provider); return { provider, status: 'available', windows: [] };
+  } });
+  await f.app.start();
+  f.app.state.terminals.set('new-codex-1', { provider: 'codex' });
+  f.app.state.terminals.set('claude-1', { provider: 'claude' });
+  f.app.state.activeToken = 'new-codex-1';
+  f.calls.factories.terminal.onActivate('new-codex-1');
+  await Promise.resolve();
+  assert.equal(f.elements.get('account-quota').children[0].children[0].textContent, 'Codex');
+  f.app.state.activeToken = 'claude-1';
+  f.calls.factories.terminal.onActivate('claude-1');
+  await Promise.resolve();
+  assert.deepEqual(queries, ['codex', 'claude']);
+  assert.equal(f.elements.get('account-quota').children[0].children[0].textContent, 'Claude');
+  f.app.state.activeToken = null;
+  f.calls.factories.terminal.onActivate(null);
+  assert.equal(f.elements.get('account-quota').hidden, true);
+  f.app.stop();
 });

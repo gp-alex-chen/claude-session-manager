@@ -29,6 +29,7 @@ export function GetVersion() { return window['go']['app']['App']['GetVersion']()
 export function LoadPreferences() { return window['go']['app']['App']['LoadPreferences'](); }
 export function SetPreference(key, value) { return window['go']['app']['App']['SetPreference'](key, value); }
 export function GetUsageSummary(sessionID, projectDir) { return window['go']['app']['App']['GetUsageSummary'](sessionID, projectDir); }
+export function GetAccountQuota(provider, force) { return window['go']['app']['App']['GetAccountQuota'](provider, force); }
 export function CheckForUpdate() { return window['go']['app']['App']['CheckForUpdate'](); }
 export function UpdateToLatest() { return window['go']['app']['App']['UpdateToLatest'](); }
 export function ListProjects() { return window['go']['app']['App']['ListProjects'](); }

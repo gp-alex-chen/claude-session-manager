@@ -86,6 +86,7 @@ type Descriptor struct {
 	HasHistory           bool   `json:"hasHistory"`
 	HasStatus            bool   `json:"hasStatus"`
 	HasUsage             bool   `json:"hasUsage"`
+	HasQuota             bool   `json:"hasQuota"`
 	HasRename            bool   `json:"hasRename"`
 	NewSessionRestorable bool   `json:"newSessionRestorable"`
 }
@@ -218,6 +219,7 @@ func (r *Registry) Descriptors() []Descriptor {
 		_, d.HasHistory = p.(HistoryProvider)
 		_, d.HasStatus = p.(StatusSource)
 		_, d.HasUsage = p.(UsageProvider)
+		_, d.HasQuota = p.(QuotaProvider)
 		_, d.HasRename = p.(RenameProvider)
 		out = append(out, d)
 	}

@@ -56,6 +56,7 @@ type App struct {
 	chooseDirFn        func(context.Context, runtime.OpenDialogOptions) (string, error)
 	usageScanner       *usage.Scanner
 	providers          *provider.Registry
+	quotaCache         *provider.QuotaCache
 	sessionCatalog     *session.Catalog
 	pendingAdoptions   map[string]*pendingAdoption
 	cancelledAdoptions map[string]struct{}
@@ -86,6 +87,9 @@ func NewAppWithStore(store *state.Store) *App {
 	})
 	a.terms.SetPersistErrorHandler(func(err error) { a.log("持久化打开会话失败: " + err.Error()) })
 	a.providers = a.newProviderRegistry(true)
+	a.quotaCache = provider.NewQuotaCache(func(ctx context.Context, id provider.ID) (provider.QuotaSnapshot, error) {
+		return a.providers.AccountQuota(ctx, id)
+	})
 	return a
 }
 

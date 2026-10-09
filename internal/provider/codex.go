@@ -25,6 +25,12 @@ type CodexAdapter struct {
 func NewCodex(history CodexHistory) *CodexAdapter {
 	return &CodexAdapter{History: history, now: time.Now}
 }
+func (p *CodexAdapter) AccountQuota(ctx context.Context) (QuotaSnapshot, error) {
+	if q, ok := p.History.(QuotaProvider); ok {
+		return q.AccountQuota(ctx)
+	}
+	return QuotaSnapshot{Status: "unsupported", Message: "Codex 额度查询不可用"}, nil
+}
 func (p *CodexAdapter) Descriptor() Descriptor            { return Descriptor{ID: Codex, Name: "Codex"} }
 func (p *CodexAdapter) ValidateSessionID(id string) error { return validateRef(SessionRef{Codex, id}) }
 func (p *CodexAdapter) PrepareLaunch(_ context.Context, req OpenRequest) (LaunchSpec, error) {

@@ -11,6 +11,8 @@ import { createUsageView } from '../usage/view.js';
 import { clampProgress } from '../utils.js';
 import { createPaneController } from '../panes/controller.js';
 import { createWorkspaceController } from '../workspace/controller.js';
+import { createQuotaController } from '../quota/controller.js';
+import { createQuotaView } from '../quota/view.js';
 
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project',
@@ -21,7 +23,7 @@ const REQUIRED_IDS = [
   'settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update',
   'settings-version',
   'app', 'sidebar', 'sidebar-divider', 'workspace-toolbar', 'workspace-project',
-  'workspace-directory', 'workspace-summary', 'btn-sidebar-toggle',
+  'workspace-directory', 'workspace-summary', 'btn-sidebar-toggle', 'account-quota',
   'session-search', 'btn-opened-only', 'archive-overlay', 'archive-dialog', 'archive-search', 'btn-close-archive',
 ];
 
@@ -75,6 +77,7 @@ export function createApplication(deps) {
   let paneController;
   let usageController;
   let usageView;
+  let quotaController;
   workspaceController = createWorkspaceController({ state, nodes, storage: preferences, documentRef,
     onResize: () => paneController?.resizeVisible?.() });
   const agentController = createAgent({
@@ -111,18 +114,21 @@ export function createApplication(deps) {
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
       workspaceController.refreshContext();
+      quotaController?.sync();
     },
     onExit: (token) => {
       sessionController?.handleTerminalExit(token);
       paneController?.handleTerminalExit(token);
       sessionController?.refreshSessionVisibility?.();
       workspaceController.refreshContext();
+      quotaController?.sync();
     },
     onDispose: (token) => {
       paneController?.removeSession(token);
       usageController?.removeToken?.(token);
       sessionController?.refreshSessionVisibility?.();
       workspaceController.refreshContext();
+      quotaController?.sync();
     },
   });
   paneController = createPanes({
@@ -139,11 +145,13 @@ export function createApplication(deps) {
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
       workspaceController.refreshContext();
+      quotaController?.sync();
     },
     onChange: () => {
       usageView?.render(state);
       void usageController?.refreshVisible?.({ force: false });
       workspaceController.refreshContext();
+      quotaController?.sync();
     },
   });
   usageView = createUsageView({
@@ -166,6 +174,9 @@ export function createApplication(deps) {
     },
   });
   usageView.render(state);
+  const quotaView = createQuotaView({ root: nodes['account-quota'], documentRef,
+    onRefresh: () => quotaController?.refresh(true) });
+  quotaController = createQuotaController({ state, view: quotaView, GetAccountQuota: backend.GetAccountQuota });
   sessionController = createSession({
     state,
     backend: {
@@ -216,6 +227,7 @@ export function createApplication(deps) {
     onVisibilityChange: workspaceController.refreshContext,
     onPair: (pendingItem) => {
       usageController.refreshToken?.(pendingItem.token, { force: true });
+      quotaController.sync();
     },
   });
   const updateController = createUpdate({
@@ -262,7 +274,7 @@ export function createApplication(deps) {
   });
 
   const controllers = { agent: agentController, terminal: terminalController, panes: paneController, session: sessionController,
-    settings: settingsController, update: updateController, usage: usageController, workspace: workspaceController };
+    settings: settingsController, update: updateController, usage: usageController, workspace: workspaceController, quota: quotaController };
   const subscriptions = [];
   let resizeHandler = null;
   let started = false;
@@ -314,6 +326,7 @@ export function createApplication(deps) {
       agentController.start();
       paneController.start();
       usageController.start();
+      quotaController.start();
       sessionController.start();
       settingsController.start();
       updateController.start?.();
@@ -339,6 +352,7 @@ export function createApplication(deps) {
       else runtime.EventsOff?.(name);
     }
     settingsController.stop();
+    quotaController.stop();
     workspaceController.stop();
     updateController.stop?.();
     sessionController.stop();

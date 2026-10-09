@@ -13,6 +13,9 @@ Windows 原生 Claude / Codex 会话管理器：Go/Wails v2、xterm.js 与 ConPT
 - 顶部 Claude / Codex 图标按钮可以独立筛选历史，默认同时显示，至少保留一种来源；选择保存在固定 AppData 的 `preferences.json`。已打开的会话仍保留入口，关闭后遵循筛选；归档列表和计数跟随筛选。只使用某一种 agent 时，未选中且无打开/待恢复会话的来源不读取历史。
 - 会话左侧的产品图标同时显示打开状态：未打开为灰色，已打开的 Claude 为橙色、Codex 为蓝色；执行、等待、失败、中断、完成和未读继续使用原有状态标记与动画。
 - 本应用打开的 Codex 终端支持实时任务状态和会话 Token 用量。状态区分执行中、等待审批/输入、失败、中断与断线；只有官方成功完成事件触发完成提示。用量展示会话累计和最近请求的输入、缓存读取/写入、输出与思考 Token。
+- 工作区顶部显示当前活动会话对应 Agent 的订阅额度圆环，分屏时跟随窗格焦点切换：蓝色为 5 小时剩余额度、橙色为周剩余额度，数字显示剩余百分比；只有一个额度窗口时使用单环。点击查看窗口名称、重置时间与刷新按钮。额度属于 CLI 当前登录账户，和会话 Token 累计独立；无法读取时显示「—」，刷新失败可显示带标记的上次读数。
+- 明确确认使用 API 方式后，暂停该 Agent 的自动额度查询，保留会话 Token 统计和手动刷新入口；切换到订阅登录后，点击「刷新额度」重新识别并恢复自动刷新。临时失败、未登录或无法确认登录方式不会被当成 API 模式停查。
+- Claude/Codex 的额度自动刷新统一为每 15 分钟一次，失败后的自动重试同样按 15 分钟间隔；点击「刷新额度」可手动刷新，不受自动刷新间隔限制，保留 30 秒的接口最小查询间隔。
 - 重命名同步到 Claude/Codex 原生会话：Claude 使用内嵌官方 SDK 的离线 `renameSession`（需要 Node.js 18+），Codex 使用 app-server `thread/name/set`。归档仍使用本应用的隐藏状态，永久删除和原生归档/取消归档尚未接入。实现与依赖说明见 [原生重命名](docs/native-rename.md)。
 - 会话按工作目录分组；折叠、全局眼睛筛选、完成徽标、未读提示和完成动画保持独立。
 - 采用均衡布局：侧栏默认 280px，可拖动调整到 220–360px 或一键收起，宽度和收起状态保存在固定 AppData 设置中。会话保留名称与时间两行，项目添加和新建入口常驻显示。
@@ -69,6 +72,7 @@ Windows 原生 Claude / Codex 会话管理器：Go/Wails v2、xterm.js 与 ConPT
 - Windows 10/11 与 WebView2 Runtime。
 - Go 1.25、Node.js 22/npm。
 - Claude CLI 在 `PATH` 中；真实 agents/ConPTY 集成测试也需要它。
+- Claude 订阅额度使用官方 Agent SDK `0.3.293` 的实验性结构化额度控制接口，需要 Node.js 18+ 与兼容的原生 CLI（验证版本 `2.1.295`）。不兼容、未登录或 API key 等不提供订阅额度的登录方式会显示不可用。Codex 额度使用 app-server `account/read` / `account/rateLimits/read`，不读取认证文件或私有 HTTP 接口。
 - Codex 支持验证于 CLI `0.161.0`，依赖 `app-server`、`--remote` 和 `--remote-auth-token-env`；支持 PATH 原生 exe 与官方 npm 安装布局。Codex 终端复用用户自己的登录、模型和权限配置，应用不自动绕过审批。每个终端连接到本应用管理的独立 app-server，本地转发器只观察官方状态/用量事件，所有交互和审批仍由原生 TUI 处理。历史读取使用另一独立 stdio app-server，仅查询元数据。
 - 普通构建不要求安装 Wails CLI：仓库提交了 `frontend/wailsjs` 的兼容 wrapper，后端可直接用 `go build`。
 

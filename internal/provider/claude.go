@@ -16,6 +16,14 @@ type ClaudeAdapter struct {
 	GetStatus    func(context.Context) []agent.AgentInfo
 	GetUsage     func(string, string) usage.Summary
 	RenameNative func(context.Context, string, string, string) error
+	GetQuota     func(context.Context) (QuotaSnapshot, error)
+}
+
+func (p *ClaudeAdapter) AccountQuota(ctx context.Context) (QuotaSnapshot, error) {
+	if p.GetQuota == nil {
+		return QuotaSnapshot{Status: "unsupported", Message: "Claude 额度查询不可用"}, nil
+	}
+	return p.GetQuota(ctx)
 }
 
 func (p *ClaudeAdapter) Rename(ctx context.Context, id, name string) error {
