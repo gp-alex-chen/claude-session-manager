@@ -18,6 +18,8 @@ export function createAgentController(deps) {
     documentRef = typeof document === 'undefined' ? null : document,
     refreshFoldState,
     onAgents,
+    onTaskCompleted,
+    onUnreadChange,
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
     setTimeoutFn = setTimeout,
@@ -119,6 +121,7 @@ export function createAgentController(deps) {
   }
 
   function renderUnreadMarks() {
+    onUnreadChange?.();
     if (!listRoot) return;
     for (const item of listRoot.querySelectorAll('.session-item')) {
       const id = item.dataset.id;
@@ -138,9 +141,11 @@ export function createAgentController(deps) {
     }
   }
 
-  function markEnded(id, name, wasWorking) {
+  function markEnded(id, name, wasWorking, nativeID) {
     const activeToken = state.realToNew.get(id) || id;
-    if (state.activeToken !== activeToken) state.unreadSessions.add(id);
+    const foreground = documentRef?.visibilityState !== 'hidden' && (documentRef?.hasFocus?.() ?? true);
+    if (state.activeToken !== activeToken || !foreground) state.unreadSessions.add(id);
+    if (wasWorking) onTaskCompleted?.(id, nativeID);
 
     const item = listRoot?.querySelector(`.session-item[data-id="${id}"]`);
     const badge = item?.querySelector('.badge');
@@ -183,7 +188,9 @@ export function createAgentController(deps) {
         const currentBusy = isBusy(current);
         const previousDone = previous.state === 'done';
         const disappeared = !current;
-        const ended = !previousDone && (current?.state === 'done'
+        const unsuccessful = current && (['blocked', 'failed', 'interrupted', 'unknown'].includes(current.state)
+          || current.status === 'waiting');
+        const ended = !previousDone && !unsuccessful && (current?.state === 'done'
           || (previousBusy && (!current || !currentBusy))
           || (!previousBusy && previous.kind === 'interactive' && disappeared));
         const skip = state.closedTokens.has(id);
@@ -202,7 +209,7 @@ export function createAgentController(deps) {
       completedCodexTurns.set(turnKey, current.turnId);
       if (baselineReady && !state.closedTokens.has(id)) {
         state.endedAgents.add(id);
-        markEnded(id, state.sessionNames.get(id) || id, true);
+        markEnded(id, state.sessionNames.get(id) || id, true, current.sessionId);
       }
     }
 

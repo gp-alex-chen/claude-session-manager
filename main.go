@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/app"
+	"github.com/gp-alex-chen/claude-session-manager/internal/notify"
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -35,7 +36,7 @@ func main() {
 		MinWidth:         800,
 		MinHeight:        560,
 		AssetServer:      &assetserver.Options{Assets: assets},
-		Windows:          &windows.Options{WebviewUserDataPath: webviewPath},
+		Windows:          &windows.Options{WebviewUserDataPath: webviewPath, WindowClassName: notify.WindowClassName},
 		BackgroundColour: &options.RGBA{R: 15, G: 15, B: 15, A: 255},
 		OnStartup:        a.Startup,
 		OnShutdown:       a.Shutdown,

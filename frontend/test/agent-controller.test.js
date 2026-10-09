@@ -7,6 +7,7 @@ import { createAgentController } from '../src/agents/controller.js';
 function fixture(fetch = async () => []) {
   const state = createAppState();
   const notices = [];
+  const completions = [];
   const statuses = [];
   const logs = [];
   const intervals = [];
@@ -17,6 +18,7 @@ function fixture(fetch = async () => []) {
     GetAgents: fetch,
     DebugLog: (message) => logs.push(message),
     NotifyBeep: () => { notices.push('beep'); },
+    onTaskCompleted: (...args) => completions.push(args),
     setStatus: (message, kind) => statuses.push({ message, kind }),
     listRoot: null,
     refreshFoldState: () => {},
@@ -32,7 +34,7 @@ function fixture(fetch = async () => []) {
     },
     clearTimeoutFn: () => {},
   });
-  return { state, controller, notices, statuses, logs, intervals, cleared };
+  return { state, controller, notices, completions, statuses, logs, intervals, cleared };
 }
 
 const agent = (sessionId, fields = {}) => ({ sessionId, ...fields });
@@ -54,6 +56,20 @@ test('Codex waits, failures, interruptions and disconnects never signal success'
   assert.equal(f.notices.length, 1);
   f.controller.applyAgents(snapshot('idle', { turnId: 'three', turnStatus: 'completed' }));
   assert.equal(f.notices.length, 2);
+  assert.equal(f.completions.length, 2);
+});
+
+test('Claude blocked, failed, interrupted and ordinary session exit do not increment completion counts', () => {
+  for (const state of ['blocked', 'failed', 'interrupted', 'unknown']) {
+    const f = fixture();
+    f.controller.applyAgents([agent('a', { kind: 'interactive', state: 'working', status: 'busy' })]);
+    f.controller.applyAgents([agent('a', { kind: 'interactive', state })]);
+    assert.equal(f.completions.length, 0, state);
+  }
+  const f = fixture();
+  f.controller.applyAgents([agent('a', { kind: 'interactive', status: 'idle' })]);
+  f.controller.applyAgents([]);
+  assert.equal(f.completions.length, 0);
 });
 
 test('Codex authoritative status follows temporary runtime token without adopting history', () => {
@@ -207,4 +223,14 @@ test('start is idempotent and stop clears both timers', () => {
   fixtureData.controller.stop();
   assert.equal(fixtureData.cleared.length, 2);
   assert.deepEqual(fixtureData.cleared, fixtureData.intervals);
+});
+test('late completed after a mapped runtime was closed cannot restore completion counts', () => {
+  const f = fixture();
+  const token = 'new-codex-closed', id = 'codex:closed';
+  f.state.newToReal.set(token, id); f.state.realToNew.set(id, token);
+  f.controller.applyAgents([agent(id, { provider: 'codex', runtimeToken: token, state: 'working', turnId: 'one' })]);
+  f.state.closedTokens.add(id); f.state.closedTokens.add(token);
+  f.state.newToReal.delete(token); f.state.realToNew.delete(id);
+  f.controller.applyAgents([agent(id, { provider: 'codex', runtimeToken: token, state: 'idle', turnId: 'one', turnStatus: 'completed' })]);
+  assert.equal(f.completions.length, 0);
 });

@@ -412,3 +412,22 @@ test('bootstrap quota follows actual terminal activation and clears on an empty 
   assert.equal(f.elements.get('account-quota').hidden, true);
   f.app.stop();
 });
+test('pairing acknowledges completed canonical identity only when its original runtime is currently viewed', async () => {
+  const f = makeFixture();
+  await f.app.start();
+  const completion = f.app.controllers.completion;
+  f.app.state.activeToken = 'new-claude-one';
+  f.calls.factories.agent.onTaskCompleted('claude-id');
+  assert.equal(completion.count(), 1);
+  completion.activate('new-claude-one');
+  assert.equal(completion.count(), 1);
+  f.app.state.newToReal.set('new-claude-one', 'claude-id');
+  f.app.state.realToNew.set('claude-id', 'new-claude-one');
+  f.calls.factories.session.onPair({ token: 'new-claude-one' });
+  assert.equal(completion.count(), 0);
+  f.app.state.activeToken = 'other';
+  f.calls.factories.agent.onTaskCompleted('claude-id');
+  f.calls.factories.session.onPair({ token: 'new-claude-one' });
+  assert.equal(completion.count(), 1);
+  f.app.stop();
+});

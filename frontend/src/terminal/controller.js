@@ -15,6 +15,7 @@ export function createTerminalController(deps) {
     navigatorRef = typeof navigator === 'undefined' ? null : navigator,
     storageRef = null,
     onActivate,
+    onBeforeClose,
     onExit,
     onDispose,
   } = deps;
@@ -261,6 +262,7 @@ export function createTerminalController(deps) {
   }
 
   function closeTab(token) {
+    onBeforeClose?.(token);
     state.closedTokens.add(token);
     const session = state.terminals.get(token);
     if (backend.TermKill) Promise.resolve(backend.TermKill(token)).catch(() => {});

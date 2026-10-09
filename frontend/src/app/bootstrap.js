@@ -13,6 +13,7 @@ import { createPaneController } from '../panes/controller.js';
 import { createWorkspaceController } from '../workspace/controller.js';
 import { createQuotaController } from '../quota/controller.js';
 import { createQuotaView } from '../quota/view.js';
+import { createCompletionController } from '../notifications/controller.js';
 
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project',
@@ -56,6 +57,8 @@ export function createApplication(deps) {
   const createUsage = controllerFactories.usage || createUsageController;
   const nodes = Object.fromEntries(REQUIRED_IDS.map((id) => [id, requiredElement(documentRef, id)]));
   const state = createState();
+  const completionController = createCompletionController({ state, documentRef, windowRef,
+    SetCompletionBadge: backend.SetCompletionBadge, onRead: () => agentController.renderUnreadMarks() });
   const termOptions = createTermOptionsFn();
   let workspaceController;
   const setStatus = (message, className) => {
@@ -90,6 +93,8 @@ export function createApplication(deps) {
     documentRef,
     refreshFoldState: () => sessionController?.refreshFoldState(),
     onAgents: (list) => sessionController?.handleAgentIdentities?.(list),
+    onTaskCompleted: completionController.complete,
+    onUnreadChange: completionController.sync,
   });
   const terminalController = createTerminal({
     state,
@@ -110,12 +115,14 @@ export function createApplication(deps) {
       : undefined,
     storageRef: preferences,
     onActivate: (token) => {
+      completionController.activate(token ?? state.activeToken);
       usageController?.onActivate(token ?? state.activeToken);
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
       workspaceController.refreshContext();
       quotaController?.sync();
     },
+    onBeforeClose: completionController.dismiss,
     onExit: (token) => {
       sessionController?.handleTerminalExit(token);
       paneController?.handleTerminalExit(token);
@@ -124,6 +131,7 @@ export function createApplication(deps) {
       quotaController?.sync();
     },
     onDispose: (token) => {
+      completionController.dismiss(token);
       paneController?.removeSession(token);
       usageController?.removeToken?.(token);
       sessionController?.refreshSessionVisibility?.();
@@ -141,6 +149,7 @@ export function createApplication(deps) {
     el,
     setStatus,
     onFocus: (token) => {
+      completionController.activate(token);
       usageController?.onActivate(token);
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
@@ -226,6 +235,7 @@ export function createApplication(deps) {
     onProjects: usageController.prefetchProjects,
     onVisibilityChange: workspaceController.refreshContext,
     onPair: (pendingItem) => {
+      completionController.activate(pendingItem.token);
       usageController.refreshToken?.(pendingItem.token, { force: true });
       quotaController.sync();
     },
@@ -274,7 +284,8 @@ export function createApplication(deps) {
   });
 
   const controllers = { agent: agentController, terminal: terminalController, panes: paneController, session: sessionController,
-    settings: settingsController, update: updateController, usage: usageController, workspace: workspaceController, quota: quotaController };
+    settings: settingsController, update: updateController, usage: usageController, workspace: workspaceController, quota: quotaController,
+    completion: completionController };
   const subscriptions = [];
   let resizeHandler = null;
   let started = false;
@@ -323,6 +334,7 @@ export function createApplication(deps) {
       if (!current()) return;
       workspaceController.initialize();
       workspaceController.start();
+      completionController.start();
       agentController.start();
       paneController.start();
       usageController.start();
@@ -352,6 +364,7 @@ export function createApplication(deps) {
       else runtime.EventsOff?.(name);
     }
     settingsController.stop();
+    completionController.stop();
     quotaController.stop();
     workspaceController.stop();
     updateController.stop?.();

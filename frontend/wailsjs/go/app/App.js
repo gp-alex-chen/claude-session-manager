@@ -38,3 +38,4 @@ export function SetProjectFavorite(dir, favorite) { return window['go']['app']['
 export function ChooseProjectDir() { return window['go']['app']['App']['ChooseProjectDir'](); }
 export function AddProject(dir) { return window['go']['app']['App']['AddProject'](dir); }
 export function DeleteProject(dir) { return window['go']['app']['App']['DeleteProject'](dir); }
+export function SetCompletionBadge(count, force) { return window['go']['app']['App']['SetCompletionBadge'](count, force); }

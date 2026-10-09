@@ -1,7 +1,7 @@
 // Single boundary for Wails-generated bindings. Keeping this import isolated
 // lets the rest of the UI remain usable with a mock backend in tests.
 export {
-  GetAgents, GetOpenSessions, GetOpenSessionRefs, GetShell, ShellInstalled, SetShell, NotifyBeep,
+  GetAgents, GetOpenSessions, GetOpenSessionRefs, GetShell, ShellInstalled, SetShell, NotifyBeep, SetCompletionBadge,
   DebugLog, ListSessions, ListHiddenSessions, ListSessionsForProviders, ListHiddenSessionsForProviders, RenameSession, DeleteSession,
   UnhideSession, AdoptSession, StartSession, StartNew, StartNewAgent, ListAgentProviders, OpenFolder, TermWrite, TermResize, TermKill,
   GetVersion, GetUsageSummary, GetAccountQuota, CheckForUpdate, UpdateToLatest,

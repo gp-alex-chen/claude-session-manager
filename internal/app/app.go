@@ -57,6 +57,7 @@ type App struct {
 	usageScanner       *usage.Scanner
 	providers          *provider.Registry
 	quotaCache         *provider.QuotaCache
+	completionBadge    *notify.TaskbarBadge
 	sessionCatalog     *session.Catalog
 	pendingAdoptions   map[string]*pendingAdoption
 	cancelledAdoptions map[string]struct{}
@@ -139,6 +140,11 @@ func (a *App) startup(ctx context.Context) {
 	a.lifecycleMu.Lock()
 	current := a.lifecycleID == lifecycleID && a.watcher == watcher
 	if current {
+		if a.completionBadge != nil {
+			a.completionBadge.Close()
+		}
+		a.completionBadge = notify.NewTaskbarBadge()
+		go a.completionBadge.Run(ctx)
 		a.terms.SetCallbacks(terminal.Callbacks{
 			Data: func(token, data string) { runtime.EventsEmit(ctx, "term:data", token, data) },
 			Exit: func(token string) { runtime.EventsEmit(ctx, "term:exit", token) },
@@ -164,7 +170,12 @@ func (a *App) shutdown(context.Context) {
 	a.watcher = nil
 	a.ctx = nil
 	a.cancelLifecycle = nil
+	badge := a.completionBadge
+	a.completionBadge = nil
 	a.lifecycleMu.Unlock()
+	if badge != nil {
+		badge.Close()
+	}
 	if watcher != nil {
 		watcher.Stop()
 	}
