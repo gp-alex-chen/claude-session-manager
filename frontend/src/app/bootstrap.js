@@ -13,7 +13,7 @@ import { createPaneController } from '../panes/controller.js';
 
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project',
-  'session-list', 'hidden-panel', 'hidden-count',
+  'session-list', 'hidden-panel', 'hidden-count', 'provider-filters',
   'btn-hidden', 'btn-eye', 'btn-settings', 'update-notice', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
@@ -109,6 +109,7 @@ export function createApplication(deps) {
     onDispose: (token) => {
       paneController?.removeSession(token);
       usageController?.removeToken?.(token);
+      sessionController?.refreshSessionVisibility?.();
     },
   });
   paneController = createPanes({
@@ -155,14 +156,19 @@ export function createApplication(deps) {
     backend: {
       ListSessions: backend.ListSessions,
       ListHiddenSessions: backend.ListHiddenSessions,
+      ListSessionsForProviders: backend.ListSessionsForProviders,
+      ListHiddenSessionsForProviders: backend.ListHiddenSessionsForProviders,
       RenameSession: backend.RenameSession,
       DeleteSession: backend.DeleteSession,
       UnhideSession: backend.UnhideSession,
       AdoptSession: backend.AdoptSession,
       StartSession: backend.StartSession,
       StartNew: backend.StartNew,
+      StartNewAgent: backend.StartNewAgent,
+      ListAgentProviders: backend.ListAgentProviders,
       OpenFolder: backend.OpenFolder,
       GetOpenSessions: backend.GetOpenSessions,
+      GetOpenSessionRefs: backend.GetOpenSessionRefs,
       ListProjects: backend.ListProjects,
       ListProjectFavorites: backend.ListProjectFavorites,
       SetProjectFavorite: backend.SetProjectFavorite,
@@ -173,6 +179,8 @@ export function createApplication(deps) {
     paneController,
     agentController,
     listRoot: nodes['session-list'],
+    filterRoot: nodes['provider-filters'],
+    storageRef: preferences,
     addProjectButton: nodes['btn-add-project'],
     hiddenPanel: nodes['hidden-panel'],
     hiddenCount: nodes['hidden-count'],

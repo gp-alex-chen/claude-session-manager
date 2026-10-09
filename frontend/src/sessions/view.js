@@ -1,5 +1,6 @@
 import { leafOf } from '../utils.js';
 import { formatProjectUsage, formatProjectUsageTitle } from '../usage/format.js';
+import { paintProviderStatusIcon, renderProviderBadge } from './provider-icons.js';
 
 export function dirIdentity(dir) {
   if (typeof dir !== 'string') return '';
@@ -47,6 +48,7 @@ export function renderSessionList({
   const groups = new Map();
   for (const session of list) {
     state.sessionNames.set(session.id, session.name);
+    state.sessionProviders?.set(session.id, session.provider || 'claude');
     const identity = dirIdentity(session.dir);
     if (!groups.has(identity)) {
       groups.set(identity, {
@@ -137,7 +139,7 @@ export function renderSessionList({
     ].join('');
     plus.addEventListener('click', (event) => {
       event.stopPropagation();
-      onStartNew(startDir);
+      return onStartNew(startDir, event);
     });
     head.addEventListener('click', () => onToggleGroup(identity, group, folder));
     head.addEventListener('contextmenu', (event) => {
@@ -188,6 +190,7 @@ function renderSessionRow({
 }) {
   const item = el('div', 'session-item');
   item.dataset.id = session.id;
+  item.dataset.provider = session.provider || 'claude';
   item.dataset.dir = dirIdentity(session.dir);
   item.title = session.dir;
   if (state.collapsedDirs.has(dirIdentity(session.dir))
@@ -198,11 +201,19 @@ function renderSessionRow({
   const nameRow = el('div', 's-name');
   const badge = el('span', 'badge idle', '●');
   badge.dataset.id = session.id;
-  badge.title = '未运行';
+  const provider = session.provider || 'claude';
+  badge.dataset.provider = provider;
+  badge.dataset.temporary = String(Boolean(session.temporary));
+  const providerName = state.agentProviders?.get(provider)?.name || provider[0].toUpperCase() + provider.slice(1);
+  badge.title = providerName + ' · 未打开' + (session.temporary ? ' · 临时终端，重启不自动恢复' : '');
+  badge.setAttribute('role', 'img');
+  badge.setAttribute('aria-label', badge.title);
+  paintProviderStatusIcon(badge, provider);
+  agentController.repaintBadge?.(badge);
   nameRow.append(badge, el('span', 's-name-text', session.name));
 
   const closeButton = el('span', 's-close', '×');
-  closeButton.title = '关闭此终端（结束进程）';
+  closeButton.title = '关闭此终端连接';
   closeButton.addEventListener('click', (event) => {
     event.stopPropagation();
     onClose(session.id);
@@ -213,6 +224,7 @@ function renderSessionRow({
   item.addEventListener('click', () => onOpen(session));
   item.addEventListener('contextmenu', (event) => {
     event.preventDefault();
+    if (session.temporary) return;
     onContextMenu(event.clientX, event.clientY, {
       type: 'session', id: session.id, dir: session.dir, name: session.name,
     });
@@ -235,7 +247,8 @@ export function renderHiddenSessions({
     const row = el('div', 'hidden-item');
     const name = el('span', 'h-name', session.name);
     name.title = session.dir;
-    row.append(name, el('span', 'h-dir', leafOf(session.dir)));
+    row.append(name, renderProviderBadge({ provider: session.provider || 'claude', el }),
+      el('span', 'h-dir', leafOf(session.dir)));
     const restore = el('button', '', '恢复');
     restore.title = '在列表中重新显示此会话';
     restore.addEventListener('click', () => onRestore(session));

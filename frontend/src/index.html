@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>Claude 会话管理</title>
+  <title>Claude + Codex 会话管理</title>
   <!-- 本文件会被复制到 dist/，故资源路径相对 dist 根 -->
   <link rel="stylesheet" href="main.css">
 </head>
@@ -10,9 +10,9 @@
   <div id="app">
     <aside id="sidebar">
       <div id="sidebar-header">
-        <div class="brand"><span class="brand-dot"></span><span>Claude 会话管理</span></div>
+        <div id="provider-filters" role="group" aria-label="会话来源筛选"></div>
         <span class="header-btns">
-          <button id="btn-hidden">归档(<span id="hidden-count">0</span>)</button>
+          <button id="btn-hidden">归档<span id="hidden-count"></span></button>
         </span>
       </div>
       <div id="hidden-panel" class="hidden-panel hidden"></div>

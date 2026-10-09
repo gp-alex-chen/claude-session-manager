@@ -23,18 +23,19 @@ type catalogEntry struct {
 // still happens at refresh time, but unchanged JSONL files reuse their parsed
 // Session value and closely-spaced callers reuse the complete snapshot.
 type Catalog struct {
-	mu            sync.Mutex
-	scanMu        sync.Mutex
-	root          string
-	cache         map[string]catalogEntry
-	snapshot      []*Session
-	snapshotAt    time.Time
-	snapshotReady bool
-	snapshotTTL   time.Duration
-	now           func() time.Time
-	parseFile     func(path, fallbackDir string) (*Session, error)
-	readDir       func(string) ([]os.DirEntry, error)
-	warnings      []string
+	mu               sync.Mutex
+	scanMu           sync.Mutex
+	root             string
+	cache            map[string]catalogEntry
+	snapshot         []*Session
+	snapshotAt       time.Time
+	snapshotReady    bool
+	snapshotTTL      time.Duration
+	now              func() time.Time
+	parseFile        func(path, fallbackDir string) (*Session, error)
+	readDir          func(string) ([]os.DirEntry, error)
+	warnings         []string
+	snapshotWarnings []string
 }
 
 func NewCatalog(root string) *Catalog {
@@ -52,9 +53,34 @@ func NewCatalog(root string) *Catalog {
 	}
 }
 
+// Invalidate discards the short snapshot TTL after a native metadata mutation.
+func (c *Catalog) Invalidate() {
+	c.scanMu.Lock()
+	defer c.scanMu.Unlock()
+	c.mu.Lock()
+	c.snapshotReady = false
+	c.mu.Unlock()
+}
+
 func (c *Catalog) Snapshot() []*Session {
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
+	return c.snapshotLocked()
+}
+
+// SnapshotWithWarnings keeps the history and its validity in one atomic read.
+// Unlike TakeWarnings, cached failures remain visible to identity preflight.
+func (c *Catalog) SnapshotWithWarnings() ([]*Session, []string) {
+	c.scanMu.Lock()
+	defer c.scanMu.Unlock()
+	snapshot := c.snapshotLocked()
+	c.mu.Lock()
+	warnings := append([]string(nil), c.snapshotWarnings...)
+	c.mu.Unlock()
+	return snapshot, warnings
+}
+
+func (c *Catalog) snapshotLocked() []*Session {
 
 	c.mu.Lock()
 	nowFn := c.now
@@ -222,6 +248,7 @@ func (c *Catalog) finishSnapshot(snapshot []*Session, cache map[string]catalogEn
 	c.snapshotAt = completedAt
 	c.snapshotReady = true
 	c.warnings = append([]string(nil), warnings...)
+	c.snapshotWarnings = append([]string(nil), warnings...)
 	out := cloneSessions(c.snapshot)
 	c.mu.Unlock()
 	return out

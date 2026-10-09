@@ -9,6 +9,7 @@ function errorMessage(error) {
 
 function sameIdentity(left, right) {
   return left.token === right.token
+    && left.provider === right.provider
     && left.sessionID === right.sessionID
     && left.projectDir === right.projectDir;
 }
@@ -51,12 +52,15 @@ export function createUsageController(deps) {
 
   function identityForToken(token) {
     const normalizedToken = token || null;
-    const realID = normalizedToken && state.newToReal.get(normalizedToken)
+    let realID = normalizedToken && state.newToReal.get(normalizedToken)
       ? state.newToReal.get(normalizedToken)
       : (normalizedToken?.startsWith('new-') ? '' : (normalizedToken || ''));
     const terminal = normalizedToken ? state.terminals.get(normalizedToken) : null;
     const projectDir = terminal?.dir || pendingDir(normalizedToken, realID);
-    return { token: normalizedToken, sessionID: realID, projectDir };
+    const provider = terminal?.provider || state.sessionProviders?.get(normalizedToken)
+      || state.sessionProviders?.get(realID) || 'claude';
+    if (provider === 'codex' && normalizedToken?.startsWith('new-codex-')) realID = normalizedToken;
+    return { token: normalizedToken, sessionID: realID, projectDir, provider };
   }
 
   function currentIdentity() {
@@ -151,6 +155,12 @@ export function createUsageController(deps) {
       inFlight.delete(token);
     }
     const entry = ensureEntry(identity);
+    const hasUsage = state.agentProviders?.get(identity.provider)?.hasUsage ?? (identity.provider === 'claude');
+    if (!hasUsage) {
+      setEntry(token, identity, { summary: null, loading: false, waiting: false, stale: false,
+        error: (state.agentProviders?.get(identity.provider)?.name || identity.provider) + ' 用量暂不支持' });
+      return Promise.resolve(null);
+    }
     const now = nowFn();
     if (
       entry.summary
@@ -210,13 +220,13 @@ export function createUsageController(deps) {
       if (!isCurrentRequest(token, identity, requestID, tokenVersion, lifecycleID)) return null;
       if (!summary || typeof summary !== 'object') throw new Error('usage summary unavailable');
       const updatedAt = nowFn();
-      acceptProjectSummary(identity.projectDir, projectVersion, summary);
+      if (identity.provider === 'claude') acceptProjectSummary(identity.projectDir, projectVersion, summary);
       setEntry(token, identity, {
         summary,
         loading: false,
         waiting: false,
         error: null,
-        stale: false,
+        stale: Boolean(summary.stale),
         updatedAt,
       });
       return summary;
@@ -251,6 +261,9 @@ export function createUsageController(deps) {
     if (!started || !Array.isArray(list)) return Promise.resolve([]);
     const representatives = new Map();
     for (const session of list) {
+      const provider = session?.provider || 'claude';
+      if (provider !== 'claude') continue;
+      if (!(state.agentProviders?.get(provider)?.hasUsage ?? (provider === 'claude'))) continue;
       if (session?.dir && session?.id && !representatives.has(session.dir)) {
         representatives.set(session.dir, session.id);
       }

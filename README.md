@@ -1,6 +1,6 @@
-# Claude 会话管理器
+# Claude + Codex 会话管理器
 
-Windows 原生 Claude 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成右侧多会话终端，左侧列表负责分组、折叠、恢复和归档；切换和关闭都在左侧会话列表完成。
+Windows 原生 Claude / Codex 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成右侧多会话终端，左侧列表负责分组、折叠、恢复和归档；切换和关闭都在左侧会话列表完成。
 
 ![界面预览](docs/images/overview.svg)
 
@@ -9,6 +9,11 @@ Windows 原生 Claude 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成
 ## 功能
 
 - 多会话 ConPTY 终端：会话后台保持运行，切换互不关闭；支持恢复、新建、重命名、归档和关闭。
+- 项目分组的 `+` 可选择新建 Claude 或 Codex，列表显示来源，两种会话可混合分屏。Codex 新建终端明确标为临时终端，重启不自动恢复；已有 Codex 历史可从列表恢复并记忆打开状态。
+- 顶部 Claude / Codex 图标按钮可以独立筛选历史，默认同时显示，至少保留一种来源；选择保存在固定 AppData 的 `preferences.json`。已打开的会话仍保留入口，关闭后遵循筛选；归档列表和计数跟随筛选。只使用某一种 agent 时，未选中且无打开/待恢复会话的来源不读取历史。
+- 会话左侧的产品图标同时显示打开状态：未打开为灰色，已打开的 Claude 为橙色、Codex 为蓝色；执行、等待、失败、中断、完成和未读继续使用原有状态标记与动画。
+- 本应用打开的 Codex 终端支持实时任务状态和会话 Token 用量。状态区分执行中、等待审批/输入、失败、中断与断线；只有官方成功完成事件触发完成提示。用量展示会话累计和最近请求的输入、缓存读取/写入、输出与思考 Token。
+- 重命名同步到 Claude/Codex 原生会话：Claude 使用内嵌官方 SDK 的离线 `renameSession`（需要 Node.js 18+），Codex 使用 app-server `thread/name/set`。归档仍使用本应用的隐藏状态，永久删除和原生归档/取消归档尚未接入。实现与依赖说明见 [原生重命名](docs/native-rename.md)。
 - 会话按工作目录分组；折叠、全局眼睛筛选、完成徽标、未读提示和完成动画保持独立。
 - 顶部只保留一行「项目」和加号；保存的工作目录直接并入左侧会话列表，空目录也会显示，目录分组的 `+` 使用该目录创建新会话。
 - 左下角「⚙ 设置」管理日间/夜间 UI 主题、8 套终端主题和底层 Shell（cmd / pwsh）。
@@ -19,8 +24,8 @@ Windows 原生 Claude 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成
 ## 快速使用
 
 1. 从 [Releases](https://github.com/gp-alex-chen/claude-session-manager/releases/latest) 下载最新的 `claude-terminal.exe`，并确保 Windows 已安装 WebView2 Runtime。
-2. 确认 `claude` CLI 已加入 `PATH`，然后双击运行 exe。
-3. 点击左侧「项目」旁的 `+` 添加工作目录；点击目录分组的 `+`，即可在该目录下新建会话。已有会话会按工作目录自动分组。
+2. 确认要使用的 `claude` / `codex` CLI 已安装、登录并加入 `PATH`，然后双击运行 exe。只安装 Claude 也可使用，选择未安装的 Codex 时会显示启动失败。
+3. 点击左侧「项目」旁的 `+` 添加工作目录；点击目录分组的 `+`，选择 Claude 或 Codex，即可在该目录下新建终端。已有会话会按工作目录自动分组。
 4. 点击终端状态栏的「布局」选择单屏、双屏、三分屏或四分屏；分屏后的控制线可以左右或上下拖动。
 5. 右键目录分组可收藏项目或直接打开文件夹；左下角「⚙ 设置」可调整外观、终端主题、Shell 和更新选项。
 
@@ -62,6 +67,7 @@ Windows 原生 Claude 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成
 - Windows 10/11 与 WebView2 Runtime。
 - Go 1.25、Node.js 22/npm。
 - Claude CLI 在 `PATH` 中；真实 agents/ConPTY 集成测试也需要它。
+- Codex 支持验证于 CLI `0.161.0`，依赖 `app-server`、`--remote` 和 `--remote-auth-token-env`；支持 PATH 原生 exe 与官方 npm 安装布局。Codex 终端复用用户自己的登录、模型和权限配置，应用不自动绕过审批。每个终端连接到本应用管理的独立 app-server，本地转发器只观察官方状态/用量事件，所有交互和审批仍由原生 TUI 处理。历史读取使用另一独立 stdio app-server，仅查询元数据。
 - 普通构建不要求安装 Wails CLI：仓库提交了 `frontend/wailsjs` 的兼容 wrapper，后端可直接用 `go build`。
 
 ## 目录
@@ -73,6 +79,7 @@ internal/terminal/              ConPTY 生命周期、输入输出、token 管�
 internal/state/                 favorites/open-sessions/settings 原子状态存储
 internal/session/               ~/.claude/projects 会话解析
 internal/agent/                 claude agents watcher 与调试日志
+internal/provider/              agent 注册、统一身份与 Claude/Codex 适配器
 internal/notify/                Windows 提示音
 internal/updater/               GitHub 更新检查、下载、自替换
 frontend/src/app/                应用 bootstrap 与统一生命周期
@@ -127,8 +134,8 @@ agent watcher（约 1~2s） -> agents:update -> 徽标/未读/完成提示
 前端每 30s GetAgents 兜底 -> 使用后端 watcher 缓存
 ```
 
-- `favorites.json` 保存会话 ID、显示别名和隐藏 ID。
-- `open-sessions.json` 保存关闭应用时仍运行的会话 ID。
+- `favorites.json` 保存会话 ID、历史显示别名和隐藏 ID；支持原生重命名的 agent 使用原生名称，历史别名不再覆盖它。
+- `open-sessions.json` 保存关闭应用时仍打开的历史会话键；旧 Claude ID 原样保留，Codex 使用 `codex:<UUID>`，传给 CLI 的仍是原始 UUID。临时新 Codex 终端不写入恢复清单。
 - `settings.json` 保存 `cmd`/`pwsh` 选择。
 - `projects.json` 保存项目工作目录数组和收藏目录数组，格式为 `{"dirs":["..."],"favorites":["..."]}`；`favorites` 可省略以兼容旧文件。项目只是用户选择并保存的目录字符串，不包含额外的项目数据。
 - 写入使用同一 Store 锁、项目文件的跨进程锁和临时文件替换；读取损坏或包含空白目录项时返回安全默认并记录诊断。
@@ -170,5 +177,9 @@ git push origin $tag
 - ConPTY/conhost 可能让 Claude 的 `/theme auto` 误判亮色背景；需要在 Claude 内手动 `/theme light`。
 - `Ctrl+V`、`Ctrl+Shift+V`、`Shift+Insert` 粘贴；`Ctrl+Enter` 发送 LF。未读状态只保存在内存中。
 - pwsh 需要 PowerShell 7 的 `pwsh` 在 PATH；不可用时后端会回退 cmd 并记录诊断。
+- Codex 新建临时终端暂不自动绑定原生历史 ID，不使用目录 FIFO 猜测身份。会话保存并出现在官方历史列表后，可以从列表恢复；请先关闭对应临时终端，避免同时打开同一个原生会话。
+- Codex 状态只覆盖本应用打开的终端。未完成协议握手或断线时显示「任务状态未知」；软件不会推测外部 Codex 进程的任务状态。
+- Codex 用量以实际收到的官方累计快照为准，不解析私有历史文件。CLI `0.161.0` 没有完整历史用量读取接口，恢复旧历史时也未观察到旧用量回放，因此缺少快照时显示暂无数据。关闭终端后仅可保留本次运行内的旧快照，并标为较旧；不把它当成完整账单。项目用量仍只统计 Claude，Codex 请求次数与缓存 5m/1h 细分显示不可用。
+- 本地转发器只监听 `127.0.0.1`、使用随机凭据并只接受一个原生 TUI 连接；凭据只进入该终端的子进程环境。关闭分屏窗格仍只清空窗格，关闭终端时关闭它专属的 app-server 和连接，软件不会停止全局共享 daemon。
 
 更多架构约定、并发边界、测试分层和扩展步骤见 [`docs/maintenance.md`](docs/maintenance.md)。

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gp-alex-chen/claude-session-manager/internal/provider"
 	"github.com/gp-alex-chen/claude-session-manager/internal/session"
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 	"github.com/gp-alex-chen/claude-session-manager/internal/terminal"
@@ -25,13 +26,28 @@ func testApp(t *testing.T) (*App, *state.Store, *[]string, string) {
 	store := state.NewStore(dir)
 	logs := []string{}
 	a := NewAppWithStore(store)
+	// Ordinary tests never start Codex or scan real agent histories.
+	a.providers = a.newProviderRegistry(false)
+	a.sessionCatalog = session.NewCatalog(t.TempDir())
 	a.debugLog = func(msg string) { logs = append(logs, msg) }
 	return a, store, &logs, dir
 }
 
 func TestSessionMutationsTrimAndUseTransactions(t *testing.T) {
 	a, store, _, _ := testApp(t)
-	if err := a.RenameSession("abc", "  Friendly name  "); err != nil {
+	id := "01900000-0000-7000-8000-000000000001"
+	p, _ := a.providers.Lookup(provider.Claude)
+	claude := p.(*provider.ClaudeAdapter)
+	claude.History = func() ([]*session.Session, error) { return []*session.Session{{ID: id, Dir: "fixture"}}, nil }
+	called := 0
+	claude.RenameNative = func(_ context.Context, gotID, name, dir string) error {
+		called++
+		if gotID != id || name != "Friendly name" || dir != "fixture" {
+			t.Fatalf("native rename: %q %q %q", gotID, name, dir)
+		}
+		return nil
+	}
+	if err := a.RenameSession(id, "  Friendly name  "); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.DeleteSession("abc"); err != nil {
@@ -41,11 +57,11 @@ func TestSessionMutationsTrimAndUseTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Aliases["abc"] != "Friendly name" || !st.HiddenSet()["abc"] {
+	if called != 1 || len(st.Aliases) != 0 || !st.HiddenSet()["abc"] {
 		t.Fatalf("state after mutations = %#v", st)
 	}
-	if err := a.RenameSession("abc", "   "); err != nil {
-		t.Fatal(err)
+	if err := a.RenameSession(id, "   "); err == nil || called != 1 {
+		t.Fatal("blank title must not mutate native state")
 	}
 	if err := a.UnhideSession("abc"); err != nil {
 		t.Fatal(err)
@@ -189,7 +205,6 @@ func TestAppReturnsSaveErrors(t *testing.T) {
 		call func(*App) error
 		file string
 	}{
-		{"rename", func(a *App) error { return a.RenameSession("id", "name") }, "favorites.json"},
 		{"delete", func(a *App) error { return a.DeleteSession("id") }, "favorites.json"},
 		{"shell", func(a *App) error { return a.SetShell("cmd") }, "settings.json"},
 	}
@@ -642,9 +657,13 @@ func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 		"CheckForUpdate", "UpdateToLatest", "RenameSession", "DeleteSession", "UnhideSession",
 		"GetOpenSessions", "GetShell", "ShellInstalled", "SetShell", "ListSessions", "ListHiddenSessions",
 		"StartSession", "StartNew", "AdoptSession", "TermWrite", "TermResize", "TermKill", "NotifyBeep", "DebugLog",
+		"StartNewAgent", "ListAgentProviders",
 		"GetAgents", "GetVersion", "GetUsageSummary",
 		"ListProjects", "ChooseProjectDir", "AddProject", "DeleteProject", "OpenFolder",
 		"ListProjectFavorites", "SetProjectFavorite",
+		"LoadPreferences", "SetPreference",
+		"ListSessionsForProviders", "ListHiddenSessionsForProviders",
+		"GetOpenSessionRefs",
 	}
 	for _, name := range want {
 		if _, ok := typ.MethodByName(name); !ok {

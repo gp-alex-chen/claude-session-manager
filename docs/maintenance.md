@@ -19,10 +19,11 @@ main.go
 
 - `internal/app`：Wails 公开方法、生命周期、业务编排和更新绑定。
 - `internal/terminal`：ConPTY 启停、读写、resize、close、token 和命令外的进程边界；不依赖 Wails runtime，通过 callbacks 发事件。
-- `internal/state`：兼容 `favorites.json`、`open-sessions.json`、`settings.json` 和 `projects.json` 的 Store。所有读写共用进程内互斥锁，项目文档的修改额外使用 `.projects.lock` 跨进程锁，更新在对应锁内完成，写入采用临时文件和原子替换。
+- `internal/state`：管理固定 LocalAppData 目录中的 `favorites.json`、`open-sessions.json`、`settings.json`、`projects.json` 和 `preferences.json`。所有读写共用进程内互斥锁；收藏、项目和界面设置的修改额外使用对应跨进程文件锁，在锁内重新读取并更新，写入采用临时文件和原子替换。
 - `internal/agent`：可启动/取消的 Watcher。后端通常约 1~2 秒拉取 `claude agents --json` 并推送 `agents:update`；前端每 30 秒调用 GetAgents 作为 watcher 缓存兜底，不是每 10 秒直接轮询。
 - `internal/session`：扫描和解析 `~/.claude/projects/**/*.jsonl`。
 - `internal/usage`：解析 Claude usage、按 message ID 去重，并缓存会话/项目 token 汇总；由 App 的 `GetUsageSummary` 暴露只读查询。
+- `internal/provider`：agent 注册中心与小接口适配层。`AgentProvider` 提供元数据和原始 ID 校验，`TerminalProvider` 准备启动方案；`HistoryProvider`、`StatusSource` 和 `UsageProvider` 按能力实现。Claude 包装原有 catalog/watcher/scanner，Codex 通过官方 app-server stdio `thread/list` 查询历史。生产注册 `CodexLive`，每个终端启动独立 stdio app-server，再启动原生 `codex --remote <loopback-url> --remote-auth-token-env <VAR>`；恢复时追加 `resume <UUID>`。
 - `internal/notify`：Windows 提示音。
 - `internal/updater`：`v*-wails` Release 检查、下载和自替换。
 
@@ -51,6 +52,20 @@ update state/progress -> update controller -> settings menu
 
 ### Terminal 并发与 token
 
+统一身份使用 `SessionRef{Provider, ID}`，`EncodeKey`/`DecodeKey` 集中处理内部键。Claude 保留旧裸 ID，Codex 内部键为 `codex:<UUID>`；列表的 `id` 是内部键，同时返回 `provider` 与 `rawId`。收藏、别名、隐藏、打开清单和前端 Map 均使用内部键，CLI 参数只使用已验证的原始 ID。其他 provider 的内部键可转义编码，但是否允许恢复由注册中心与该 provider 校验；adapter 输出的启动命令/参数必须适合公共 Shell 渲染边界，不能把内部键或未经校验的输入拼进命令。
+
+顶部来源筛选使用共享 preference key `session-provider-filter`，值是排序去重且非空的 provider ID JSON 数组。`ListSessionsForProviders` / `ListHiddenSessionsForProviders` 在 registry 调用历史 adapter 前筛选来源，并返回 `sessions`、`succeededProviders` 和 `warnings`，空选择或未知 provider 返回错误。普通历史查询合并已选、已打开和待恢复来源；Codex 临时终端无须为此查询历史。归档只查询已选来源。`GetOpenSessionRefs` 由 Go 解码 canonical key、校验注册 provider，返回结构化身份，前端不解析内部键。Claude 基线按 provider 保留，仅成功查询更新；新建 Claude 前先读取历史基线，失败则不启动终端。catalog 的 `SnapshotWithWarnings` 将快照和有效性一起读取，缓存失败不会被误当成成功空列表。普通和归档请求各有递增序号，筛选改变和 stop 会使旧响应失效；晚到响应不能配对、渲染或覆盖提示。
+
+新建 Codex 使用 `new-codex-*` 临时 token，列表明确标记「重启不恢复」，关闭或退出时移除临时行；它不进入 Claude 目录配对或 AdoptSession，也不写入 open-sessions。观察器匹配 TUI 的 `thread/start` / `thread/resume` 请求与成功响应，取得权威主线程 ID；请求 ID 保留 string/integer 区别，resume 校验预期线程。这个关联只服务运行时状态和用量，不改变持久恢复策略。会话重命名已通过 `RenameProvider` 接入原生能力：Claude 调用内嵌 SDK 的离线 `renameSession`，Codex 调用 `thread/name/set`，成功后刷新缓存。原生名称不被本地 alias 覆盖，删除/归档仍保留 hidden 语义。依赖、打包和独立集成测试见 [原生重命名](native-rename.md)。
+
+透明转发保持原始消息、顺序和未知字段，只添加/去除 stdio 的换行 framing；观察器接收副本，不回答审批或用户输入请求。转发器只绑定 `127.0.0.1:0`、使用 256-bit 随机 bearer、拒绝浏览器 Origin 和第二客户端。凭据仅加入该 PTY 环境，大小写不敏感地替换同名环境变量，不写入父进程环境、日志或状态文件。`LaunchSpec.Env` 与 `Close` 将 server/relay 作为终端专属资源交给 Manager，启动失败时 App 清理，成功后 reader 退出、替换、Kill 和 CloseAll 均由幂等 `ptyRef.Close` 清理。专属 server 的运行期由 PTY 所有权控制，避免 Wails context 提前取消导致恢复清单被退出事件擦除；Shutdown 先持久化并关闭终端，再取消其他读请求，启动与关闭由 App launch 锁串行。
+
+Codex `thread/status/changed` 映射 active/idle/systemError/notLoaded 与审批/输入标记，`turn/completed` 保留 completed/failed/interrupted。断线显示 unknown，只有显式 completed 才产生成功提示；Claude 原有状态推断不变。Claude watcher 与 Codex 事件合并后推送同一 `agents:update`，Codex 通过 runtimeToken 更新临时行，外部终端不猜测。
+
+Codex 用量只采用 `thread/tokenUsage/updated` 的累计 total 与最近 last 快照，重复事件替换而不累加。input 已含 cache read/write，适配时扣除缓存部分得到普通 input；reasoning 是 output 的明细，不额外加到总量。校验非负、分类范围、必需字段和 total=input+output；异常保留旧快照并标旧。模型请求数、缓存层级和项目总量不猜测；Codex 不进入 Claude project prefetch/cache。新开终端时，快照缓存以 1024 项为收敛目标，优先清理最旧的非活动项；活动终端保留，应用重启后不宣称旧快照可用。公开 thread/read/resume/Turn schema 没有历史 usage 字段，0.161.0 的合成历史恢复实验未回放旧 token 事件。
+
+Codex 历史读端有 10 秒缓存，失败时保留最后成功快照并记录诊断；单次完整分页有 15 秒 deadline、重复 cursor 防护和有界 JSON 消息。只启动/关闭本应用自己的原生 app-server，不调用全局 daemon stop，不解析 Codex 私有 SQLite/JSONL。App 生命周期 context 在重启初始化/Shutdown 时取消，停止在途读请求。缺失 CLI、异常响应和启动失败不创建新终端记录。
+
 `ptyRef.Close` 是幂等的；Write 和 Resize 在底层调用期间与 Close 互斥，唯一读协程允许 Close 并发中断阻塞 Read。Manager 用独立 lifecycle mutex 串行 Start/Kill/CloseAll，map/dimension/callback 由自身锁保护。
 
 Start 采用“新 PTY 成功后再替换旧 PTY”；同 token 并发启动不会泄漏。旧 reader 退出时必须做 identity check，不能删除替换后的新实例或误发旧 Exit。`OpenIDs` 排序并过滤 `new-*`、nil 和 closed 实例。
@@ -78,9 +93,13 @@ JSON 格式必须保持：
 {"shell": "cmd"}
 // projects.json
 {"dirs": ["C:\\work\\project"], "favorites": ["C:\\work\\project"]}
+// preferences.json
+{"ui-theme": "dark", "term-theme": "nord", "term-font-size": "18", "terminal-layout-mode": "grid-2x2"}
 ```
 
-项目配置中的每个元素就是用户选择并保存的工作目录字符串，不是独立的运行时对象；`favorites` 可省略，旧版 `projects.json` 可以直接读取，空白目录项会被忽略。默认文件目录是 exe 同目录；测试通过 TempDir/注入目录隔离用户数据。临时文件替换失败也必须向上返回并清理残留。
+项目配置中的每个元素就是用户选择并保存的工作目录字符串，不是独立的运行时对象；`favorites` 可省略，空白目录项会被忽略。默认文件目录固定为 `%LOCALAPPDATA%\ClaudeSessionManager`，不随 exe 文件名、路径或版本变化；测试通过 TempDir/注入目录隔离用户数据。旧 exe 目录 JSON、旧 `config.json/runtime.json` 和旧 WebView 设置均不自动导入，也不删除或覆盖。
+
+界面主题、终端配色/字号、布局/分屏比例以及每日更新检查日期通过 `LoadPreferences` / `SetPreference` 读写 `preferences.json`。前端共享内存缓存按键串行保存；启动先加载设置，再初始化布局、主题和会话恢复。读取失败时不会把默认值回写损坏的配置；保存失败显示状态提示，重复设置同一值可重试。Wails 显式使用固定 `WebView2` 子目录，调试日志为同一数据目录下的 `agents-debug.log`。同时运行多个实例时，配置按键更新；打开会话清单仍为最近一次保存的快照。
 
 项目存储和 App 边界必须保持以下语义：缺失 `projects.json` 返回安全空列表，损坏文件返回安全空列表并保留错误；添加、删除和收藏修改在跨进程锁内完成，使用规范化目录 identity，重复目录幂等成功；删除不存在的目录也幂等成功。App 的 `ListProjects`、`ChooseProjectDir`、`AddProject`、`OpenFolder`、`ListProjectFavorites`、`SetProjectFavorite`、`DeleteProject` 分别负责读取、打开原生目录选择器、校验并保存目录、校验目录并启动 Windows 文件资源管理器、读取/更新收藏、移除配置。收藏使用目录规范化值持久化，新收藏置顶，取消收藏幂等；选择取消不保存；打开文件夹只接受存在的目录；删除只移除配置、不删除真实目录、历史会话或终端，并清理对应收藏。
 
@@ -116,6 +135,14 @@ go build -tags "webview2 production" `
 go test -tags integration ./internal/terminal  # Windows ConPTY
 go test -tags integration ./internal/agent     # claude agents --json
 ```
+
+Codex 的真实 Windows 检查独立执行，普通单测仅使用 fake 传输和临时目录：
+
+```powershell
+go test -tags integration ./internal/provider -run 'TestCodex' -v
+```
+
+这些测试在隔离 CODEX_HOME 中检查历史/恢复 RPC、ConPTY 启动、原生 remote TUI 新建/resume、身份与清理。实时用量测试使用 loopback Responses SSE 假模型，让真实 Codex 执行唯一合成提示，验证 completed、TUI 回复和 input/cache/output/reasoning 快照贯通；主请求恰好一次，已识别的独立标题 schema 请求由假服务返回合法 JSON，不能混入主线程统计。不使用真实凭据或会话，不调用外部模型。合成历史/模型夹具限定 `codex-cli 0.161.0`，其他版本明确 skip；普通 ConPTY 启动测试独立运行。这些检查不能代替真实模型任务、真实审批交互或 GUI 人工验收。
 
 普通测试重点覆盖：state TempDir/事务、terminal fake PTY 与锁边界、agent fake Fetcher 取消、App 命令/存储编排、前端 Node 内置测试和 fake DOM。修改前端后必须先 `npm run build`，因为 `frontend/dist` 会被 Go embed。
 

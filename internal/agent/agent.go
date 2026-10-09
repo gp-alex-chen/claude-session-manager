@@ -38,16 +38,20 @@ func DebugLog(msg string) {
 }
 
 type AgentInfo struct {
-	SessionID  string `json:"sessionId"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	State      string `json:"state"`
-	Status     string `json:"status"`
-	WaitingFor string `json:"waitingFor"`
-	ID         string `json:"id"`
-	PID        int    `json:"pid"`
-	Cwd        string `json:"cwd"`
-	StartedAt  int64  `json:"startedAt"`
+	Provider     string `json:"provider,omitempty"`
+	RuntimeToken string `json:"runtimeToken,omitempty"`
+	TurnID       string `json:"turnId,omitempty"`
+	TurnStatus   string `json:"turnStatus,omitempty"`
+	SessionID    string `json:"sessionId"`
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	Status       string `json:"status"`
+	WaitingFor   string `json:"waitingFor"`
+	ID           string `json:"id"`
+	PID          int    `json:"pid"`
+	Cwd          string `json:"cwd"`
+	StartedAt    int64  `json:"startedAt"`
 }
 
 type Fetcher func(context.Context) ([]AgentInfo, string)

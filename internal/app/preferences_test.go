@@ -16,6 +16,7 @@ func TestLocalAppDataShutdownPersistStartupRestore(t *testing.T) {
 	dir := state.DefaultDir()
 	store := state.NewStore(dir)
 	a := NewAppWithStore(store)
+	a.providers = a.newProviderRegistry(false)
 	a.debugLog = func(string) {}
 	a.terms = terminal.NewManagerWithStart(terminal.Callbacks{}, store.SaveOpen,
 		func(string, string, int, int, []string) (terminal.Pty, error) { return newShutdownPty(), nil })
@@ -40,6 +41,7 @@ func TestLocalAppDataShutdownPersistStartupRestore(t *testing.T) {
 	a.shutdown(context.Background())
 	// A fresh process/store uses the fixed path, independently of the executable.
 	restarted := NewAppWithStore(state.NewStore(state.DefaultDir()))
+	restarted.providers = restarted.newProviderRegistry(false)
 	restarted.debugLog = func(string) {}
 	started := []string{}
 	restarted.startPTYFn = func(token, _, gotDir string) error {

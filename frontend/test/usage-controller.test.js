@@ -48,6 +48,35 @@ function realTerminal(state, token, dir) {
   state.terminals.set(token, { token, dir });
 }
 
+test('Codex live usage queries temporary runtime and preserves Claude project cache', async () => {
+  const summary = { provider: 'codex', session_found: true, session_total: { input_tokens: 20 }, project_found: false };
+  const f = makeFixture([summary]);
+  f.state.agentProviders.set('codex', { hasUsage: true });
+  f.state.terminals.set('new-codex-1', { dir: 'C:/work', provider: 'codex' });
+  const project = { project_found: true, project_total: { input_tokens: 7 } };
+  f.state.usageByProject.set('C:/work', project);
+  f.controller.start();
+  await f.controller.onActivate('new-codex-1');
+  assert.deepEqual(f.calls, [{ sessionID: 'new-codex-1', projectDir: 'C:/work' }]);
+  assert.equal(f.state.usageByToken.get('new-codex-1').summary, summary);
+  assert.equal(f.state.usageByProject.get('C:/work'), project);
+  await f.controller.prefetchProjects([{ id: 'codex:uuid', dir: 'C:/work', provider: 'codex' }]);
+  assert.equal(f.calls.length, 1);
+});
+
+test('Codex use never queries Claude statistics or overwrites project totals', async () => {
+  const f = makeFixture();
+  f.state.sessionProviders = new Map([['codex:id', 'codex']]);
+  f.state.terminals.set('codex:id', { token: 'codex:id', dir: 'C:/work', provider: 'codex' });
+  f.state.usageByProject.set('C:/work', { project_found: true, project_total: { input_tokens: 7 } });
+  f.controller.start();
+  await f.controller.onActivate('codex:id');
+  await f.controller.prefetchProjects([{ id: 'codex:id', dir: 'C:/work', provider: 'codex' }]);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.state.usageByToken.get('codex:id').error, /codex/i);
+  assert.equal(f.state.usageByProject.get('C:/work').project_total.input_tokens, 7);
+});
+
 test('real session activation sends its real ID and project directory', async () => {
   const response = deferred();
   const fixture = makeFixture([response]);

@@ -1,6 +1,7 @@
 import { leafOf } from '../utils.js';
 import { listSig, pairPendingSessions } from './pairing.js';
 import { dirIdentity, renderHiddenSessions, renderSessionList, updateProjectUsageLabels } from './view.js';
+import { renderProviderBadge } from './provider-icons.js';
 
 export function createSessionController(deps) {
   const {
@@ -10,6 +11,8 @@ export function createSessionController(deps) {
     paneController = null,
     agentController,
     listRoot,
+    filterRoot = null,
+    storageRef = null,
     addProjectButton = null,
     hiddenPanel,
     hiddenCount,
@@ -34,10 +37,87 @@ export function createSessionController(deps) {
   let started = false;
   let addProjectBound = false;
   let sessionsLoaded = false;
+  let providers = [{ id: 'claude', name: 'Claude', hasStatus: true, hasUsage: true, newSessionRestorable: true }];
   const pendingAdoptions = new Map();
   let adoptionInFlight = null;
   let adoptionInFlightGeneration = null;
   let adoptionGeneration = 0;
+  let filterGeneration = 0;
+  const restoringIDs = new Set();
+  const historyByProvider = new Map();
+  let requestGeneration = 0;
+  let hiddenRequestGeneration = 0;
+  let newLaunchInFlight = false;
+  let filterReady = false;
+
+  function providerForID(id) {
+    return state.sessionProviders.get(id) || 'claude';
+  }
+
+  function historyProviders() {
+    const ids = new Set(state.selectedProviders);
+    for (const [token, terminal] of state.terminals) {
+      const provider = terminal.provider || providerForID(token);
+      if (token.startsWith('new-') && provider !== 'claude') continue;
+      ids.add(provider);
+    }
+    for (const item of state.pendingNew) if (!item.provider || item.provider === 'claude') ids.add('claude');
+    for (const id of restoringIDs) ids.add(providerForID(id));
+    return [...ids].sort();
+  }
+
+  function visibleHistory(list) {
+    return list.filter((item) => state.selectedProviders.has(item.provider || 'claude')
+      || restoringIDs.has(item.id)
+      || state.terminals.has(state.realToNew.get(item.id) || item.id));
+  }
+
+  function renderProviderFilters() {
+    if (!filterRoot) return;
+    const focused = filterRoot.contains?.(documentRef.activeElement) ? documentRef.activeElement?.dataset.provider : null;
+    filterRoot.innerHTML = '';
+    for (const provider of providers) {
+      const selected = state.selectedProviders.has(provider.id);
+      const button = el('button', 'provider-filter');
+      button.type = 'button';
+      button.dataset.provider = provider.id;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+      button.setAttribute('aria-label', '显示 ' + provider.name + ' 会话');
+      button.disabled = selected && state.selectedProviders.size === 1;
+      button.title = button.disabled ? '至少保留一种会话来源' : '显示或隐藏 ' + provider.name + ' 历史会话';
+      const icon = renderProviderBadge({ provider: provider.id, name: provider.name, el });
+      if (icon.classList.contains('s-provider-icon')) button.appendChild(icon);
+      button.appendChild(el('span', 'provider-filter-label', provider.name));
+      button.addEventListener('click', () => toggleProvider(provider.id));
+      filterRoot.appendChild(button);
+      if (focused === provider.id && !button.disabled) button.focus?.();
+    }
+  }
+
+  async function toggleProvider(id) {
+    if (!providers.some((provider) => provider.id === id)) return;
+    if (state.selectedProviders.has(id)) {
+      if (state.selectedProviders.size === 1) return;
+      state.selectedProviders.delete(id);
+    } else state.selectedProviders.add(id);
+    filterGeneration++;
+    storageRef?.setItem('session-provider-filter', JSON.stringify([...state.selectedProviders].sort()));
+    renderProviderFilters();
+    hiddenCount.textContent = '';
+    if (hiddenOpen) hiddenPanel.innerHTML = '';
+    renderSessions(lastLoaded);
+    await loadSessions();
+  }
+
+  function restoreProviderFilter() {
+    let saved;
+    try { saved = JSON.parse(storageRef?.getItem('session-provider-filter') || 'null'); } catch { /* Use defaults. */ }
+    const available = new Set(providers.map((provider) => provider.id));
+    const selected = Array.isArray(saved) ? saved.filter((id) => available.has(id)) : [];
+    state.selectedProviders = new Set(selected.length ? selected : available);
+    renderProviderFilters();
+  }
 
   const contextMenu = documentRef.createElement('div');
   contextMenu.id = 'ctx-menu';
@@ -79,6 +159,7 @@ export function createSessionController(deps) {
     const targetPaneId = paneController?.getTargetPaneId?.(options.paneId) || options.paneId;
     const showOptions = targetPaneId ? { ...options, paneId: targetPaneId } : options;
     state.sessionDirs.set(sessionInfo.id, sessionInfo.dir);
+    state.sessionProviders.set(sessionInfo.id, sessionInfo.provider || 'claude');
     const existingSession = state.terminals.get(token);
     if (existingSession) existingSession.dir = sessionInfo.dir;
     const existing = existingSession;
@@ -91,7 +172,10 @@ export function createSessionController(deps) {
     if (existing) terminalController.disposeSession(token);
     terminalController.openTab(token, sessionInfo.name);
     const opened = state.terminals.get(token);
-    if (opened) opened.dir = sessionInfo.dir;
+    if (opened) {
+      opened.dir = sessionInfo.dir;
+      opened.provider = sessionInfo.provider || 'claude';
+    }
     try {
       await backend.StartSession(sessionInfo.id, sessionInfo.dir);
       setStatus('已恢复: ' + sessionInfo.name, 'ok');
@@ -107,6 +191,13 @@ export function createSessionController(deps) {
   }
 
   function closeRealSession(id) {
+    const temporary = state.pendingNew.find((item) => item.token === id && item.provider && item.provider !== 'claude');
+    if (temporary) {
+      state.pendingNew = state.pendingNew.filter((item) => item !== temporary);
+      terminalController.closeTab(id);
+      renderSessions(lastLoaded);
+      return;
+    }
     const mappedToken = state.realToNew.get(id);
     pendingAdoptions.delete(mappedToken || id);
     if (mappedToken) {
@@ -115,6 +206,7 @@ export function createSessionController(deps) {
     } else {
       terminalController.closeTab(id);
     }
+    renderSessions(lastLoaded);
   }
 
   async function flushPendingAdoptions() {
@@ -155,12 +247,16 @@ export function createSessionController(deps) {
 
   function handleTerminalExit(token) {
     pendingAdoptions.delete(token);
+    if (state.pendingNew.some((item) => item.token === token && item.provider && item.provider !== 'claude')) {
+      state.pendingNew = state.pendingNew.filter((item) => item.token !== token);
+      renderSessions(lastLoaded);
+    }
   }
 
   function pairNewSessions(list) {
     state.pendingNew = pairPendingSessions({
       pending: state.pendingNew,
-      lastLoaded,
+      lastLoaded: historyByProvider.get('claude') || lastLoaded.filter((item) => (item.provider || 'claude') === 'claude'),
       list,
       realToNew: state.realToNew,
       newToReal: state.newToReal,
@@ -178,43 +274,74 @@ export function createSessionController(deps) {
     return flushPendingAdoptions();
   }
 
-  async function loadSessions() {
-    let list;
-    try {
-      list = await backend.ListSessions();
-    } catch (error) {
-      setStatus('加载会话失败: ' + error, 'warn');
-      return false;
+  async function readHistory(ids) {
+    const response = typeof backend.ListSessionsForProviders === 'function'
+      ? await backend.ListSessionsForProviders(ids) : await backend.ListSessions();
+    // The array form only serves the legacy boundary used by older callers.
+    if (Array.isArray(response)) return { sessions: response, succeededProviders: ids, warnings: [] };
+    if (!response || !Array.isArray(response.sessions) || !Array.isArray(response.succeededProviders)) throw new Error('会话来源查询返回无效结果');
+    return response;
+  }
+
+  async function commitHistory(result, request, selection) {
+    if (request !== requestGeneration || selection !== filterGeneration) return false;
+    if (result.succeededProviders.includes('claude')) {
+      await pairNewSessions(result.sessions.filter((item) => (item.provider || 'claude') === 'claude'));
     }
-    list = Array.isArray(list) ? list : [];
-    await pairNewSessions(list);
-    sessionsLoaded = true;
-    renderSessions(list);
+    if (request !== requestGeneration || selection !== filterGeneration) return false;
+    for (const id of result.succeededProviders) {
+      historyByProvider.set(id, result.sessions.filter((item) => (item.provider || 'claude') === id));
+    }
     return true;
   }
 
-  async function autoRefreshSessions() {
-    if (refreshInFlight) return;
-    refreshInFlight = true;
+  function mergedHistory(result) {
+    const updated = new Set(result.succeededProviders);
+    return [...result.sessions.filter((item) => updated.has(item.provider || 'claude')),
+      ...lastLoaded.filter((item) => !updated.has(item.provider || 'claude'))];
+  }
+
+  async function loadSessions({ quiet = false, skipUnchanged = false } = {}) {
+    const request = ++requestGeneration;
+    const selection = filterGeneration;
     try {
-      const list = await backend.ListSessions();
-      if (!Array.isArray(list)) return;
-      const signature = listSig(list);
-      if (signature === lastListSignature) {
-        await flushPendingAdoptions();
-        return;
+      const result = await readHistory(historyProviders());
+      if (!(await commitHistory(result, request, selection))) return null;
+      const list = mergedHistory(result);
+      sessionsLoaded = true;
+      if (!skipUnchanged || listSig(list) !== lastListSignature) renderSessions(list);
+      if (result.warnings?.length) {
+        if (!quiet) setStatus('读取会话失败: ' + result.warnings.join('; '), 'warn');
+        return false;
       }
-      await pairNewSessions(list);
-      renderSessions(list);
-    } finally {
-      refreshInFlight = false;
+      return true;
+    } catch (error) {
+      if (request !== requestGeneration || selection !== filterGeneration) return null;
+      if (quiet) throw error;
+      if (!quiet) setStatus('加载会话失败: ' + error, 'warn');
+      return false;
     }
+  }
+
+  async function autoRefreshSessions() {
+    if (!filterReady || newLaunchInFlight || refreshInFlight) return;
+    refreshInFlight = true;
+    try { await loadSessions({ quiet: true, skipUnchanged: true }); }
+    finally { refreshInFlight = false; }
   }
 
   function renderSessions(list) {
     lastLoaded = list;
     lastListSignature = listSig(list);
-    for (const session of list) state.sessionDirs.set(session.id, session.dir);
+    for (const session of list) {
+      state.sessionDirs.set(session.id, session.dir);
+      state.sessionProviders.set(session.id, session.provider || 'claude');
+    }
+    const temporarySessions = state.pendingNew
+      .filter((item) => item.provider && item.provider !== 'claude')
+      .map((item) => ({ id: item.token, dir: item.dir, name: item.name, provider: item.provider,
+        temporary: true, time: '临时终端 · 重启不恢复' }));
+    const visibleList = [...visibleHistory(list), ...temporarySessions];
     if (!state.collapseAllDone && list.length) {
       state.collapseAllDone = true;
       for (const session of list) state.collapsedDirs.add(dirIdentity(session.dir));
@@ -222,12 +349,12 @@ export function createSessionController(deps) {
 
     renderSessionList({
       listRoot,
-      list,
+      list: visibleList,
       projects: state.projects,
       state,
       agentController,
       el,
-      onStartNew: startNew,
+      onStartNew: chooseNewAgent,
       onToggleGroup: (dir, group) => {
         const identity = dirIdentity(dir);
         const collapsed = group.classList.toggle('collapsed');
@@ -241,29 +368,79 @@ export function createSessionController(deps) {
       favoriteProjects: state.projectFavorites,
       usageByProject: state.usageByProject,
     });
-    onProjects?.(list);
+    onProjects?.(visibleHistory(list));
     refreshHidden(true);
     agentController.refreshAgents();
     refreshFoldState();
     agentController.renderUnreadMarks();
-    paneController?.setSessionOptions?.(list);
+    paneController?.setSessionOptions?.(visibleList);
     syncActiveHighlight();
   }
 
-  async function startNew(dir) {
+  async function startNew(dir, provider = 'claude') {
+    if (newLaunchInFlight) return;
+    newLaunchInFlight = true;
+    const lifecycle = adoptionGeneration;
     const targetPaneId = paneController?.getTargetPaneId?.();
     try {
-      const token = await backend.StartNew(dir);
-      const label = '新会话 ' + (++newCounter) + ' · ' + leafOf(dir);
+      if (provider === 'claude' && typeof backend.ListSessionsForProviders === 'function') {
+        const request = ++requestGeneration;
+        const selection = filterGeneration;
+        let result;
+        try { result = await readHistory(['claude']); }
+        catch (error) {
+          if (request !== requestGeneration || selection !== filterGeneration) return;
+          throw new Error('无法读取 Claude 历史，不能安全建立新会话身份: ' + error);
+        }
+        if (request !== requestGeneration || selection !== filterGeneration) return;
+        if (!result.succeededProviders.includes('claude')) throw new Error('无法读取 Claude 历史，不能安全建立新会话身份');
+        if (!(await commitHistory(result, request, selection))) return;
+        renderSessions(mergedHistory(result));
+      }
+      const token = provider === 'claude'
+        ? await backend.StartNew(dir)
+        : await backend.StartNewAgent(provider, dir);
+      const providerName = providers.find((item) => item.id === provider)?.name || provider;
+      const label = (provider === 'claude' ? '' : providerName + ' ') + '新会话 ' + (++newCounter) + ' · ' + leafOf(dir);
+      state.sessionProviders.set(token, provider);
       terminalController.openTab(token, label);
       const terminal = state.terminals.get(token);
-      if (terminal) terminal.dir = dir;
-      state.pendingNew.push({ token, dir });
+      if (terminal) { terminal.dir = dir; terminal.provider = provider; }
+      state.pendingNew.push(provider === 'claude' ? { token, dir } : { token, dir, provider, name: label });
+      if (provider !== 'claude') renderSessions(lastLoaded);
       showTerminal(token, targetPaneId ? { paneId: targetPaneId } : {});
-      setStatus('已启动新会话: ' + leafOf(dir), 'ok');
+      setStatus(provider === 'claude' ? '已启动新会话: ' + leafOf(dir)
+        : providerName + ' 临时终端已打开；已有历史可从列表恢复，新终端暂不自动恢复', 'ok');
     } catch (error) {
-      setStatus('新建失败: ' + error, 'warn');
+      if (lifecycle === adoptionGeneration) setStatus('新建失败: ' + error, 'warn');
+    } finally {
+      newLaunchInFlight = false;
     }
+  }
+
+  async function loadAgentProviders() {
+    if (typeof backend.ListAgentProviders !== 'function') return;
+    try {
+      const list = await backend.ListAgentProviders();
+      if (!Array.isArray(list) || !list.length) throw new Error('agent 列表为空');
+      const valid = list.filter((item) => item?.id && item?.name);
+      if (!valid.length) throw new Error('agent 列表为空');
+      providers = valid;
+      state.agentProviders = new Map(providers.map((item) => [item.id, item]));
+    } catch (error) {
+      setStatus('加载 agent 列表失败: ' + error, 'warn');
+    }
+  }
+
+  function chooseNewAgent(dir, event) {
+    if (providers.length === 1) return startNew(dir, providers[0].id);
+    contextMenu.innerHTML = '';
+    for (const provider of providers) {
+      addContextItem('新建 ' + provider.name + ' 会话', () => startNew(dir, provider.id));
+    }
+    contextMenu.style.left = Math.min(event?.clientX || 20, windowRef.innerWidth - 180) + 'px';
+    contextMenu.style.top = Math.min(event?.clientY || 20, windowRef.innerHeight - 120) + 'px';
+    contextMenu.style.display = 'block';
   }
 
   async function loadProjects() {
@@ -344,7 +521,8 @@ export function createSessionController(deps) {
       addContextItem(target.favorite ? '取消收藏' : '添加收藏', () => toggleProjectFavorite(target));
       addContextItem('打开文件夹', () => openFolder(target));
     } else if (target.type === 'session') {
-      addContextItem('重命名…', () => renameSession(target));
+      const provider = state.agentProviders?.get(target.provider || 'claude');
+      if (provider?.hasRename !== false) addContextItem('重命名…', () => renameSession(target));
       addContextItem('归档（不再显示）', () => deleteSession(target), true);
     }
     contextMenu.style.left = Math.min(x, windowRef.innerWidth - 160) + 'px';
@@ -394,23 +572,32 @@ export function createSessionController(deps) {
   async function renameSession(target) {
     const current = state.sessionNames.get(target.id) || target.name;
     const input = windowRef.prompt(
-      '重命名会话（留空 = 恢复原名）\n提示：这里只改本软件的显示名，真正改名请在 claude 会话内使用 /rename',
+      '重命名会话（同步到 agent 的原生会话名称，最多 120 个字符）',
       current,
     );
     if (input === null) return;
     const name = input.trim();
+    if (!name) {
+      setStatus('会话名称不能为空', 'warn');
+      return;
+    }
     try {
       await backend.RenameSession(target.id, name);
     } catch (error) {
       setStatus('重命名失败: ' + error, 'warn');
       return;
     }
-    state.sessionNames.set(target.id, name || target.name);
+    state.sessionNames.set(target.id, name);
     const token = state.realToNew.get(target.id) || target.id;
     const terminal = state.terminals.get(token);
-    if (terminal) terminal.labelText = name || target.name;
-    await loadSessions();
-    setStatus(name ? '已重命名: ' + name : '已恢复原名', 'ok');
+    if (terminal) terminal.labelText = name;
+    const refreshed = await loadSessions();
+    if (refreshed === null) return;
+    if (!refreshed) {
+      setStatus('原生重命名成功，但会话列表刷新失败: ' + name, 'warn');
+      return;
+    }
+    setStatus('已原生重命名: ' + name, 'ok');
   }
 
   async function deleteSession(target) {
@@ -428,15 +615,23 @@ export function createSessionController(deps) {
   }
 
   async function refreshHidden(silent) {
+    const generation = filterGeneration;
+    const request = ++hiddenRequestGeneration;
     let list;
     try {
-      list = await backend.ListHiddenSessions();
+      const result = typeof backend.ListHiddenSessionsForProviders === 'function'
+        ? await backend.ListHiddenSessionsForProviders([...state.selectedProviders].sort()) : await backend.ListHiddenSessions();
+      list = Array.isArray(result) ? result : result?.sessions;
+      if (!Array.isArray(result) && result?.warnings?.length) throw new Error(result.warnings.join('; '));
     } catch (error) {
-      if (!silent) setStatus('加载归档失败: ' + error, 'warn');
+      if (generation !== filterGeneration || request !== hiddenRequestGeneration) return;
+      if (!silent || hiddenOpen) setStatus('加载归档失败: ' + error, 'warn');
       return;
     }
+    if (generation !== filterGeneration || request !== hiddenRequestGeneration) return;
     list = Array.isArray(list) ? list : [];
-    hiddenCount.textContent = list.length;
+    list = list.filter((item) => state.selectedProviders.has(item.provider || 'claude'));
+    hiddenCount.textContent = list.length ? ' · ' + list.length : '';
     if (!hiddenOpen) return;
     renderHiddenSessions({
       hiddenPanel,
@@ -449,7 +644,7 @@ export function createSessionController(deps) {
           setStatus('恢复失败: ' + error, 'warn');
           return;
         }
-        await loadSessions();
+        if ((await loadSessions()) === null) return;
         setStatus('已恢复显示: ' + session.name, 'ok');
       },
     });
@@ -484,23 +679,44 @@ export function createSessionController(deps) {
   }
 
   async function initialize() {
+    const lifecycle = adoptionGeneration;
+    await loadAgentProviders();
+    if (lifecycle !== adoptionGeneration) return;
+    restoreProviderFilter();
+    filterReady = true;
     await loadProjects();
     await loadProjectFavorites();
     await agentController.refreshAgents();
-    await loadSessions();
+    if (lifecycle !== adoptionGeneration) return;
     let open;
     try {
-      open = await backend.GetOpenSessions();
+      if (typeof backend.GetOpenSessionRefs === 'function') {
+        const refs = await backend.GetOpenSessionRefs();
+        if (lifecycle !== adoptionGeneration) return;
+        open = [];
+        for (const ref of Array.isArray(refs) ? refs : []) {
+          if (!state.agentProviders.has(ref.provider)) continue;
+          state.sessionProviders.set(ref.id, ref.provider);
+          open.push(ref.id);
+        }
+      } else open = await backend.GetOpenSessions();
     } catch (error) {
-      return;
+      if (lifecycle !== adoptionGeneration) return;
+      open = [];
+      setStatus('读取待恢复会话失败: ' + error, 'warn');
     }
-    if (!Array.isArray(open)) return;
+    if (lifecycle !== adoptionGeneration) return;
+    open = Array.isArray(open) ? open : [];
+    for (const id of open) restoringIDs.add(id);
+    await loadSessions();
+    if (lifecycle !== adoptionGeneration) { restoringIDs.clear(); return; }
     const paneIds = paneController?.getPaneFillOrder?.()
       || paneController?.getVisiblePaneIds?.()
       || [];
     let restoreIndex = 0;
     let restored = false;
     for (const id of open) {
+      if (lifecycle !== adoptionGeneration) break;
       const session = lastLoaded.find((item) => item.id === id);
       if (!session) continue;
       try {
@@ -516,8 +732,13 @@ export function createSessionController(deps) {
         }
       } catch (error) {
         setStatus('恢复失败: ' + error, 'warn');
+      } finally {
+        restoringIDs.delete(id);
       }
     }
+    restoringIDs.clear();
+    if (lifecycle !== adoptionGeneration) return;
+    renderSessions(lastLoaded);
     if (paneController && restored) paneController.focusFirstAssigned?.();
   }
 
@@ -530,12 +751,16 @@ export function createSessionController(deps) {
   }
 
   function stop() {
+    filterReady = false;
     if (started) {
       started = false;
       clearIntervalFn(refreshTimer);
       refreshTimer = null;
     }
     adoptionGeneration += 1;
+    filterGeneration += 1;
+    requestGeneration += 1;
+    hiddenRequestGeneration += 1;
     pendingAdoptions.clear();
   }
 
@@ -574,8 +799,11 @@ export function createSessionController(deps) {
     renameSession,
     start,
     startNew,
+    chooseNewAgent,
     toggleProjectFavorite,
     stop,
     syncActiveHighlight,
+    toggleProvider,
+    refreshSessionVisibility: () => renderSessions(lastLoaded),
   };
 }

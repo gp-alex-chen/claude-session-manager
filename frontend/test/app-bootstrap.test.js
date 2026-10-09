@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createApplication } from '../src/app/bootstrap.js';
 
 const REQUIRED_IDS = [
-  'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project', 'session-list', 'hidden-panel', 'hidden-count',
+  'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project', 'session-list', 'hidden-panel', 'hidden-count', 'provider-filters',
   'btn-hidden', 'btn-eye', 'btn-settings', 'update-notice', 'settings-menu', 'settings-dialog',
   'settings-close', 'settings-nav', 'settings-tab-appearance',
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',

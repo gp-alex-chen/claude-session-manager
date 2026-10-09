@@ -37,6 +37,45 @@ function fixture(fetch = async () => []) {
 
 const agent = (sessionId, fields = {}) => ({ sessionId, ...fields });
 
+test('Codex waits, failures, interruptions and disconnects never signal success', () => {
+  const f = fixture();
+  f.state.agentProviders.set('codex', { hasStatus: true });
+  f.state.sessionProviders.set('codex:id', 'codex');
+  const snapshot = (state, fields = {}) => [agent('codex:id', { provider: 'codex', kind: 'interactive', state, ...fields })];
+  f.controller.applyAgents(snapshot('working', { turnId: 'one', turnStatus: 'inProgress' }));
+  for (const state of ['blocked', 'failed', 'interrupted', 'unknown']) {
+    f.controller.applyAgents(snapshot(state, { turnId: 'one', turnStatus: state }));
+    assert.equal(f.notices.length, 0);
+  }
+  f.controller.applyAgents([]);
+  assert.equal(f.notices.length, 0);
+  f.controller.applyAgents(snapshot('idle', { turnId: 'two', turnStatus: 'completed' }));
+  f.controller.applyAgents(snapshot('idle', { turnId: 'two', turnStatus: 'completed' }));
+  assert.equal(f.notices.length, 1);
+  f.controller.applyAgents(snapshot('idle', { turnId: 'three', turnStatus: 'completed' }));
+  assert.equal(f.notices.length, 2);
+});
+
+test('Codex authoritative status follows temporary runtime token without adopting history', () => {
+  const f = fixture();
+  f.state.agentProviders.set('codex', { hasStatus: true });
+  f.state.sessionProviders.set('new-codex-1', 'codex');
+  f.controller.applyAgents([agent('codex:uuid', { provider: 'codex', runtimeToken: 'new-codex-1', kind: 'interactive', state: 'working' })]);
+  assert.equal(f.controller.classifyAgent('new-codex-1'), 'working');
+  assert.equal(f.state.newToReal.size, 0);
+});
+
+test('Codex terminal lifecycle never claims task completion or working state', () => {
+  const f = fixture();
+  f.state.sessionProviders.set('codex:id', 'codex');
+  f.state.terminals.set('codex:id', { exited: false });
+  assert.equal(f.controller.classifyAgent('codex:id'), 'unknown-open');
+  f.controller.applyAgents([]);
+  assert.equal(f.notices.length, 0);
+  f.state.terminals.get('codex:id').exited = true;
+  assert.equal(f.controller.classifyAgent('codex:id'), 'idle');
+});
+
 test('classifyAgent covers idle, working, blocked, open, and background', () => {
   const { state, controller } = fixture();
   state.runningAgents.set('working', agent('working', { state: 'working' }));

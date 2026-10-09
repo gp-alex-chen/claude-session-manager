@@ -61,5 +61,5 @@ export function formatProjectUsage(summary) {
 export function formatProjectUsageTitle(summary) {
   const total = usageTotal(summary, 'project');
   if (!total) return '项目用量暂无统计';
-  return `项目累计 ${formatTokenCount(total.total)} · 缓存命中率 ${formatPercent(total.cacheHitRate)}`;
+  return `Claude 项目累计 ${formatTokenCount(total.total)} · 缓存命中率 ${formatPercent(total.cacheHitRate)}`;
 }

@@ -60,8 +60,8 @@ function renderDetails(documentRef, details, summary, stale, error) {
   head.appendChild(headRow);
   compare.appendChild(head);
   const body = documentRef.createElement('tbody');
-  const projectRequests = summary.project_found ? String(summary.project_request_count ?? 0) : '—';
-  const sessionRequests = summary.session_found ? String(summary.session_request_count ?? 0) : '—';
+  const projectRequests = summary.project_found && summary.request_counts_known !== false ? String(summary.project_request_count ?? 0) : '—';
+  const sessionRequests = summary.session_found && summary.request_counts_known !== false ? String(summary.session_request_count ?? 0) : '—';
   const rows = [
     ['请求数', projectRequests, sessionRequests],
     ['新输入', valueOrDash(project?.input), valueOrDash(session?.input)],
@@ -80,10 +80,11 @@ function renderDetails(documentRef, details, summary, stale, error) {
   compare.appendChild(body);
   details.appendChild(compare);
   addText(documentRef, details, 'p', 'usage-details-note', '思考 Token 已包含在输出中');
+  if (summary.note) addText(documentRef, details, 'p', 'usage-details-note', summary.note);
 
   const requestSection = documentRef.createElement('section');
   requestSection.className = 'usage-request-section';
-  addText(documentRef, requestSection, 'h3', 'usage-details-heading', '本轮请求');
+  addText(documentRef, requestSection, 'h3', 'usage-details-heading', summary.provider === 'codex' ? '最近请求' : '本轮请求');
   const requestGrid = documentRef.createElement('div');
   requestGrid.className = 'usage-request-grid';
   for (const [label, value] of [
@@ -95,7 +96,8 @@ function renderDetails(documentRef, details, summary, stale, error) {
     ['思考 Token', valueOrDash(latest?.thinking)],
   ]) addMetric(documentRef, requestGrid, label, value);
   requestSection.appendChild(requestGrid);
-  const tiers = `缓存层级 · 5m ${valueOrDash(latest?.cache5m)} · 1h ${valueOrDash(latest?.cache1h)}`;
+  const tiers = summary.cache_tiers_known === false ? '缓存层级 · 暂无细分数据'
+    : `缓存层级 · 5m ${valueOrDash(latest?.cache5m)} · 1h ${valueOrDash(latest?.cache1h)}`;
   addText(documentRef, requestSection, 'p', 'usage-request-tiers', tiers);
   details.appendChild(requestSection);
 }

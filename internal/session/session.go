@@ -31,21 +31,18 @@ type project struct {
 }
 
 var (
-	// reCustomTitle：用户 /rename 的自定义会话名（Claude Code 2.1+ 新增类型）
-	reCustomTitle = regexp.MustCompile(`"customTitle":"([^"]*)"`)
-	// reSessionName：AI 生成的标题（ai-title）与旧版改名字段（agent-name）
-	reSessionName = regexp.MustCompile(`"aiTitle":"([^"]*)"|"agentName":"([^"]*)"`)
-	reProj        = regexp.MustCompile(`^([A-Za-z])--(.+)$`)
+	reProj = regexp.MustCompile(`^([A-Za-z])--(.+)$`)
 )
 
 // jsonl 行结构化（只取需要的字段）
 type line struct {
-	Type      string          `json:"type"`
-	AiTitle   string          `json:"aiTitle"`
-	AgentName string          `json:"agentName"`
-	Cwd       string          `json:"cwd"`
-	IsSide    bool            `json:"isSidechain"`
-	Message   json.RawMessage `json:"message"`
+	Type        string          `json:"type"`
+	AiTitle     string          `json:"aiTitle"`
+	AgentName   string          `json:"agentName"`
+	CustomTitle string          `json:"customTitle"`
+	Cwd         string          `json:"cwd"`
+	IsSide      bool            `json:"isSidechain"`
+	Message     json.RawMessage `json:"message"`
 }
 
 // decodeDir 项目目录名解码：C--Users--x -> C:\Users\x（带合并兜底）
@@ -94,9 +91,6 @@ func parseSessionDetailed(path, fallbackDir string) (*Session, error) {
 	var parseErr error
 	for sc.Scan() {
 		n++
-		if n > 5000 || (s.Text != "" && aiTitle != "" && custom != "") {
-			break
-		}
 		raw := sc.Bytes()
 		if !json.Valid(raw) {
 			if parseErr == nil {
@@ -107,17 +101,16 @@ func parseSessionDetailed(path, fallbackDir string) (*Session, error) {
 		// 会话名三来源，优先级：custom-title（用户 /rename）> ai-title/agent-name。
 		// 这些行会被 claude 周期性重写（可能在文件头、也可能在改名时刻），
 		// 因此继续扫描并保留最后一次看到的值，避免被早期的旧标题锁死。
-		if bytes.Contains(raw, []byte(`"type":"custom-title"`)) {
-			if m := reCustomTitle.FindSubmatch(raw); m != nil {
-				custom = string(m[1])
-			}
-		}
-		if bytes.Contains(raw, []byte(`"type":"ai-title"`)) || bytes.Contains(raw, []byte(`"type":"agent-name"`)) {
-			if m := reSessionName.FindSubmatch(raw); m != nil {
-				if len(m[1]) > 0 {
-					aiTitle = string(m[1])
-				} else {
-					aiTitle = string(m[2])
+		if bytes.Contains(raw, []byte(`"customTitle"`)) || bytes.Contains(raw, []byte(`"aiTitle"`)) || bytes.Contains(raw, []byte(`"agentName"`)) {
+			var metadata line
+			if err := json.Unmarshal(raw, &metadata); err == nil {
+				switch metadata.Type {
+				case "custom-title":
+					custom = metadata.CustomTitle
+				case "ai-title":
+					aiTitle = metadata.AiTitle
+				case "agent-name":
+					aiTitle = metadata.AgentName
 				}
 			}
 		}
@@ -154,10 +147,10 @@ func parseSessionDetailed(path, fallbackDir string) (*Session, error) {
 }
 
 // messageText 从 user 消息的 message 字段提取可显示文本。claude 不同版本格式不同：
-//  1) "message":"纯文本"（早期格式）
-//  2) "message":{"role":"user","content":"纯文本"}（2.1.x 主流格式）
-//  3) content 为 blocks 数组（如系统注入的打断/通知消息）
-//  4) "message":[{"type":"text","text":"…"}]（兼容其他格式）
+//  1. "message":"纯文本"（早期格式）
+//  2. "message":{"role":"user","content":"纯文本"}（2.1.x 主流格式）
+//  3. content 为 blocks 数组（如系统注入的打断/通知消息）
+//  4. "message":[{"type":"text","text":"…"}]（兼容其他格式）
 func messageText(msg json.RawMessage) string {
 	var str string
 	if json.Unmarshal(msg, &str) == nil && str != "" {
@@ -271,4 +264,3 @@ func leafLabel(dir string, count map[string]int) string {
 	}
 	return leaf
 }
-

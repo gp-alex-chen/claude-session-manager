@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createAppState } from '../src/state/app-state.js';
 import { createSessionController } from '../src/sessions/controller.js';
 import { listSig, pairPendingSessions } from '../src/sessions/pairing.js';
-import { renderSessionList } from '../src/sessions/view.js';
+import { renderSessionList, renderHiddenSessions } from '../src/sessions/view.js';
 
 class FakeClassList {
   constructor() { this.values = new Set(); }
@@ -28,6 +28,7 @@ class FakeNode {
     this.listenerCounts = new Map();
     this._innerHTML = '';
     this.textContent = '';
+    this.attributes = new Map();
   }
   get innerHTML() { return this._innerHTML; }
   set innerHTML(value) {
@@ -66,7 +67,7 @@ class FakeNode {
   querySelectorAll() { return []; }
   querySelector() { return null; }
   remove() { this.removed = true; }
-  setAttribute() {}
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
 }
 
 function makeFixture(options = {}) {
@@ -86,6 +87,7 @@ function makeFixture(options = {}) {
   const hiddenCount = new FakeNode();
   const hiddenButton = new FakeNode();
   const eyeButton = new FakeNode();
+  const filterRoot = new FakeNode();
   const documentRef = {
     body: new FakeNode(),
     createElement: () => new FakeNode(),
@@ -94,7 +96,7 @@ function makeFixture(options = {}) {
   const windowRef = {
     innerWidth: 1000,
     innerHeight: 800,
-    prompt: () => 'Renamed',
+    prompt: options.prompt || (() => 'Renamed'),
     confirm: () => options.confirmResult ?? true,
     addEventListener() {},
   };
@@ -151,16 +153,21 @@ function makeFixture(options = {}) {
       if (result instanceof Error) throw result;
       return result;
     },
-    ListHiddenSessions: async () => [],
+    ListHiddenSessions: options.ListHiddenSessions || (async () => []),
+    ListSessionsForProviders: options.ListSessionsForProviders,
+    ListHiddenSessionsForProviders: options.ListHiddenSessionsForProviders,
     RenameSession: options.RenameSession || (async () => {}),
     DeleteSession: options.DeleteSession || (async () => {}),
     UnhideSession: async () => {},
     StartSession: options.StartSession || (async () => {}),
     StartNew: options.StartNew || (async () => 'new-1'),
+    StartNewAgent: options.StartNewAgent,
+    ListAgentProviders: options.ListAgentProviders,
     AdoptSession: options.AdoptSession || (async (token, realId) => {
       adoptionCalls.push([token, realId]);
     }),
     GetOpenSessions: options.GetOpenSessions || (async () => { openCalls.push(true); return []; }),
+    GetOpenSessionRefs: options.GetOpenSessionRefs,
     ListProjects: options.ListProjects || (async () => {
       const result = projectResults[Math.min(projectIndex++, projectResults.length - 1)];
       if (result instanceof Error) throw result;
@@ -190,6 +197,8 @@ function makeFixture(options = {}) {
     paneController,
     agentController,
     listRoot,
+    filterRoot,
+    storageRef: options.storageRef,
     addProjectButton,
     hiddenPanel,
     hiddenCount,
@@ -219,12 +228,240 @@ function makeFixture(options = {}) {
     documentRef, folderCalls,
     favoriteCalls,
     adoptionCalls,
+    filterRoot, hiddenCount, hiddenButton, hiddenPanel,
     paneController,
     get renderCount() { return renderCount; },
   };
 }
 
 const session = (id, dir = 'work', name = id, time = 'today') => ({ id, dir, name, time });
+
+const filterAgents = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }];
+const filterClaude = { ...session('claude-old', 'work', 'Claude old'), provider: 'claude' };
+const filterCodex = { ...session('codex:01900000-0000-7000-8000-000000000001', 'work', 'Codex old'), provider: 'codex' };
+
+function makeFilterFixture(options = {}) {
+  const saved = options.saved || new Map();
+  const queries = [];
+  const hiddenQueries = [];
+  const fixture = makeFixture({
+    ...options,
+    storageRef: { getItem: (key) => saved.get(key), setItem: (key, value) => saved.set(key, value) },
+    ListAgentProviders: options.ListAgentProviders || (async () => filterAgents),
+    GetOpenSessionRefs: options.GetOpenSessionRefs || (async () => []),
+    ListSessionsForProviders: async (ids) => {
+      queries.push(ids);
+      if (options.read) return options.read(ids, queries.length);
+      return { sessions: [filterClaude, filterCodex].filter((row) => ids.includes(row.provider)), succeededProviders: ids, warnings: [] };
+    },
+    ListHiddenSessionsForProviders: async (ids) => {
+      hiddenQueries.push(ids);
+      if (options.readHidden) return options.readHidden(ids, hiddenQueries.length);
+      return { sessions: [], succeededProviders: ids, warnings: [] };
+    },
+  });
+  return { ...fixture, saved, queries, hiddenQueries };
+}
+
+function visibleIDs(fixture) {
+  return fixture.listRoot.children.flatMap((group) => group.children[1].children.map((row) => row.dataset.id));
+}
+
+test('provider buttons default to both, persist filtering, and protect the last selection', async () => {
+  const fixture = makeFilterFixture();
+  await fixture.controller.initialize();
+  assert.deepEqual([...fixture.state.selectedProviders], ['claude', 'codex']);
+  assert.deepEqual(fixture.filterRoot.children.map((button) => button.attributes.get('aria-pressed')), ['true', 'true']);
+  await fixture.filterRoot.children[1].click();
+  assert.deepEqual(visibleIDs(fixture), [filterClaude.id]);
+  assert.deepEqual(fixture.queries.at(-1), ['claude']);
+  assert.equal(fixture.saved.get('session-provider-filter'), '["claude"]');
+  assert.equal(fixture.filterRoot.children[0].disabled, true);
+  const calls = fixture.queries.length;
+  await fixture.controller.toggleProvider('claude');
+  assert.equal(fixture.queries.length, calls);
+  const restarted = makeFilterFixture({ saved: fixture.saved });
+  await restarted.controller.initialize();
+  assert.deepEqual(restarted.queries[0], ['claude']);
+  assert.deepEqual(visibleIDs(restarted), [filterClaude.id]);
+});
+
+test('invalid and unavailable saved sources safely restore both buttons', async () => {
+  for (const value of ['{', '[]', '["unknown"]']) {
+    const fixture = makeFilterFixture({ saved: new Map([['session-provider-filter', value]]) });
+    await fixture.controller.initialize();
+    assert.deepEqual(fixture.queries[0], ['claude', 'codex']);
+  }
+});
+
+test('filtered-out restored Codex stays visible until its tab closes', async () => {
+  const fixture = makeFilterFixture({
+    saved: new Map([['session-provider-filter', '["claude"]']]),
+    GetOpenSessionRefs: async () => [{ id: filterCodex.id, provider: 'codex' }],
+  });
+  await fixture.controller.initialize();
+  assert.deepEqual(fixture.queries[0], ['claude', 'codex']);
+  assert.ok(fixture.state.terminals.has(filterCodex.id));
+  assert.ok(visibleIDs(fixture).includes(filterCodex.id));
+  fixture.controller.closeRealSession(filterCodex.id);
+  assert.deepEqual(visibleIDs(fixture), [filterClaude.id]);
+  await fixture.controller.loadSessions();
+  assert.deepEqual(fixture.queries.at(-1), ['claude']);
+});
+
+test('unselected temporary Codex stays visible without querying its history', async () => {
+  const fixture = makeFilterFixture({
+    saved: new Map([['session-provider-filter', '["claude"]']]),
+    StartNewAgent: async () => 'new-codex-fixture',
+  });
+  await fixture.controller.initialize();
+  await fixture.controller.startNew('work', 'codex');
+  await fixture.controller.loadSessions();
+  assert.deepEqual(fixture.queries.at(-1), ['claude']);
+  assert.ok(visibleIDs(fixture).includes('new-codex-fixture'));
+});
+
+test('Codex-only startup preflights Claude before launch and adopts only genuinely new history', async () => {
+  let launched = false;
+  let newHistory = false;
+  const oldTwo = { ...filterClaude, id: 'claude-old-two' };
+  const newRow = { ...filterClaude, id: 'claude-new', name: 'New Claude' };
+  const fixture = makeFilterFixture({
+    saved: new Map([['session-provider-filter', '["codex"]']]),
+    read: async (ids) => ({
+      sessions: [...(ids.includes('codex') ? [filterCodex] : []),
+        ...(ids.includes('claude') ? [filterClaude, oldTwo, ...(newHistory ? [newRow] : [])] : [])],
+      succeededProviders: ids, warnings: [],
+    }),
+    StartNew: async () => { launched = true; return 'new-claude'; },
+  });
+  await fixture.controller.initialize();
+  assert.deepEqual(fixture.queries[0], ['codex']);
+  await fixture.controller.startNew('work', 'claude');
+  assert.equal(launched, true);
+  assert.deepEqual(fixture.queries[1], ['claude']);
+  assert.deepEqual(fixture.adoptionCalls, []);
+  await fixture.controller.loadSessions();
+  assert.deepEqual(fixture.adoptionCalls, []);
+  newHistory = true;
+  await fixture.controller.loadSessions();
+  assert.deepEqual(fixture.adoptionCalls, [['new-claude', 'claude-new']]);
+  assert.ok(visibleIDs(fixture).includes('claude-new'));
+});
+
+test('failed Claude preflight cannot launch or adopt a terminal', async () => {
+  let launches = 0;
+  const fixture = makeFilterFixture({
+    saved: new Map([['session-provider-filter', '["codex"]']]),
+    read: async (ids) => ({ sessions: [], succeededProviders: ids.filter((id) => id !== 'claude'), warnings: ids.includes('claude') ? ['unreadable'] : [] }),
+    StartNew: async () => { launches++; return 'new-claude'; },
+  });
+  await fixture.controller.initialize();
+  await fixture.controller.startNew('work', 'claude');
+  assert.equal(launches, 0);
+  assert.equal(fixture.state.terminals.size, 0);
+  assert.match(fixture.statuses.at(-1).message, /不能安全建立新会话身份/);
+});
+
+test('older filter requests and errors cannot overwrite a newer selection', async () => {
+  const fixture = makeFilterFixture();
+  await fixture.controller.initialize();
+  let rejectOld;
+  fixture.backend.ListSessionsForProviders = () => new Promise((_, reject) => { rejectOld = reject; });
+  const old = fixture.controller.toggleProvider('codex');
+  fixture.backend.ListSessionsForProviders = async (ids) => ({ sessions: [filterCodex], succeededProviders: ids, warnings: [] });
+  await fixture.controller.toggleProvider('codex');
+  await fixture.controller.toggleProvider('claude');
+  const statusCount = fixture.statuses.length;
+  rejectOld(new Error('stale failure'));
+  await old;
+  assert.deepEqual([...fixture.state.selectedProviders], ['codex']);
+  assert.deepEqual(visibleIDs(fixture), [filterCodex.id]);
+  assert.equal(fixture.statuses.length, statusCount);
+});
+
+test('archive follows selection and rejects stale counts from older requests', async () => {
+  const fixture = makeFilterFixture({ readHidden: async (ids) => ({ sessions: [filterClaude, filterCodex].filter((row) => ids.includes(row.provider)), succeededProviders: ids, warnings: [] }) });
+  await fixture.controller.initialize();
+  await fixture.hiddenButton.click();
+  await fixture.controller.refreshHidden(true);
+  assert.equal(fixture.hiddenCount.textContent, ' · 2');
+  let resolveOld;
+  fixture.backend.ListHiddenSessionsForProviders = () => new Promise((resolve) => { resolveOld = resolve; });
+  const old = fixture.controller.refreshHidden(true);
+  fixture.backend.ListHiddenSessionsForProviders = async (ids) => ({ sessions: [filterClaude], succeededProviders: ids, warnings: [] });
+  await fixture.controller.toggleProvider('codex');
+  await fixture.controller.refreshHidden(true);
+  resolveOld({ sessions: [filterClaude, filterCodex], succeededProviders: ['claude', 'codex'], warnings: [] });
+  await old;
+  assert.equal(fixture.hiddenCount.textContent, ' · 1');
+  assert.equal(fixture.hiddenPanel.children.length, 1);
+});
+
+test('late successful history response cannot replace a newer filter result', async () => {
+  const fixture = makeFilterFixture();
+  await fixture.controller.initialize();
+  let resolveOld;
+  fixture.backend.ListSessionsForProviders = () => new Promise((resolve) => { resolveOld = resolve; });
+  const old = fixture.controller.loadSessions();
+  fixture.backend.ListSessionsForProviders = async (ids) => ({ sessions: [filterClaude], succeededProviders: ids, warnings: [] });
+  await fixture.controller.toggleProvider('codex');
+  resolveOld({ sessions: [{ ...filterClaude, name: 'Stale name' }, filterCodex], succeededProviders: ['claude', 'codex'], warnings: [] });
+  await old;
+  assert.deepEqual(visibleIDs(fixture), [filterClaude.id]);
+  assert.equal(fixture.state.sessionNames.get(filterClaude.id), filterClaude.name);
+});
+
+test('stop during restore identity lookup prevents history reads and terminal launches', async () => {
+  let resolveRefs;
+  let enteredLookup;
+  const entered = new Promise((resolve) => { enteredLookup = resolve; });
+  const fixture = makeFilterFixture({ GetOpenSessionRefs: () => new Promise((resolve) => { resolveRefs = resolve; enteredLookup(); }) });
+  const initializing = fixture.controller.initialize();
+  await entered;
+  fixture.controller.stop();
+  resolveRefs([{ id: filterCodex.id, provider: 'codex' }]);
+  await initializing;
+  assert.deepEqual(fixture.queries, []);
+  assert.equal(fixture.state.terminals.size, 0);
+});
+
+test('automatic refresh waits for provider preferences before reading any history', async () => {
+  let resolveProviders;
+  const fixture = makeFilterFixture({
+    saved: new Map([['session-provider-filter', '["claude"]']]),
+    ListAgentProviders: () => new Promise((resolve) => { resolveProviders = resolve; }),
+  });
+  fixture.controller.start();
+  const initializing = fixture.controller.initialize();
+  await fixture.controller.autoRefreshSessions();
+  const earlyQueries = fixture.queries.slice();
+  resolveProviders(filterAgents);
+  await initializing;
+  await fixture.controller.autoRefreshSessions();
+  assert.deepEqual(earlyQueries, []);
+  assert.ok(fixture.queries.every((ids) => JSON.stringify(ids) === '["claude"]'));
+});
+
+test('automatic refresh cannot cancel a user initiated Claude history preflight', async () => {
+  let launches = 0;
+  const fixture = makeFilterFixture({
+    saved: new Map([['session-provider-filter', '["codex"]']]),
+    StartNew: async () => { launches++; return 'new-claude'; },
+  });
+  await fixture.controller.initialize();
+  fixture.controller.start();
+  const resolveReads = [];
+  let reads = 0;
+  fixture.backend.ListSessionsForProviders = () => { reads++; return new Promise((resolve) => { resolveReads.push(resolve); }); };
+  const launch = fixture.controller.startNew('work', 'claude');
+  const refresh = fixture.controller.autoRefreshSessions();
+  for (const resolve of resolveReads) resolve({ sessions: [filterClaude], succeededProviders: ['claude'], warnings: [] });
+  await Promise.all([launch, refresh]);
+  assert.equal(reads, 1);
+  assert.equal(launches, 1);
+  assert.deepEqual(fixture.adoptionCalls, []);
+});
 
 function renderProjectGroups(
   projects,
@@ -262,6 +499,53 @@ test('listSig tracks time as well as id, directory, and name', () => {
   assert.notEqual(listSig(first), listSig([session('b', 'work', 'A')]));
   assert.notEqual(listSig(first), listSig([session('a', 'other', 'A')]));
   assert.notEqual(listSig(first), listSig([session('a', 'work', 'B')]));
+});
+
+test('Claude pending sessions never pair with Codex history in the same directory', () => {
+  const pending = [{ token: 'new-1', dir: 'C:/work' }];
+  const newToReal = new Map();
+  const remaining = pairPendingSessions({ pending, lastLoaded: [], list: [
+    { id: 'codex:existing', provider: 'codex', dir: 'C:/work' },
+  ], newToReal, realToNew: new Map() });
+  assert.deepEqual(remaining, pending);
+  assert.equal(newToReal.size, 0);
+});
+
+test('Codex temporary terminals remain visible without adopting new history', async () => {
+  const calls = [];
+  const f = makeFixture({ StartNewAgent: async (provider, dir) => {
+    calls.push([provider, dir]); return 'new-codex-1';
+  } });
+  await f.controller.startNew('C:/work', 'codex');
+  assert.deepEqual(calls, [['codex', 'C:/work']]);
+  assert.equal(f.state.terminals.get('new-codex-1').provider, 'codex');
+  assert.equal(f.state.pendingNew[0].provider, 'codex');
+  const row = f.listRoot.children[0].children[1].children[0];
+  assert.equal(row.dataset.id, 'new-codex-1');
+  await f.controller.pairNewSessions([{ id: 'codex:real', provider: 'codex', dir: 'C:/work' }]);
+  assert.equal(f.adoptionCalls.length, 0);
+  assert.equal(f.state.pendingNew.length, 1);
+  f.controller.handleTerminalExit('new-codex-1');
+  assert.equal(f.state.pendingNew.length, 0);
+});
+
+test('project plus offers registered agents and routes Codex to its backend', async () => {
+  const calls = [];
+  const f = makeFixture({
+    projectResults: [['C:/work']],
+    ListAgentProviders: async () => [
+      { id: 'claude', name: 'Claude', hasUsage: true, hasStatus: true },
+      { id: 'codex', name: 'Codex', hasUsage: false, hasStatus: false },
+    ],
+    StartNewAgent: async (provider, dir) => { calls.push([provider, dir]); return 'new-codex-menu'; },
+  });
+  await f.controller.initialize();
+  const plus = f.listRoot.children[0].children[0].children.find((node) => node.className === 'plus');
+  plus.click();
+  const menu = f.documentRef.body.children.find((node) => node.id === 'ctx-menu');
+  assert.deepEqual(menu.children.map((node) => node.textContent), ['新建 Claude 会话', '新建 Codex 会话']);
+  await menu.children[1].click();
+  assert.deepEqual(calls, [['codex', 'C:/work']]);
 });
 
 test('session rows keep their custom context menu and prevent the native menu', () => {
@@ -1048,6 +1332,53 @@ test('rename updates the mapped temporary terminal label', async () => {
   assert.equal(fixture.state.terminals.get('new-real').labelText, 'Renamed');
 });
 
+test('native rename rejects blank names and preserves UI after native failure', async () => {
+  let calls = 0;
+  const blank = makeFixture({ prompt: () => '   ', RenameSession: async () => { calls++; } });
+  await blank.controller.renameSession(session('real', 'work', 'Old'));
+  assert.equal(calls, 0);
+  assert.equal(blank.statuses.at(-1).message, '会话名称不能为空');
+  const failed = makeFixture({ RenameSession: async () => { throw new Error('native denied'); } });
+  failed.terminalController.openTab('real', 'Old');
+  await failed.controller.renameSession(session('real', 'work', 'Old'));
+  assert.equal(failed.state.terminals.get('real').labelText, 'Old');
+  assert.equal(failed.state.sessionNames.has('real'), false);
+  assert.equal(failed.listCalls.length, 0);
+  assert.match(failed.statuses.at(-1).message, /native denied/);
+});
+
+test('Codex native rename uses the provider key and refreshes authoritative names', async () => {
+  const key = 'codex:01900000-0000-7000-8000-000000000001';
+  const title = '中文 "名字" C:\\work & $(literal)';
+  const calls = [];
+  const fixture = makeFixture({
+    prompt: (message) => { assert.match(message, /原生/); return ' ' + title + ' '; },
+    RenameSession: async (...args) => { calls.push(args); },
+    listResults: [[{ ...session(key, 'work', title), provider: 'codex' }]],
+  });
+  fixture.terminalController.openTab(key, 'Old');
+  await fixture.controller.renameSession({ ...session(key, 'work', 'Old'), provider: 'codex' });
+  assert.deepEqual(calls, [[key, title]]);
+  assert.equal(fixture.state.terminals.get(key).labelText, title);
+  assert.equal(fixture.state.sessionNames.get(key), title);
+  assert.equal(fixture.listCalls.length, 1);
+});
+
+test('successful native rename preserves its name and warns when history refresh fails', async () => {
+  let calls = 0;
+  const fixture = makeFixture({
+    RenameSession: async () => { calls++; },
+    listResults: [new Error('history unavailable')],
+  });
+  fixture.terminalController.openTab('real', 'Old');
+  await fixture.controller.renameSession(session('real', 'work', 'Old'));
+  assert.equal(calls, 1);
+  assert.equal(fixture.state.terminals.get('real').labelText, 'Renamed');
+  assert.equal(fixture.state.sessionNames.get('real'), 'Renamed');
+  assert.equal(fixture.statuses.at(-1).kind, 'warn');
+  assert.match(fixture.statuses.at(-1).message, /原生重命名成功.*列表刷新失败/);
+});
+
 test('closing mapped real id marks real closed before closing mapped token', () => {
   const fixture = makeFixture();
   fixture.state.realToNew.set('real', 'new-real');
@@ -1064,19 +1395,23 @@ test('auto refresh skips unchanged signatures, guards reentry, and recovers afte
   let resolveList;
   const first = [session('a')];
   const fixture = makeFixture({ listResults: [first, first, [session('a', 'work', 'Changed')], new Error('offline'), [session('b')]] });
-  await fixture.controller.autoRefreshSessions();
+  await fixture.controller.initialize();
   const firstRender = fixture.renderCount;
   await fixture.controller.autoRefreshSessions();
   assert.equal(fixture.renderCount, firstRender);
 
   const pending = new Promise((resolve) => { resolveList = resolve; });
-  const concurrent = makeFixture({ listWait: pending });
+  const concurrent = makeFixture();
+  await concurrent.controller.initialize();
+  const initialCalls = concurrent.listCalls.length;
+  const initialRenders = concurrent.renderCount;
+  concurrent.backend.ListSessions = async () => { concurrent.listCalls.push(true); return pending; };
   const firstRequest = concurrent.controller.autoRefreshSessions();
   const secondRequest = concurrent.controller.autoRefreshSessions();
-  assert.equal(concurrent.listCalls.length, 1);
+  assert.equal(concurrent.listCalls.length - initialCalls, 1);
   resolveList([]);
   await Promise.all([firstRequest, secondRequest]);
-  assert.equal(concurrent.renderCount, 1);
+  assert.equal(concurrent.renderCount, initialRenders);
 
   await fixture.controller.autoRefreshSessions();
   await assert.rejects(fixture.controller.autoRefreshSessions(), /offline/);
@@ -1106,4 +1441,57 @@ test('initialize continues restoring later open sessions after one failure', asy
   });
   await fixture.controller.initialize();
   assert.deepEqual(started, ['one', 'two']);
+});
+
+function iconTestElement(tag, className, text) {
+  const node = new FakeNode();
+  node.className = className;
+  node.textContent = text || '';
+  return node;
+}
+
+test('session rows combine provider and status on the left without a duplicate right icon', () => {
+  const listRoot = new FakeNode();
+  const state = createAppState();
+  state.agentProviders.set('future', { name: '<Future Agent>' });
+  renderSessionList({
+    listRoot,
+    list: [session('claude'), { ...session('codex'), provider: 'codex', temporary: true },
+      { ...session('future'), provider: 'future' }],
+    state, agentController: { classifyAgent: () => 'idle' }, el: iconTestElement,
+    onStartNew() {}, onToggleGroup() {}, onOpen() {}, onClose() {}, onContextMenu() {},
+  });
+  const rows = listRoot.children[0].children[1].children;
+  for (const [index, provider] of ['Claude', 'Codex'].entries()) {
+    const nameRow = rows[index].children[0];
+    assert.equal(nameRow.children.length, 3); // status, name, close
+    const source = nameRow.children[0];
+    assert.equal(source.attributes.get('role'), 'img');
+    assert.match(source.attributes.get('aria-label'), new RegExp(provider + ' · 未打开'));
+    assert.match(source.innerHTML, /<svg aria-hidden="true" focusable="false"/);
+    assert.match(source.innerHTML, /fill="currentColor"/);
+    assert.equal(nameRow.children[1].textContent, provider.toLowerCase());
+    assert.equal(nameRow.children[2].textContent, '×');
+  }
+  assert.equal(rows[0].children[0].children[0].title, 'Claude · 未打开');
+  assert.match(rows[1].children[0].children[0].title, /Codex.*临时终端，重启不自动恢复/);
+  const fallback = rows[2].children[0].children[0];
+  assert.equal(fallback.textContent, '●');
+  assert.equal(fallback.title, '<Future Agent> · 未打开');
+  assert.equal(fallback.innerHTML, '');
+});
+
+test('hidden sessions show product icons without changing names or restore targets', () => {
+  const hiddenPanel = new FakeNode();
+  const list = [session('claude'), { ...session('codex'), provider: 'codex' }];
+  const restored = [];
+  renderHiddenSessions({ hiddenPanel, list, el: iconTestElement,
+    onRestore: (item) => restored.push(item) });
+  for (const [index, provider] of ['Claude', 'Codex'].entries()) {
+    const row = hiddenPanel.children[index];
+    assert.equal(row.children[0].textContent, list[index].name);
+    assert.equal(row.children[1].attributes.get('aria-label'), provider);
+    row.children[3].click();
+  }
+  assert.deepEqual(restored, list);
 });

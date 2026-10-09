@@ -33,7 +33,7 @@ test('sidebar header keeps the eye filter out of the archive controls', () => {
 });
 
 test('sidebar titles are not selectable', () => {
-  assert.match(sidebarCSS, /\.brand,\s*\.project-bar-title\s*\{[^}]*user-select:\s*none/);
+  assert.match(sidebarCSS, /\.provider-filter,\s*\.project-bar-title\s*\{[^}]*user-select:\s*none/);
 });
 
 test('project controls reveal on hover and keyboard focus', () => {

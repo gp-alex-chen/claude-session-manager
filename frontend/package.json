@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --outfile=dist/main.js --minify && node -e \"require('fs').copyFileSync('src/index.html','dist/index.html')\"",
+    "build": "npm run build:claude-helper && esbuild src/main.js --bundle --outfile=dist/main.js --minify && node -e \"require('fs').copyFileSync('src/index.html','dist/index.html')\"",
+    "build:claude-helper": "node scripts/build-claude-helper.js",
     "watch": "esbuild src/main.js --bundle --outfile=dist/main.js --sourcemap --watch",
     "test": "node --test test/*.test.js"
   },
@@ -13,6 +14,7 @@
     "@xterm/xterm": "^5.5.0"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.293",
     "esbuild": "^0.25.0"
   }
 }

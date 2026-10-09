@@ -14,6 +14,11 @@ import (
 // project. SessionFound and ProjectFound distinguish missing data from a real
 // zero-valued report.
 type Summary struct {
+	Provider            string   `json:"provider,omitempty"`
+	RequestCountsKnown  *bool    `json:"request_counts_known,omitempty"`
+	CacheTiersKnown     *bool    `json:"cache_tiers_known,omitempty"`
+	Note                string   `json:"note,omitempty"`
+	Stale               bool     `json:"stale,omitempty"`
 	Latest              *Usage   `json:"latest,omitempty"`
 	SessionTotal        Usage    `json:"session_total"`
 	SessionRequestCount int      `json:"session_request_count"`

@@ -10,10 +10,12 @@ const backend = fs.readFileSync(path.join(frontendDir, 'src/api/backend.js'), 'u
 const expected = [
   'GetAgents', 'GetOpenSessions', 'GetShell', 'ShellInstalled', 'SetShell',
   'NotifyBeep', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
-  'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'OpenFolder', 'TermWrite',
+  'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'StartNewAgent', 'ListAgentProviders', 'OpenFolder', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',
   'LoadPreferences', 'SetPreference',
+  'ListSessionsForProviders', 'ListHiddenSessionsForProviders',
+  'GetOpenSessionRefs',
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
@@ -56,6 +58,18 @@ test('usage wrapper forwards both arguments unchanged', () => {
     binding,
     /export function GetUsageSummary\(sessionID, projectDir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetUsageSummary'\]\(sessionID, projectDir\);\s*\}/,
   );
+});
+
+test('agent creation wrapper forwards provider and directory unchanged', () => {
+  assert.match(binding,
+    /export function StartNewAgent\(provider, dir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['StartNewAgent'\]\(provider, dir\);\s*\}/);
+});
+
+test('provider filtered wrappers forward the source array unchanged', () => {
+  for (const name of ['ListSessionsForProviders', 'ListHiddenSessionsForProviders']) {
+    assert.match(binding, new RegExp(`export function ${name}\\(providers\\)\\s*\\{\\s*return window\\['go'\\]\\['app'\\]\\['App'\\]\\['${name}'\\]\\(providers\\);\\s*\\}`));
+  }
+  assert.match(binding, /export function GetOpenSessionRefs\(\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetOpenSessionRefs'\]\(\);\s*\}/);
 });
 
 test('preference wrapper forwards key and value unchanged', () => {

@@ -1,12 +1,13 @@
 package app
 
-// App 的会话别名、归档与 Shell 设置绑定。
+// App 的原生会话重命名、归档与 Shell 设置绑定。
 
 import (
 	"errors"
 	"sort"
 	"strings"
 
+	"github.com/gp-alex-chen/claude-session-manager/internal/provider"
 	"github.com/gp-alex-chen/claude-session-manager/internal/session"
 )
 
@@ -20,11 +21,15 @@ func (a *App) shellAvailable(name string) bool {
 	return err == nil
 }
 
-// RenameSession 设置/清除会话别名（空串 = 清除，恢复原名）。
-// 注意：只改本软件的显示名；真正重命名请用 claude 会话内的 /rename。
+// RenameSession delegates to the agent's native metadata mutation API.
 func (a *App) RenameSession(id, name string) error {
-	name = strings.TrimSpace(name)
-	return a.store.SetAlias(id, name)
+	ref, err := provider.DecodeKey(id)
+	if err != nil {
+		return err
+	}
+	a.renameMu.Lock()
+	defer a.renameMu.Unlock()
+	return a.providers.Rename(a.runtimeContext(), ref, name)
 }
 
 // DeleteSession 软删除：把会话 ID 记入 hidden，列表不再显示。
@@ -49,11 +54,35 @@ func (a *App) GetOpenSessions() []string {
 	return ids
 }
 
+type OpenSessionRef struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+}
+
+func (a *App) GetOpenSessionRefs() []OpenSessionRef {
+	out := []OpenSessionRef{}
+	for _, key := range a.GetOpenSessions() {
+		ref, err := provider.DecodeKey(key)
+		if err == nil {
+			_, err = a.providers.Lookup(ref.Provider)
+		}
+		if err != nil {
+			a.log("忽略无效恢复会话: " + err.Error())
+			continue
+		}
+		out = append(out, OpenSessionRef{ID: key, Provider: string(ref.Provider)})
+	}
+	return out
+}
+
 // AdoptSession preserves the runtime token used by the terminal while making
 // the real Claude session ID available for open-session persistence.
 func (a *App) AdoptSession(runtimeToken, sessionID string) error {
 	runtimeToken = strings.TrimSpace(runtimeToken)
 	sessionID = strings.TrimSpace(sessionID)
+	if strings.HasPrefix(runtimeToken, "new-codex-") {
+		return errors.New("Codex temporary terminals cannot be adopted by directory matching")
+	}
 	if runtimeToken == "" || sessionID == "" {
 		return errors.New("runtime token and session ID are required")
 	}

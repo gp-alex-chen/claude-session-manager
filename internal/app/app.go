@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/agent"
 	"github.com/gp-alex-chen/claude-session-manager/internal/notify"
+	"github.com/gp-alex-chen/claude-session-manager/internal/provider"
 	"github.com/gp-alex-chen/claude-session-manager/internal/session"
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 	"github.com/gp-alex-chen/claude-session-manager/internal/terminal"
@@ -21,34 +25,41 @@ import (
 )
 
 type SessionInfo struct {
-	ID   string `json:"id"`
-	Dir  string `json:"dir"`
-	Name string `json:"name"`
-	Time string `json:"time"`
+	ID       string `json:"id"`
+	Dir      string `json:"dir"`
+	Name     string `json:"name"`
+	Time     string `json:"time"`
+	Provider string `json:"provider"`
+	RawID    string `json:"rawId"`
 }
 
 type pendingAdoption struct {
-	id    string
-	count int
+	id        string
+	count     int
 	cancelled atomic.Bool
 }
 
 type App struct {
-	lifecycleMu  sync.Mutex
-	adoptionMu   sync.Mutex
-	ctx          context.Context
-	terms        *terminal.Manager
-	store        *state.Store
-	watcher      *agent.Watcher
-	lifecycleID  uint64
-	lookPath     func(string) (string, error)
-	debugLog     func(string)
-	startPTYFn   func(string, string, string) error
-	chooseDirFn  func(context.Context, runtime.OpenDialogOptions) (string, error)
-	usageScanner *usage.Scanner
-	sessionCatalog *session.Catalog
-	pendingAdoptions map[string]*pendingAdoption
+	launchMu           sync.Mutex
+	renameMu           sync.Mutex
+	lifecycleMu        sync.Mutex
+	adoptionMu         sync.Mutex
+	ctx                context.Context
+	cancelLifecycle    context.CancelFunc
+	terms              *terminal.Manager
+	store              *state.Store
+	watcher            *agent.Watcher
+	lifecycleID        uint64
+	lookPath           func(string) (string, error)
+	debugLog           func(string)
+	startPTYFn         func(string, string, string) error
+	chooseDirFn        func(context.Context, runtime.OpenDialogOptions) (string, error)
+	usageScanner       *usage.Scanner
+	providers          *provider.Registry
+	sessionCatalog     *session.Catalog
+	pendingAdoptions   map[string]*pendingAdoption
 	cancelledAdoptions map[string]struct{}
+	statusChanged      chan struct{}
 }
 
 func NewApp() *App {
@@ -60,19 +71,21 @@ func NewAppWithStore(store *state.Store) *App {
 		store = state.Default()
 	}
 	a := &App{
-		store:        store,
-		lookPath:     exec.LookPath,
-		debugLog:     agent.DebugLog,
-		chooseDirFn:  runtime.OpenDirectoryDialog,
-		usageScanner: defaultUsageScanner(),
-		sessionCatalog: defaultSessionCatalog(),
-		pendingAdoptions: make(map[string]*pendingAdoption),
+		store:              store,
+		lookPath:           exec.LookPath,
+		debugLog:           agent.DebugLog,
+		chooseDirFn:        runtime.OpenDirectoryDialog,
+		usageScanner:       defaultUsageScanner(),
+		sessionCatalog:     defaultSessionCatalog(),
+		pendingAdoptions:   make(map[string]*pendingAdoption),
 		cancelledAdoptions: make(map[string]struct{}),
+		statusChanged:      make(chan struct{}, 1),
 	}
 	a.terms = terminal.NewManager(terminal.Callbacks{}, func(ids []string) error {
 		return a.store.SaveOpen(ids)
 	})
 	a.terms.SetPersistErrorHandler(func(err error) { a.log("持久化打开会话失败: " + err.Error()) })
+	a.providers = a.newProviderRegistry(true)
 	return a
 }
 
@@ -96,18 +109,24 @@ func (a *App) startup(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	watcher := agent.NewWatcher(func(list []agent.AgentInfo) {
-		runtime.EventsEmit(ctx, "agents:update", list)
+	ctx, cancel := context.WithCancel(ctx)
+	watcher := agent.NewWatcher(func([]agent.AgentInfo) {
+		a.emitAgentUpdate(ctx)
 	})
 	// Register the candidate before stopping the old watcher. Stop may wait on
 	// its fetch loop, so it must never run while lifecycleMu is held.
 	a.lifecycleMu.Lock()
 	old := a.watcher
+	oldCancel := a.cancelLifecycle
 	a.lifecycleID++
 	lifecycleID := a.lifecycleID
 	a.ctx = ctx
+	a.cancelLifecycle = cancel
 	a.watcher = watcher
 	a.lifecycleMu.Unlock()
+	if oldCancel != nil {
+		oldCancel()
+	}
 	if old != nil {
 		old.Stop()
 	}
@@ -121,94 +140,145 @@ func (a *App) startup(ctx context.Context) {
 			Exit: func(token string) { runtime.EventsEmit(ctx, "term:exit", token) },
 		})
 		watcher.Start(ctx)
+		go a.watchProviderUpdates(ctx)
 	}
 	a.lifecycleMu.Unlock()
+	if !current {
+		cancel()
+	}
 }
 func (a *App) shutdown(context.Context) {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
 	a.lifecycleMu.Lock()
 	watcher := a.watcher
+	cancel := a.cancelLifecycle
 	a.lifecycleID++
 	a.watcher = nil
 	a.ctx = nil
+	a.cancelLifecycle = nil
 	a.lifecycleMu.Unlock()
 	if watcher != nil {
 		watcher.Stop()
 	}
 	a.closeAllTerms()
+	if cancel != nil {
+		cancel()
+	}
 }
 func (a *App) Startup(ctx context.Context)  { a.startup(ctx) }
 func (a *App) Shutdown(ctx context.Context) { a.shutdown(ctx) }
 func (a *App) ListSessions() []SessionInfo {
+	return a.listProviderSessions(false, nil).Sessions
+}
+
+type ProviderSessionsResult struct {
+	Sessions           []SessionInfo `json:"sessions"`
+	SucceededProviders []string      `json:"succeededProviders"`
+	Warnings           []string      `json:"warnings"`
+}
+
+func (a *App) ListSessionsForProviders(ids []string) (ProviderSessionsResult, error) {
+	return a.filteredProviderSessions(false, ids)
+}
+func (a *App) ListHiddenSessionsForProviders(ids []string) (ProviderSessionsResult, error) {
+	return a.filteredProviderSessions(true, ids)
+}
+func (a *App) filteredProviderSessions(hidden bool, ids []string) (ProviderSessionsResult, error) {
+	if len(ids) == 0 {
+		return ProviderSessionsResult{}, errors.New("至少选择一种会话来源")
+	}
+	out := make([]provider.ID, 0, len(ids))
+	seen := make(map[string]bool)
+	for _, id := range ids {
+		if _, err := a.providers.Lookup(provider.ID(id)); err != nil {
+			return ProviderSessionsResult{}, err
+		}
+		if !seen[id] {
+			out = append(out, provider.ID(id))
+			seen[id] = true
+		}
+	}
+	return a.listProviderSessions(hidden, out), nil
+}
+func (a *App) listProviderSessions(wantHidden bool, ids []provider.ID) ProviderSessionsResult {
+	result := ProviderSessionsResult{Sessions: []SessionInfo{}, SucceededProviders: []string{}, Warnings: []string{}}
 	st, err := a.store.Load()
 	if err != nil {
 		a.DebugLog("读取 favorites.json 失败: " + err.Error())
 	}
 	hidden, aliases := st.HiddenSet(), st.Aliases
 	out := []SessionInfo{}
-	for _, s := range a.sessionSnapshot() {
-		if hidden[s.ID] {
+	list, succeeded, warnings := a.providers.QuerySessions(a.runtimeContext(), ids)
+	for _, id := range succeeded {
+		result.SucceededProviders = append(result.SucceededProviders, string(id))
+	}
+	for _, warning := range warnings {
+		a.log("读取会话目录失败: " + warning.Error())
+		result.Warnings = append(result.Warnings, warning.Error())
+	}
+	sort.SliceStable(list, func(i, j int) bool { return list[i].Time.After(list[j].Time) })
+	for _, s := range list {
+		key, err := provider.EncodeKey(s.Ref)
+		if err != nil {
 			continue
 		}
-		name := session.DisplayName(s)
-		if n := aliases[s.ID]; n != "" {
+		if hidden[key] != wantHidden {
+			continue
+		}
+		name := s.Name
+		p, _ := a.providers.Lookup(s.Ref.Provider)
+		_, nativeRename := p.(provider.RenameProvider)
+		if n := aliases[key]; n != "" && !nativeRename {
 			name = n
 		}
-		out = append(out, SessionInfo{s.ID, s.Dir, name, s.Time.Format("01-02 15:04")})
+		out = append(out, SessionInfo{ID: key, Dir: s.Dir, Name: name, Time: s.Time.Format("01-02 15:04"), Provider: string(s.Ref.Provider), RawID: s.Ref.ID})
 	}
-	return out
+	result.Sessions = out
+	return result
 }
 func (a *App) ListHiddenSessions() []SessionInfo {
-	st, err := a.store.Load()
-	if err != nil {
-		a.DebugLog("读取 favorites.json 失败: " + err.Error())
-	}
-	hidden := st.HiddenSet()
-	out := []SessionInfo{}
-	for _, s := range a.sessionSnapshot() {
-		if !hidden[s.ID] {
-			continue
-		}
-		name := session.DisplayName(s)
-		if n := st.Aliases[s.ID]; n != "" {
-			name = n
-		}
-		out = append(out, SessionInfo{s.ID, s.Dir, name, s.Time.Format("01-02 15:04")})
-	}
-	return out
+	return a.listProviderSessions(true, nil).Sessions
 }
 func (a *App) sessionSnapshot() []*session.Session {
-	if a.sessionCatalog == nil {
-		return nil
-	}
-	snapshot := a.sessionCatalog.Snapshot()
-	for _, warning := range a.sessionCatalog.TakeWarnings() {
-		a.log("读取会话目录失败: " + warning)
+	snapshot, err := a.sessionSnapshotDetailed()
+	if err != nil {
+		a.log("读取会话目录失败: " + err.Error())
 	}
 	return snapshot
 }
+func (a *App) sessionSnapshotDetailed() ([]*session.Session, error) {
+	if a.sessionCatalog == nil {
+		return nil, errors.New("Claude 会话目录不可用")
+	}
+	snapshot, warnings := a.sessionCatalog.SnapshotWithWarnings()
+	if len(warnings) != 0 {
+		return snapshot, errors.New(strings.Join(warnings, "; "))
+	}
+	return snapshot, nil
+}
 func (a *App) StartSession(id, dir string) (string, error) {
-	if err := validateSessionID(id); err != nil {
+	ref, err := provider.DecodeKey(id)
+	if err != nil {
 		return "", err
 	}
 	if a.terms.IsRunning(id) {
 		return id, nil
 	}
-	cmdLine, err := a.claudeCmd(id)
-	if err != nil {
-		return "", err
-	}
-	if err := a.startPTY(id, cmdLine, dir); err != nil {
+	if err := a.startAgentPTY(id, ref.Provider, &ref, dir); err != nil {
 		return "", err
 	}
 	return id, nil
 }
 func (a *App) StartNew(dir string) (string, error) {
+	return a.StartNewAgent(string(provider.Claude), dir)
+}
+func (a *App) StartNewAgent(agentID, dir string) (string, error) {
 	token := "new-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	cmdLine, err := a.claudeCmd("")
-	if err != nil {
-		return "", err
+	if agentID != string(provider.Claude) {
+		token = "new-" + agentID + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	}
-	if err := a.startPTY(token, cmdLine, dir); err != nil {
+	if err := a.startAgentPTY(token, provider.ID(agentID), nil, dir); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -240,7 +310,7 @@ func (a *App) TermKill(token string) {
 		a.terms.Kill(token)
 	}
 }
-func (a *App) NotifyBeep()                             { notify.Beep() }
+func (a *App) NotifyBeep() { notify.Beep() }
 func (a *App) persistOpenSessions() error {
 	if a.store == nil || a.terms == nil {
 		return nil
@@ -257,19 +327,42 @@ func (a *App) claudeCmd(sessionID string) (string, error) {
 			return "", err
 		}
 	}
+	var ref *provider.SessionRef
+	if sessionID != "" {
+		ref = &provider.SessionRef{Provider: provider.Claude, ID: sessionID}
+	}
+	return a.providerCommand(provider.Claude, ref, "")
+}
+func (a *App) providerCommand(agentID provider.ID, ref *provider.SessionRef, dir string) (string, error) {
+	spec, err := a.providers.PrepareLaunch(a.runtimeContext(), agentID, provider.OpenRequest{Ref: ref, Dir: dir})
+	if err != nil {
+		return "", err
+	}
+	return a.renderAgentCommand(agentID, spec)
+}
+
+func (a *App) renderAgentCommand(agentID provider.ID, spec provider.LaunchSpec) (string, error) {
+	// Preserve legacy Claude startup; new providers fail before a PTY is
+	// created when their executable is unavailable.
+	if agentID != provider.Claude {
+		if _, err := a.lookPath(spec.Command); err != nil {
+			return "", fmt.Errorf("未检测到 %s CLI，请先安装并加入 PATH", agentID)
+		}
+	}
+	command := spec.Command
+	if len(spec.Args) > 0 {
+		command += " " + strings.Join(spec.Args, " ")
+	}
 	if a.GetShell() == "pwsh" {
 		if a.shellAvailable("pwsh") {
-			if sessionID == "" {
-				return `pwsh -NoLogo -NoExit -Command "claude "`, nil
+			if len(spec.Args) == 0 {
+				command += " "
 			}
-			return `pwsh -NoLogo -NoExit -Command "claude -r ` + sessionID + `"`, nil
+			return `pwsh -NoLogo -NoExit -Command "` + command + `"`, nil
 		}
 		a.DebugLog("pwsh 当前不可用，会话回退 cmd 启动")
 	}
-	if sessionID == "" {
-		return "cmd /c claude", nil
-	}
-	return "cmd /c claude -r " + sessionID, nil
+	return "cmd /c " + command, nil
 }
 func (a *App) log(msg string) {
 	if a.debugLog != nil {
@@ -286,7 +379,7 @@ func (a *App) runtimeContext() context.Context {
 	}
 	return ctx
 }
-func (a *App) GetAgents() []agent.AgentInfo {
+func (a *App) claudeAgents(context.Context) []agent.AgentInfo {
 	a.lifecycleMu.Lock()
 	watcher := a.watcher
 	ctx := a.ctx
@@ -306,6 +399,21 @@ func (a *App) GetVersion() string { return Version }
 // user home cannot be resolved, the scanner is unavailable rather than
 // falling back to a relative path that could scan the current directory.
 func (a *App) GetUsageSummary(sessionID, projectDir string) usage.Summary {
+	ref := provider.SessionRef{Provider: provider.Claude, ID: sessionID}
+	if sessionID != "" {
+		var err error
+		if strings.HasPrefix(sessionID, "new-codex-") {
+			ref = provider.SessionRef{Provider: provider.Codex, ID: sessionID}
+		} else {
+			ref, err = provider.DecodeKey(sessionID)
+		}
+		if err != nil {
+			return usage.Summary{Warnings: []string{err.Error()}}
+		}
+	}
+	return a.providers.Usage(a.runtimeContext(), ref, projectDir)
+}
+func (a *App) claudeUsage(sessionID, projectDir string) usage.Summary {
 	if a.usageScanner == nil {
 		return usage.Summary{Warnings: []string{"usage scanner unavailable"}}
 	}

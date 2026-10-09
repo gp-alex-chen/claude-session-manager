@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gp-alex-chen/claude-session-manager/internal/session"
 	"github.com/UserExistsError/conpty"
+	"github.com/gp-alex-chen/claude-session-manager/internal/session"
 )
 
 // Pty is the small process surface needed by Manager. Tests inject a fake;
@@ -27,10 +27,11 @@ type Pty interface {
 type StartFunc func(cmdLine, dir string, cols, rows int, env []string) (Pty, error)
 
 type ptyRef struct {
-	mu     sync.Mutex
-	opMu   sync.Mutex // Write/Resize/Close are mutually exclusive at the call site.
-	pty    Pty
-	closed bool
+	mu            sync.Mutex
+	opMu          sync.Mutex // Write/Resize/Close are mutually exclusive at the call site.
+	pty           Pty
+	closed        bool
+	resourceClose func()
 }
 
 func (r *ptyRef) Close() {
@@ -43,8 +44,12 @@ func (r *ptyRef) Close() {
 	}
 	r.closed = true
 	p := r.pty
+	cleanup := r.resourceClose
 	r.mu.Unlock()
 	_ = p.Close()
+	if cleanup != nil {
+		cleanup()
+	}
 }
 
 func (r *ptyRef) Closed() bool {
@@ -463,6 +468,13 @@ func (m *Manager) CloseAllWithPendingAndForget(pending, forget []string) {
 }
 
 func (m *Manager) Start(token, cmdLine, dir string) error {
+	return m.StartWithOptions(token, cmdLine, dir, nil, nil)
+}
+
+// StartWithOptions transfers cleanup ownership only when the PTY starts.
+// The caller closes its resource on failure; all successful teardown paths
+// use ptyRef.Close, including reader exit, replacement, Kill and shutdown.
+func (m *Manager) StartWithOptions(token, cmdLine, dir string, overrides []string, cleanup func()) error {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 	m.retryPersistenceLocked()
@@ -472,19 +484,16 @@ func (m *Manager) Start(token, cmdLine, dir string) error {
 	old := m.terms[token]
 	start := m.start
 	m.mu.Unlock()
-	env := make([]string, 0, len(os.Environ())+1)
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "NO_COLOR=") {
-			env = append(env, e)
-		}
+	env, err := terminalEnvironment(os.Environ(), overrides)
+	if err != nil {
+		return err
 	}
-	env = append(env, "TERM=xterm-256color")
 	// Create first: if startup fails, old remains the current live instance.
 	pty, err := start(cmdLine, dir, cols, rows, env)
 	if err != nil {
 		return err
 	}
-	r := &ptyRef{pty: pty}
+	r := &ptyRef{pty: pty, resourceClose: cleanup}
 	m.mu.Lock()
 	m.terms[token] = r
 	if old == nil {
@@ -500,6 +509,35 @@ func (m *Manager) Start(token, cmdLine, dir string) error {
 	m.persistAndReport(ids)
 	m.readLoop(token, r)
 	return nil
+}
+
+func terminalEnvironment(inherited, overrides []string) ([]string, error) {
+	replacements := map[string]string{"TERM": "TERM=xterm-256color"}
+	for _, entry := range overrides {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || name == "" || strings.ContainsAny(name, "\x00\r\n") || strings.ContainsRune(value, 0) {
+			return nil, errors.New("invalid terminal environment override")
+		}
+		replacements[strings.ToUpper(name)] = entry
+	}
+	out := make([]string, 0, len(inherited)+len(replacements))
+	for _, entry := range inherited {
+		name, _, _ := strings.Cut(entry, "=")
+		if key := strings.ToUpper(name); key != "NO_COLOR" {
+			if _, replaced := replacements[key]; !replaced {
+				out = append(out, entry)
+			}
+		}
+	}
+	keys := make([]string, 0, len(replacements))
+	for key := range replacements {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		out = append(out, replacements[key])
+	}
+	return out, nil
 }
 
 func (m *Manager) readLoop(token string, r *ptyRef) {

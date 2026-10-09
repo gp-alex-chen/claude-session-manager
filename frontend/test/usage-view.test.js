@@ -85,6 +85,20 @@ const complete = {
   },
 };
 
+test('Codex details show session usage and leave unknown requests and cache tiers unavailable', () => {
+  const f = makeFixture();
+  const summary = { ...complete, provider: 'codex', project_found: false,
+    request_counts_known: false, cache_tiers_known: false,
+    note: '当前会话累计；项目汇总与请求次数暂无数据' };
+  f.view.render({ panes: [{ id: 'pane-0', token: 'codex:uuid' }],
+    usageByToken: new Map([['codex:uuid', { summary }]]) });
+  const text = textOf(f.surfaces[0].usageDetails);
+  assert.match(text, /请求数 — —/);
+  assert.match(text, /最近请求/);
+  assert.match(text, /缓存层级 · 暂无细分数据/);
+  assert.match(text, /项目汇总与请求次数暂无数据/);
+});
+
 test('per-pane view renders each session usage independently', () => {
   const fixture = makeFixture(['pane-0', 'pane-1']);
   fixture.view.render({
