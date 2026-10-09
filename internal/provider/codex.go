@@ -61,6 +61,12 @@ func (p *CodexAdapter) ListSessions(ctx context.Context) ([]Session, error) {
 	return append([]Session(nil), p.cached...), err
 }
 
+func (p *CodexAdapter) invalidateHistory() {
+	p.mu.Lock()
+	p.lastRead = time.Time{}
+	p.mu.Unlock()
+}
+
 func (p *CodexAdapter) Rename(ctx context.Context, id, name string) error {
 	if err := p.ValidateSessionID(id); err != nil {
 		return err

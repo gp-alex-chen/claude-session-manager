@@ -89,10 +89,15 @@ func (a *App) UpdateToLatest() error {
 }
 
 func (a *App) applyDownloadedUpdate(downloaded string, apply func(string, bool) error, onReady func()) error {
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
+	a.codexStatusLocked(a.runtimeContext(), true)
 	if err := a.persistOpenSessions(); err != nil {
 		a.log("更新前持久化打开会话失败: " + err.Error())
 		return fmt.Errorf("无法保存打开的会话，已取消更新: %w", err)
 	}
+	a.sealProviderRestoration()
+	a.codexStatusLocked(a.runtimeContext(), true)
 	a.closeAllTerms()
 	if onReady != nil {
 		onReady()

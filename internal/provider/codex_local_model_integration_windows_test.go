@@ -100,7 +100,8 @@ func TestCodexNativeTokenUsageLocalModelIntegration(t *testing.T) {
 	defer cancel()
 	changed := make(chan struct{}, 1)
 	lookup := func(string) (string, error) { return bin, nil }
-	live := NewCodexLive(NewCodex(nil), codexRelayFactoryWithStderr(lookup, env, diagnostics), func() {
+	rpc := &CodexRPC{Open: func(ctx context.Context) (io.ReadWriteCloser, error) { return openCodexRPCProcess(ctx, bin, env) }}
+	live := NewCodexLive(NewCodex(rpc), codexRelayFactoryWithStderr(lookup, env, diagnostics), func() {
 		select {
 		case changed <- struct{}{}:
 		default:
@@ -197,6 +198,30 @@ func TestCodexNativeTokenUsageLocalModelIntegration(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatalf("local model turn timed out; ready=%v sent=%v typed=%v submitted=%v requests=%d status=%#v", ready.Load(), sent, typed.Load(), submitted, requests.Load(), statuses)
 		}
+	}
+	ids, err := live.RestorableSessions(ctx, true)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("completed native thread was not confirmed by official history: %v %v", ids, err)
+	}
+	live.SealRestoration()
+	once.Do(func() { p.Close() })
+	spec.Close()
+	conn, err := rpc.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	r := newRPCSession(ctx, conn)
+	var initialized map[string]any
+	if err := r.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "saved_thread_restore_test", "version": "test"}}, &initialized); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("{\"method\":\"initialized\"}\n")); err != nil {
+		t.Fatal(err)
+	}
+	var restored struct{ Thread struct{ ID string } }
+	if err := r.call("thread/resume", map[string]string{"threadId": ids[0]}, &restored); err != nil || restored.Thread.ID != ids[0] {
+		t.Fatalf("saved native thread could not resume after shutdown: %v %v", restored, err)
 	}
 }
 

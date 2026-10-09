@@ -66,8 +66,9 @@ func codexIntegrationFixture(t *testing.T) (bin, home, project, id string, env [
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(version)) != "codex-cli 0.161.0" {
-		t.Skip("synthetic rollout fixture is versioned for codex-cli 0.161.0; actual " + strings.TrimSpace(string(version)))
+	cliVersion := strings.TrimPrefix(strings.TrimSpace(string(version)), "codex-cli ")
+	if cliVersion != "0.161.0" && cliVersion != "0.162.0" {
+		t.Skip("synthetic rollout fixture supports codex-cli 0.161.0/0.162.0; actual " + strings.TrimSpace(string(version)))
 	}
 	root := t.TempDir()
 	home, project = filepath.Join(root, "home"), filepath.Join(root, "project")
@@ -80,7 +81,7 @@ func codexIntegrationFixture(t *testing.T) (bin, home, project, id string, env [
 		t.Fatal(err)
 	}
 	records := []map[string]any{
-		{"timestamp": "2026-10-08T00:00:00Z", "type": "session_meta", "payload": map[string]any{"id": id, "timestamp": "2026-10-08T00:00:00Z", "cwd": project, "originator": "codex_cli_rs", "cli_version": "0.161.0", "source": "cli", "model_provider": "openai"}},
+		{"timestamp": "2026-10-08T00:00:00Z", "type": "session_meta", "payload": map[string]any{"id": id, "timestamp": "2026-10-08T00:00:00Z", "cwd": project, "originator": "codex_cli_rs", "cli_version": cliVersion, "source": "cli", "model_provider": "openai"}},
 		{"timestamp": "2026-10-08T00:00:01Z", "type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "content": []map[string]string{{"type": "input_text", "text": "SYNTHETIC_HISTORY_ONLY"}}}},
 		{"timestamp": "2026-10-08T00:00:01Z", "type": "event_msg", "payload": map[string]any{"type": "user_message", "message": "SYNTHETIC_HISTORY_ONLY", "images": []string{}}},
 	}

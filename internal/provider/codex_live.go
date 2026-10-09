@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/agent"
 	"github.com/gp-alex-chen/claude-session-manager/internal/usage"
@@ -27,6 +28,12 @@ type CodexLive struct {
 
 func NewCodexLive(base *CodexAdapter, open CodexRelayFactory, changed func()) *CodexLive {
 	return &CodexLive{CodexAdapter: base, open: open, changed: changed, records: make(map[string]*codexObservation)}
+}
+
+func (p *CodexLive) Descriptor() Descriptor {
+	d := p.CodexAdapter.Descriptor()
+	d.NewSessionRestorable = true
+	return d
 }
 
 func (p *CodexLive) PrepareLaunch(ctx context.Context, req OpenRequest) (LaunchSpec, error) {
@@ -64,7 +71,7 @@ func (p *CodexLive) PrepareLaunch(ctx context.Context, req OpenRequest) (LaunchS
 }
 
 func (p *CodexLive) observe(token, dir string) *codexObservation {
-	o := &codexObservation{owner: p, token: token, dir: dir, active: true, state: "unknown", pending: make(map[string]string)}
+	o := &codexObservation{owner: p, token: token, dir: dir, active: true, state: "unknown", pending: make(map[string]codexIdentityRequest)}
 	p.mu.Lock()
 	p.sequence++
 	o.sequence = p.sequence
@@ -92,6 +99,61 @@ func (p *CodexLive) notify() {
 	}
 }
 
+func (p *CodexLive) SealRestoration() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, o := range p.records {
+		o.mu.Lock()
+		o.closing = true
+		o.mu.Unlock()
+	}
+}
+
+func (p *CodexLive) RestorableSessions(ctx context.Context, force bool) ([]string, error) {
+	p.mu.Lock()
+	records := make([]*codexObservation, 0, len(p.records))
+	for _, o := range p.records {
+		records = append(records, o)
+	}
+	p.mu.Unlock()
+	needsHistory := false
+	for _, o := range records {
+		o.mu.Lock()
+		needsHistory = needsHistory || (o.active && o.id != "" && !o.saved)
+		o.mu.Unlock()
+	}
+	var history []Session
+	var err error
+	if needsHistory {
+		if force {
+			p.invalidateHistory()
+		}
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		history, err = p.ListSessions(ctx)
+	}
+	ids := map[string]bool{}
+	for _, s := range history {
+		if s.Ref.Provider == Codex {
+			ids[s.Ref.ID] = true
+		}
+	}
+	out := []string{}
+	for _, o := range records {
+		o.mu.Lock()
+		if o.active && o.id != "" {
+			if err == nil && ids[o.id] {
+				o.saved = true
+			}
+			if o.saved {
+				out = append(out, o.id)
+			}
+		}
+		o.mu.Unlock()
+	}
+	return out, err
+}
+
 func (p *CodexLive) Status(context.Context) ([]agent.AgentInfo, error) {
 	p.mu.Lock()
 	records := make([]*codexObservation, 0, len(p.records))
@@ -103,7 +165,7 @@ func (p *CodexLive) Status(context.Context) ([]agent.AgentInfo, error) {
 	for _, o := range records {
 		o.mu.Lock()
 		if o.active && o.id != "" {
-			out = append(out, agent.AgentInfo{SessionID: o.id, RuntimeToken: o.token, Provider: string(Codex), Kind: "interactive", State: o.state, Status: o.status, WaitingFor: o.waiting, TurnID: o.turnID, TurnStatus: o.turnStatus, Cwd: o.dir})
+			out = append(out, agent.AgentInfo{SessionID: o.id, RuntimeToken: o.token, Name: o.name, Provider: string(Codex), Kind: "interactive", State: o.state, Status: o.status, WaitingFor: o.waiting, TurnID: o.turnID, TurnStatus: o.turnStatus, Cwd: o.dir})
 		}
 		o.mu.Unlock()
 	}
@@ -147,15 +209,22 @@ func (p *CodexLive) Usage(_ context.Context, id, dir string) (usage.Summary, err
 }
 
 type codexObservation struct {
-	owner                                                      *CodexLive
-	sequence                                                   uint64
-	mu                                                         sync.Mutex
-	token, dir, id, state, status, waiting, turnID, turnStatus string
-	active, connected                                          bool
-	pending                                                    map[string]string
-	early                                                      [][]byte
-	total, last                                                *usage.Usage
-	usageWarning                                               string
+	closing                                                          bool
+	owner                                                            *CodexLive
+	sequence                                                         uint64
+	mu                                                               sync.Mutex
+	token, dir, id, name, state, status, waiting, turnID, turnStatus string
+	active, connected                                                bool
+	saved, saveHint                                                  bool
+	pending                                                          map[string]codexIdentityRequest
+	identitySequence, appliedIdentitySequence                        uint64
+	early                                                            [][]byte
+	total, last                                                      *usage.Usage
+	usageWarning                                                     string
+}
+type codexIdentityRequest struct {
+	expected string
+	sequence uint64
 }
 type observedMessage struct {
 	ID     json.RawMessage `json:"id"`
@@ -181,7 +250,12 @@ func (o *codexObservation) client(data []byte) {
 	}
 	o.mu.Lock()
 	if len(o.pending) < 64 {
-		o.pending[string(m.ID)] = params.ThreadID
+		if o.closing {
+			o.mu.Unlock()
+			return
+		}
+		o.identitySequence++
+		o.pending[string(m.ID)] = codexIdentityRequest{params.ThreadID, o.identitySequence}
 	}
 	o.mu.Unlock()
 }
@@ -192,19 +266,28 @@ func (o *codexObservation) server(data []byte) {
 	}
 	o.mu.Lock()
 	changed := false
-	expected, pending := o.pending[string(m.ID)]
+	if o.closing {
+		o.mu.Unlock()
+		return
+	}
+	request, pending := o.pending[string(m.ID)]
+	expected := request.expected
 	if len(m.ID) > 0 && m.Method == "" && pending {
 		delete(o.pending, string(m.ID))
 		var result struct {
 			Thread struct {
 				ID             string
 				Cwd            string
+				Name           string
+				Ephemeral      bool
 				ParentThreadID *string
 				Status         codexThreadStatus
 			}
 		}
-		if json.Unmarshal(m.Result, &result) == nil && validateRef(SessionRef{Codex, result.Thread.ID}) == nil && result.Thread.ParentThreadID == nil && (expected == "" || expected == result.Thread.ID) {
+		if json.Unmarshal(m.Result, &result) == nil && !result.Thread.Ephemeral && request.sequence >= o.appliedIdentitySequence && validateRef(SessionRef{Codex, result.Thread.ID}) == nil && result.Thread.ParentThreadID == nil && (expected == "" || expected == result.Thread.ID) {
+			o.appliedIdentitySequence = request.sequence
 			if o.id != result.Thread.ID {
+				o.saved = false
 				o.total = nil
 				o.last = nil
 				o.turnID = ""
@@ -212,6 +295,10 @@ func (o *codexObservation) server(data []byte) {
 				o.usageWarning = ""
 			}
 			o.id = result.Thread.ID
+			if expected != "" && !result.Thread.Ephemeral {
+				o.saved = true
+			}
+			o.name = strings.TrimSpace(result.Thread.Name)
 			o.connected = true
 			o.applyStatus(result.Thread.Status)
 			changed = true
@@ -230,9 +317,20 @@ func (o *codexObservation) server(data []byte) {
 		changed = o.applyEvent(m)
 	}
 	o.mu.Unlock()
+	if o.takeSaveHint() {
+		o.owner.invalidateHistory()
+	}
 	if changed {
 		o.owner.notify()
 	}
+}
+
+func (o *codexObservation) takeSaveHint() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	hint := o.saveHint
+	o.saveHint = false
+	return hint
 }
 
 func isTelemetryEvent(method string) bool {
@@ -285,6 +383,7 @@ func (o *codexObservation) applyEvent(m observedMessage) bool {
 	case "thread/status/changed":
 		o.applyStatus(params.Status)
 	case "turn/started":
+		o.saveHint = !o.saved
 		o.state = "working"
 		o.status = "busy"
 		o.waiting = ""
@@ -306,6 +405,7 @@ func (o *codexObservation) applyEvent(m observedMessage) bool {
 		}
 		o.turnID = params.Turn.ID
 		o.turnStatus = params.Turn.Status
+		o.saveHint = !o.saved
 		o.status = "idle"
 		o.waiting = ""
 	case "thread/tokenUsage/updated":

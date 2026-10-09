@@ -313,6 +313,39 @@ func TestAdoptedTemporarySessionPersistsRealIDWithoutChangingRuntimeToken(t *tes
 	}
 }
 
+func TestCodexSwitchSuppressesOldIdentityUntilNewThreadIsSaved(t *testing.T) {
+	oldKey := "codex:01900000-0000-7000-8000-000000000001"
+	newKey := "codex:01900000-0000-7000-8000-000000000002"
+	for _, token := range []string{"new-codex-switch", oldKey} {
+		t.Run(token, func(t *testing.T) {
+			var saved []string
+			m := NewManagerWithStart(Callbacks{}, func(ids []string) error { saved = ids; return nil }, func(string, string, int, int, []string) (Pty, error) { return &fakePty{read: make(chan struct{})}, nil })
+			if err := m.Start(token, "codex", "."); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.BindCodexSession(token, oldKey); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.UnbindCodexSession(token); err != nil {
+				t.Fatal(err)
+			}
+			if len(saved) != 0 || len(m.OpenIDs()) != 0 {
+				t.Fatal("old thread leaked into restore snapshot", saved, m.OpenIDs())
+			}
+			if err := m.BindCodexSession(token, newKey); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(saved, []string{newKey}) || !m.IsSession(token, newKey) {
+				t.Fatal("wrong switched identity", saved)
+			}
+			m.Kill(token)
+			if err := m.BindCodexSession(token, oldKey); err == nil || len(m.OpenIDs()) != 0 {
+				t.Fatal("late identity resurrected closed terminal")
+			}
+		})
+	}
+}
+
 func TestAdoptionPersistenceErrorIsReturnedAndRetriedIdempotently(t *testing.T) {
 	sentinel := errors.New("persist failed")
 	var shouldFail atomic.Bool

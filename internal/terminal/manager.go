@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/UserExistsError/conpty"
+	"github.com/gp-alex-chen/claude-session-manager/internal/provider"
 	"github.com/gp-alex-chen/claude-session-manager/internal/session"
 )
 
@@ -281,12 +282,15 @@ func (m *Manager) openIDsLocked() []string {
 		if token == "" || r == nil || r.Closed() {
 			continue
 		}
-		id := token
-		if strings.HasPrefix(token, "new-") {
-			id = m.persistIDByToken[token]
-			if id == "" {
+		id, bound := m.persistIDByToken[token]
+		if bound && id == "" {
+			continue
+		}
+		if !bound {
+			if strings.HasPrefix(token, "new-") {
 				continue
 			}
+			id = token
 		}
 		if _, ok := seen[id]; ok {
 			continue
@@ -310,6 +314,58 @@ func (m *Manager) Adopt(token, sessionID string) error {
 	if err := session.ValidateID(sessionID); err != nil {
 		return err
 	}
+	return m.bindIdentity(token, sessionID, false)
+}
+
+// BindCodexSession is fed only by the native TUI's correlated thread reply.
+// A TUI can change threads with /new or /resume without replacing its PTY.
+func (m *Manager) BindCodexSession(token, key string) error {
+	ref, err := provider.DecodeKey(key)
+	if err != nil || ref.Provider != provider.Codex {
+		return errors.New("invalid native Codex session key")
+	}
+	if !strings.HasPrefix(token, "new-codex-") {
+		runtimeRef, err := provider.DecodeKey(token)
+		if err != nil || runtimeRef.Provider != provider.Codex {
+			return errors.New("not a Codex runtime token")
+		}
+	}
+	return m.bindIdentity(token, key, true)
+}
+
+// An explicit empty binding suppresses even a restored codex:<old-id> token
+// while /new has selected a thread that is not saved by Codex yet.
+func (m *Manager) UnbindCodexSession(token string) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	m.mu.Lock()
+	r := m.terms[token]
+	if r == nil || r.Closed() {
+		m.mu.Unlock()
+		return nil
+	}
+	id, bound := m.persistIDByToken[token]
+	if bound && id == "" && !m.persistDirty {
+		m.mu.Unlock()
+		return nil
+	}
+	m.persistIDByToken[token] = ""
+	ids := m.openIDsLocked()
+	m.mu.Unlock()
+	return m.persistAndReport(ids)
+}
+
+func (m *Manager) IsSession(token, key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id, bound := m.persistIDByToken[token]
+	if !bound {
+		id = token
+	}
+	return id == key
+}
+
+func (m *Manager) bindIdentity(token, sessionID string, replace bool) error {
 
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
@@ -321,25 +377,30 @@ func (m *Manager) Adopt(token, sessionID string) error {
 		return errors.New("temporary session is not running")
 	}
 	if existing := m.persistIDByToken[token]; existing != "" {
-		if existing != sessionID {
+		if existing != sessionID && !replace {
 			m.mu.Unlock()
 			return errors.New("temporary session already has a different adopted ID")
 		}
-		if !m.persistDirty {
+		if existing == sessionID && !m.persistDirty {
 			m.mu.Unlock()
 			return nil
 		}
-		ids := m.openIDsLocked()
-		m.mu.Unlock()
-		return m.persistAndReport(ids)
+		if existing == sessionID {
+			ids := m.openIDsLocked()
+			m.mu.Unlock()
+			return m.persistAndReport(ids)
+		}
 	}
 	for otherToken, other := range m.terms {
 		if otherToken == token || other == nil || other.Closed() {
 			continue
 		}
-		otherID := otherToken
-		if adopted := m.persistIDByToken[otherToken]; adopted != "" {
-			otherID = adopted
+		otherID, bound := m.persistIDByToken[otherToken]
+		if bound && otherID == "" {
+			continue
+		}
+		if !bound {
+			otherID = otherToken
 		}
 		if otherID == sessionID {
 			m.mu.Unlock()

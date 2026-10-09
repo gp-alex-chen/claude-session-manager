@@ -51,6 +51,10 @@ func TestCodexHistoryHandshakePaginationAndMetadata(t *testing.T) {
 	if f.requests[3]["params"].(map[string]any)["cursor"] != "page-2" || !f.closed {
 		t.Fatalf("cursor/close: %#v", f)
 	}
+	params := f.requests[2]["params"].(map[string]any)
+	if !reflect.DeepEqual(params["sourceKinds"], []any{"cli", "vscode", "appServer"}) || !reflect.DeepEqual(params["modelProviders"], []any{}) {
+		t.Fatalf("native remote/custom-model sessions excluded from history: %v", params)
+	}
 }
 
 func TestCodexHistoryRejectsProtocolFailureAndPartialHistory(t *testing.T) {

@@ -56,7 +56,11 @@ update state/progress -> update controller -> settings menu
 
 顶部来源筛选使用共享 preference key `session-provider-filter`，值是排序去重且非空的 provider ID JSON 数组。`ListSessionsForProviders` / `ListHiddenSessionsForProviders` 在 registry 调用历史 adapter 前筛选来源，并返回 `sessions`、`succeededProviders` 和 `warnings`，空选择或未知 provider 返回错误。普通历史查询合并已选、已打开和待恢复来源；Codex 临时终端无须为此查询历史。归档只查询已选来源。`GetOpenSessionRefs` 由 Go 解码 canonical key、校验注册 provider，返回结构化身份，前端不解析内部键。Claude 基线按 provider 保留，仅成功查询更新；新建 Claude 前先读取历史基线，失败则不启动终端。catalog 的 `SnapshotWithWarnings` 将快照和有效性一起读取，缓存失败不会被误当成成功空列表。普通和归档请求各有递增序号，筛选改变和 stop 会使旧响应失效；晚到响应不能配对、渲染或覆盖提示。
 
-新建 Codex 使用 `new-codex-*` 临时 token，列表明确标记「重启不恢复」，关闭或退出时移除临时行；它不进入 Claude 目录配对或 AdoptSession，也不写入 open-sessions。观察器匹配 TUI 的 `thread/start` / `thread/resume` 请求与成功响应，取得权威主线程 ID；请求 ID 保留 string/integer 区别，resume 校验预期线程。这个关联只服务运行时状态和用量，不改变持久恢复策略。会话重命名已通过 `RenameProvider` 接入原生能力：Claude 调用内嵌 SDK 的离线 `renameSession`，Codex 调用 `thread/name/set`，成功后刷新缓存。原生名称不被本地 alias 覆盖，删除/归档仍保留 hidden 语义。依赖、打包和独立集成测试见 [原生重命名](native-rename.md)。
+新建 Codex 使用 `new-codex-*` runtime token，不进入 Claude 目录配对或公开 AdoptSession。观察器关联 `thread/start` / `thread/resume` 的请求与成功响应，取得权威主线程 ID；请求 ID 保留 string/integer 区别，resume 校验预期线程，递增序号拒绝乱序旧响应，子线程和 ephemeral 标题辅助线程不覆盖主线程。ID 分配与原生可恢复分开判断：`RestorableSource` 批量通过官方历史确认保存，成功 resume 也可直接确认。已确认 ID 不反复查历史；首次 turn 的开始/完成使负缓存失效，关闭前以 3 秒上限强制刷新未确认身份。历史查询显式包含 cli/vscode/appServer，并用空 modelProviders 数组包含自定义模型来源。
+
+App 在启动完成、状态更新和关闭前调用 Manager 的原生身份绑定；只有原生保存确认与本地快照保存均成功才发送 `restorable=true`。Manager 保留 PTY token，恢复清单写 canonical `codex:<UUID>`。`/new` 切到未保存线程时，以空绑定显式禁止旧 token 回退进入恢复清单；新的历史确认后再绑定。前端同步正式行和标题，历史尚未返回时使用正式 fallback 行，失败/未保存时保留等待行；状态使用 canonical 行身份，Token 仍按 runtime token 查询。恢复 token 被原生切换后，旧历史的显示、打开、关闭和重命名都检查终端归属，避免作用到新会话。
+
+Claude watcher 与 Codex observer 只向容量为 1 的合并队列发信号，更新循环取得 App launch 锁后重新检查生命周期再推送，避免 watcher.Stop 的锁等待环。Shutdown 在 launch 锁下通过 `RestorationSealer` 固定最后的权威身份快照，然后确认保存、持久化并关闭 PTY；此边界后的协议事件不再改变恢复身份。原生重命名仍使用 `RenameProvider`：Claude 调用内嵌 SDK 的离线 `renameSession`，Codex 调用 `thread/name/set`，成功后刷新缓存。原生名称不被本地 alias 覆盖，删除/归档仍保留 hidden 语义。依赖、打包和独立集成测试见 [原生重命名](native-rename.md)。
 
 透明转发保持原始消息、顺序和未知字段，只添加/去除 stdio 的换行 framing；观察器接收副本，不回答审批或用户输入请求。转发器只绑定 `127.0.0.1:0`、使用 256-bit 随机 bearer、拒绝浏览器 Origin 和第二客户端。凭据仅加入该 PTY 环境，大小写不敏感地替换同名环境变量，不写入父进程环境、日志或状态文件。`LaunchSpec.Env` 与 `Close` 将 server/relay 作为终端专属资源交给 Manager，启动失败时 App 清理，成功后 reader 退出、替换、Kill 和 CloseAll 均由幂等 `ptyRef.Close` 清理。专属 server 的运行期由 PTY 所有权控制，避免 Wails context 提前取消导致恢复清单被退出事件擦除；Shutdown 先持久化并关闭终端，再取消其他读请求，启动与关闭由 App launch 锁串行。
 

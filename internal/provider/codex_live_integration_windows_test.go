@@ -5,6 +5,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -77,6 +78,7 @@ func TestCodexNativeRemoteTUIIntegration(t *testing.T) {
 					}
 				}
 			}()
+			var nativeID string
 			for {
 				statuses, _ := live.Status(ctx)
 				if len(statuses) == 1 && statuses[0].State == "idle" {
@@ -86,6 +88,7 @@ func TestCodexNativeRemoteTUIIntegration(t *testing.T) {
 					if validateRef(SessionRef{Codex, statuses[0].SessionID}) != nil {
 						t.Fatal("invalid native identity", statuses)
 					}
+					nativeID = statuses[0].SessionID
 					break
 				}
 				select {
@@ -97,6 +100,31 @@ func TestCodexNativeRemoteTUIIntegration(t *testing.T) {
 			t.Log("native thread bound; closing terminal-owned resources")
 			closeTerminal()
 			spec.Close()
+			// ID allocation alone is not durable: empty new threads have no
+			// rollout, while resumed native history must remain resumable.
+			c := &CodexRPC{Open: func(ctx context.Context) (io.ReadWriteCloser, error) { return openCodexRPCProcess(ctx, bin, env) }}
+			conn, err := c.Open(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			r := newRPCSession(ctx, conn)
+			var initialized map[string]any
+			if err := r.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "session_restore_test", "version": "test"}}, &initialized); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Write([]byte("{\"method\":\"initialized\"}\n")); err != nil {
+				t.Fatal(err)
+			}
+			var resumed struct{ Thread struct{ ID string } }
+			resumeErr := r.call("thread/resume", map[string]string{"threadId": nativeID}, &resumed)
+			if mode == "new" {
+				if resumeErr == nil || !strings.Contains(resumeErr.Error(), "no rollout found") {
+					t.Fatalf("empty thread durability changed: %v %v", resumed, resumeErr)
+				}
+			} else if resumeErr != nil || resumed.Thread.ID != nativeID {
+				t.Fatalf("native thread did not survive shutdown: mode=%s id=%s result=%v err=%v", mode, nativeID, resumed, resumeErr)
+			}
 			if statuses, _ := live.Status(ctx); len(statuses) != 0 {
 				t.Fatal("closed terminal remained active", statuses)
 			}

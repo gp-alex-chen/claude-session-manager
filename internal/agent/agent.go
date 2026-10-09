@@ -40,6 +40,7 @@ func DebugLog(msg string) {
 type AgentInfo struct {
 	Provider     string `json:"provider,omitempty"`
 	RuntimeToken string `json:"runtimeToken,omitempty"`
+	Restorable   bool   `json:"restorable,omitempty"`
 	TurnID       string `json:"turnId,omitempty"`
 	TurnStatus   string `json:"turnStatus,omitempty"`
 	SessionID    string `json:"sessionId"`

@@ -121,6 +121,15 @@ type HistoryProvider interface {
 type StatusSource interface {
 	Status(context.Context) ([]agent.AgentInfo, error)
 }
+
+// RestorableSource confirms native persistence separately from ID allocation.
+// Returned IDs are provider-local; force bypasses a cached negative result.
+type RestorableSource interface {
+	RestorableSessions(context.Context, bool) ([]string, error)
+}
+
+// RestorationSealer fixes the final identity snapshot before terminal teardown.
+type RestorationSealer interface{ SealRestoration() }
 type UsageProvider interface {
 	Usage(context.Context, string, string) (usage.Summary, error)
 }

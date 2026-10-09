@@ -36,6 +36,9 @@ func (a *App) startAgentPTY(token string, id provider.ID, ref *provider.SessionR
 		return errors.New("应用已关闭，无法启动终端")
 	}
 	if ref != nil && a.terms.IsRunning(token) {
+		if !a.terms.IsSession(token, token) {
+			return errors.New("此终端已切换会话，请先关闭再恢复原会话")
+		}
 		return nil
 	}
 	spec, err := a.providers.PrepareLaunch(a.runtimeContext(), id, provider.OpenRequest{Ref: ref, Dir: dir, RuntimeToken: token})
@@ -56,7 +59,59 @@ func (a *App) startAgentPTY(token string, id provider.ID, ref *provider.SessionR
 	if err != nil && spec.Close != nil {
 		spec.Close()
 	}
+	if err == nil && id == provider.Codex {
+		// A fast native reply can arrive before Manager registers the PTY.
+		a.codexStatusLocked(a.runtimeContext(), false)
+		a.signalProviderUpdate()
+	}
 	return err
+}
+
+// The launch lock orders status snapshots with starts and shutdown. Do not
+// call this from a transport observer: PTY startup also owns Manager's lock.
+func (a *App) codexStatusLocked(ctx context.Context, force bool) []agent.AgentInfo {
+	confirmed := map[string]bool{}
+	if p, err := a.providers.Lookup(provider.Codex); err == nil {
+		if source, ok := p.(provider.RestorableSource); ok {
+			ids, err := source.RestorableSessions(ctx, force)
+			if err != nil {
+				a.log("确认 Codex 原生会话保存失败: " + err.Error())
+			}
+			for _, id := range ids {
+				confirmed["codex:"+id] = true
+			}
+		}
+	}
+	list, _ := a.providers.StatusExcept(ctx, provider.Claude)
+	for i := range list {
+		info := &list[i]
+		if info.Provider != string(provider.Codex) || info.RuntimeToken == "" || a.terms == nil || !a.terms.IsRunning(info.RuntimeToken) {
+			continue
+		}
+		if !confirmed[info.SessionID] {
+			if err := a.terms.UnbindCodexSession(info.RuntimeToken); err != nil {
+				a.log("保存 Codex 待确认状态失败: " + err.Error())
+			}
+			continue
+		}
+		if err := a.terms.BindCodexSession(info.RuntimeToken, info.SessionID); err != nil {
+			if !a.terms.IsSession(info.RuntimeToken, info.SessionID) {
+				_ = a.terms.UnbindCodexSession(info.RuntimeToken)
+			}
+			a.log("绑定 Codex 原生会话失败: " + err.Error())
+			continue
+		}
+		info.Restorable = true
+	}
+	return list
+}
+
+func (a *App) sealProviderRestoration() {
+	if p, err := a.providers.Lookup(provider.Codex); err == nil {
+		if sealer, ok := p.(provider.RestorationSealer); ok {
+			sealer.SealRestoration()
+		}
+	}
 }
 
 func (a *App) signalProviderUpdate() {
@@ -78,13 +133,17 @@ func (a *App) watchProviderUpdates(ctx context.Context) {
 }
 
 func (a *App) emitAgentUpdate(ctx context.Context) {
+	// Only the update worker takes this lock; watcher callbacks merely queue.
+	// Recheck lifecycle after waiting so an old worker cannot emit after exit.
+	a.launchMu.Lock()
+	defer a.launchMu.Unlock()
 	a.lifecycleMu.Lock()
 	current := a.ctx == ctx && ctx.Err() == nil
 	watcher := a.watcher
 	a.lifecycleMu.Unlock()
 	if current && watcher != nil {
 		list := watcher.Snapshot()
-		others, _ := a.providers.StatusExcept(ctx, provider.Claude)
+		others := a.codexStatusLocked(ctx, false)
 		list = append(list, others...)
 		runtime.EventsEmit(ctx, "agents:update", list)
 	}
@@ -100,5 +159,14 @@ func (a *App) GetAgents() []agent.AgentInfo {
 	for _, warning := range warnings {
 		a.log(warning.Error())
 	}
-	return list
+	a.launchMu.Lock()
+	others := a.codexStatusLocked(a.runtimeContext(), false)
+	a.launchMu.Unlock()
+	out := []agent.AgentInfo{}
+	for _, info := range list {
+		if info.Provider == string(provider.Claude) {
+			out = append(out, info)
+		}
+	}
+	return append(out, others...)
 }

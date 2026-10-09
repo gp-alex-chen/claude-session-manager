@@ -225,7 +225,7 @@ func (c *CodexRPC) ListSessions(parent context.Context) ([]Session, error) {
 	seenCursors := map[string]bool{}
 	seenIDs := map[string]bool{}
 	for page := 0; page < 1000; page++ {
-		params := map[string]any{"limit": 100, "archived": false, "sortKey": "updated_at"}
+		params := map[string]any{"limit": 100, "archived": false, "sortKey": "updated_at", "sourceKinds": []string{"cli", "vscode", "appServer"}, "modelProviders": []string{}}
 		if cursor != "" {
 			params["cursor"] = cursor
 		}

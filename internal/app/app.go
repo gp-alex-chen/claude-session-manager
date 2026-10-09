@@ -111,7 +111,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	watcher := agent.NewWatcher(func([]agent.AgentInfo) {
-		a.emitAgentUpdate(ctx)
+		a.signalProviderUpdate()
 	})
 	// Register the candidate before stopping the old watcher. Stop may wait on
 	// its fetch loop, so it must never run while lifecycleMu is held.
@@ -150,6 +150,9 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(context.Context) {
 	a.launchMu.Lock()
 	defer a.launchMu.Unlock()
+	// Capture native identities even when the UI has never queried agents.
+	a.sealProviderRestoration()
+	a.codexStatusLocked(context.Background(), true)
 	a.lifecycleMu.Lock()
 	watcher := a.watcher
 	cancel := a.cancelLifecycle
@@ -263,6 +266,9 @@ func (a *App) StartSession(id, dir string) (string, error) {
 		return "", err
 	}
 	if a.terms.IsRunning(id) {
+		if !a.terms.IsSession(id, id) {
+			return "", errors.New("此终端已切换到其他 Codex 会话，请先关闭该终端再恢复原会话")
+		}
 		return id, nil
 	}
 	if err := a.startAgentPTY(id, ref.Provider, &ref, dir); err != nil {

@@ -3,7 +3,75 @@ package provider
 import (
 	"context"
 	"testing"
+	"time"
 )
+
+type mutableLiveHistory struct {
+	sessions []Session
+	calls    int
+}
+
+func (h *mutableLiveHistory) ListSessions(context.Context) ([]Session, error) {
+	h.calls++
+	return h.sessions, nil
+}
+
+func TestCodexNativeDurabilityRequiresHistoryAndRefreshesAfterFirstTurn(t *testing.T) {
+	h := &mutableLiveHistory{}
+	live := NewCodexLive(NewCodex(h), nil, nil)
+	o := live.observe("new-codex-save", `C:\work`)
+	o.client([]byte(`{"id":1,"method":"thread/start","params":{}}`))
+	o.server([]byte(`{"id":1,"result":{"thread":{"id":"` + telemetryID + `","status":{"type":"idle"}}}}`))
+	ids, err := live.RestorableSessions(context.Background(), false)
+	if err != nil || len(ids) != 0 {
+		t.Fatal("empty thread claimed restorable", ids, err)
+	}
+	// An already cached negative result must not delay the first saved turn.
+	h.sessions = []Session{{Ref: SessionRef{Codex, telemetryID}, Dir: `C:\work`, Time: time.Unix(10, 0)}}
+	o.server([]byte(`{"method":"turn/started","params":{"threadId":"` + telemetryID + `","turn":{"id":"first"}}}`))
+	ids, err = live.RestorableSessions(context.Background(), false)
+	if err != nil || len(ids) != 1 || ids[0] != telemetryID || h.calls != 2 {
+		t.Fatal("saved first turn not confirmed", ids, err, h.calls)
+	}
+	// A confirmed ID needs no extra history process on every token event.
+	_, _ = live.RestorableSessions(context.Background(), false)
+	if h.calls != 2 {
+		t.Fatal("confirmed identity queried again", h.calls)
+	}
+}
+
+func TestCodexIdentityRepliesCannotRevertNewerThreadAndSealIsFinal(t *testing.T) {
+	live := NewCodexLive(NewCodex(nil), nil, nil)
+	o := live.observe("new-codex-order", `C:\work`)
+	for _, request := range []string{"1", "2"} {
+		o.client([]byte(`{"id":` + request + `,"method":"thread/start","params":{}}`))
+	}
+	newID := "01900000-0000-7000-8000-000000000002"
+	o.server([]byte(`{"id":2,"result":{"thread":{"id":"` + newID + `","status":{"type":"idle"}}}}`))
+	o.server([]byte(`{"id":1,"result":{"thread":{"id":"` + telemetryID + `","status":{"type":"idle"}}}}`))
+	list, _ := live.Status(context.Background())
+	if len(list) != 1 || list[0].SessionID != newID {
+		t.Fatal("late response reverted thread", list)
+	}
+	live.SealRestoration()
+	o.client([]byte(`{"id":3,"method":"thread/resume","params":{"threadId":"` + telemetryID + `"}}`))
+	o.server([]byte(`{"id":3,"result":{"thread":{"id":"` + telemetryID + `","status":{"type":"idle"}}}}`))
+	list, _ = live.Status(context.Background())
+	if list[0].SessionID != newID {
+		t.Fatal("identity changed after shutdown snapshot was sealed", list)
+	}
+}
+
+func TestCodexEphemeralTitleThreadCannotReplaceMainIdentity(t *testing.T) {
+	live := NewCodexLive(NewCodex(nil), nil, nil)
+	o := seedTelemetry(t, live, "new-codex-main")
+	o.client([]byte(`{"id":2,"method":"thread/start","params":{"ephemeral":true}}`))
+	o.server([]byte(`{"id":2,"result":{"thread":{"id":"01900000-0000-7000-8000-000000000002","ephemeral":true,"status":{"type":"idle"}}}}`))
+	list, _ := live.Status(context.Background())
+	if len(list) != 1 || list[0].SessionID != telemetryID {
+		t.Fatal("ephemeral title replaced main thread", list)
+	}
+}
 
 const telemetryID = "01900000-0000-7000-8000-000000000001"
 
