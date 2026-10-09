@@ -129,7 +129,7 @@ export function createPaneController(deps) {
         clearPane(paneId);
         return;
       }
-      showSession(token, { paneId, focus: true });
+      showSession(token, { paneId, focus: true, swap: true });
     },
     onClearPane: (paneId) => clearPane(paneId),
     onDividerPointerDown: (axis, event) => startDividerDrag(axis, event),
@@ -189,6 +189,8 @@ export function createPaneController(deps) {
         token: session.token,
         label: session.exited ? label + '（已退出）' : label,
         disabled: Boolean(session.exited),
+        provider: session.provider || state.sessionProviders.get(session.token) || 'claude',
+        dir: session.dir || state.sessionDirs.get(state.newToReal.get(session.token) || session.token) || '',
       });
     }
     return options;
@@ -364,7 +366,15 @@ export function createPaneController(deps) {
     if (!session) return false;
     const existingPane = findPaneByToken(token);
     if (existingPane) {
-      if (options.focus !== false) focusPane(existingPane.id, options);
+      const requestedPane = options.swap && isVisiblePane(options.paneId)
+        ? paneById(state, options.paneId)
+        : null;
+      if (requestedPane && requestedPane !== existingPane) {
+        existingPane.token = requestedPane.token;
+        requestedPane.token = token;
+        mountVisibleSessions();
+      }
+      if (options.focus !== false) focusPane(requestedPane?.id || existingPane.id, options);
       syncView();
       return true;
     }
@@ -471,6 +481,7 @@ export function createPaneController(deps) {
     if (Array.isArray(options)) {
       for (const item of options) {
         const token = item.token || state.realToNew.get(item.id) || item.id;
+        if (!item.temporary && state.newToReal.has(token) && state.newToReal.get(token) !== item.id) continue;
         if (!token || !byToken.has(token)) continue;
         const session = state.terminals.get(token);
         const label = item.label || item.name || item.id;
@@ -478,6 +489,8 @@ export function createPaneController(deps) {
           token,
           label: session?.exited ? label + '（已退出）' : label,
           disabled: Boolean(session?.exited),
+          provider: item.provider || session?.provider || state.sessionProviders.get(token) || 'claude',
+          dir: session?.dir || item.dir || state.sessionDirs.get(item.id || token) || '',
         });
       }
     }

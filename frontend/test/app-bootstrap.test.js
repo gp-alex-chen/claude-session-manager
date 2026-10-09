@@ -10,6 +10,9 @@ const REQUIRED_IDS = [
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
   'settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update',
   'settings-version',
+  'app', 'sidebar', 'sidebar-divider', 'workspace-toolbar', 'workspace-project',
+  'workspace-directory', 'workspace-summary', 'btn-sidebar-toggle',
+  'session-search', 'btn-opened-only', 'archive-overlay', 'archive-dialog', 'archive-search', 'btn-close-archive',
 ];
 
 class FakeNode {

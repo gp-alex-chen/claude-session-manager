@@ -3,6 +3,7 @@ export const PREFERENCE_KEYS = [
   'ui-theme', 'term-theme', 'term-font-size', 'terminal-layout-mode',
   'terminal-layout-split-ratios', 'update-last-check-date',
   'session-provider-filter',
+  'sidebar-width', 'sidebar-collapsed',
 ];
 
 export function createPreferenceStorage({ backend, onError }) {

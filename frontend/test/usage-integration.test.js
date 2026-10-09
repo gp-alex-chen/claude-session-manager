@@ -139,8 +139,8 @@ test('pane assignment, usage requests, and per-pane rendering use the production
   await settle();
 
   const surfaces = paneController.view.paneSurfaces();
-  assert.equal(surfaces[0].usageSummary.children[0].textContent, '会话 10');
-  assert.equal(surfaces[1].usageSummary.children[0].textContent, '会话 20');
+  assert.equal(surfaces[0].usageSummary.children[0].textContent, '10');
+  assert.equal(surfaces[1].usageSummary.children[0].textContent, '20');
   assert.equal(surfaces[0].usageSummary.disabled, false);
   assert.equal(surfaces[1].usageSummary.disabled, false);
 });

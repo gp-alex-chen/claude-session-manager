@@ -17,6 +17,7 @@ var preferenceKeys = map[string]bool{
 	"terminal-layout-mode": true, "terminal-layout-split-ratios": true,
 	"update-last-check-date":  true,
 	"session-provider-filter": true,
+	"sidebar-width":           true, "sidebar-collapsed": true,
 }
 
 // Validate renderer settings before storing them in the shared JSON document.
@@ -25,6 +26,14 @@ func normalizePreference(key, value string) (string, bool) {
 		return "", false
 	}
 	switch key {
+	case "sidebar-width":
+		n, err := strconv.ParseFloat(value, 64)
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			return "", false
+		}
+		return strconv.Itoa(int(math.Max(220, math.Min(360, math.Floor(n+0.5))))), true
+	case "sidebar-collapsed":
+		return value, value == "true" || value == "false"
 	case "session-provider-filter":
 		var ids []string
 		if json.Unmarshal([]byte(value), &ids) != nil || len(ids) == 0 || len(ids) > 32 {

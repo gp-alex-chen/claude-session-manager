@@ -88,11 +88,22 @@ function makeFixture(options = {}) {
   const hiddenButton = new FakeNode();
   const eyeButton = new FakeNode();
   const filterRoot = new FakeNode();
+  const searchInput = new FakeNode();
+  const openedButton = new FakeNode();
+  const archiveOverlay = new FakeNode();
+  const archiveDialog = new FakeNode();
+  const archiveSearch = new FakeNode();
+  const archiveClose = new FakeNode();
+  const workspaceRoot = new FakeNode();
+  const documentListeners = new Map();
   const documentRef = {
     body: new FakeNode(),
     createElement: () => new FakeNode(),
-    addEventListener() {},
+    addEventListener: (name, callback) => documentListeners.set(name, callback),
+    removeEventListener: (name, callback) => { if (documentListeners.get(name) === callback) documentListeners.delete(name); },
   };
+  for (const element of [archiveSearch, archiveClose, hiddenButton]) element.focus = () => { documentRef.activeElement = element; };
+  archiveDialog.querySelectorAll = () => [archiveClose, archiveSearch];
   const windowRef = {
     innerWidth: 1000,
     innerHeight: 800,
@@ -203,6 +214,7 @@ function makeFixture(options = {}) {
     hiddenPanel,
     hiddenCount,
     hiddenButton,
+    searchInput, openedButton, archiveOverlay, archiveDialog, archiveSearch, archiveClose, workspaceRoot,
     eyeButton,
     documentRef,
     windowRef,
@@ -230,6 +242,7 @@ function makeFixture(options = {}) {
     adoptionCalls,
     filterRoot, hiddenCount, hiddenButton, hiddenPanel,
     paneController,
+    searchInput, openedButton, archiveOverlay, archiveSearch, archiveClose, workspaceRoot, documentListeners,
     get renderCount() { return renderCount; },
   };
 }
@@ -239,6 +252,65 @@ const session = (id, dir = 'work', name = id, time = 'today') => ({ id, dir, nam
 const filterAgents = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }];
 const filterClaude = { ...session('claude-old', 'work', 'Claude old'), provider: 'claude' };
 const filterCodex = { ...session('codex:01900000-0000-7000-8000-000000000001', 'work', 'Codex old'), provider: 'codex' };
+
+test('native Codex identity replaces temporary row and follows authoritative history without another terminal', async () => {
+  const f = makeFilterFixture({ StartNewAgent: async () => 'new-codex-native', read: async ids => ({ sessions: [], succeededProviders: ids, warnings: [] }) });
+  await f.controller.initialize();
+  await f.controller.startNew('work', 'codex');
+  const snapshot = [{ provider: 'codex', runtimeToken: 'new-codex-native', sessionId: filterCodex.id, restorable: true }];
+  f.controller.handleAgentIdentities(snapshot);
+  assert.equal(f.state.pendingNew.length, 0);
+  assert.equal(f.state.newToReal.get('new-codex-native'), filterCodex.id);
+  assert.deepEqual(visibleIDs(f), [filterCodex.id]);
+  assert.doesNotMatch(f.listRoot.children[0].children.at(-1).textContent || '', /重启不恢复/);
+  f.controller.renderSessions([filterCodex]);
+  assert.deepEqual(visibleIDs(f), [filterCodex.id]);
+  assert.equal(f.state.terminals.get('new-codex-native').labelText, filterCodex.name);
+  await f.controller.openFromList(filterCodex);
+  assert.equal(f.state.terminals.size, 1);
+  assert.equal(f.adoptionCalls.length, 0, 'Codex binding must not use Claude directory adoption');
+  f.controller.closeRealSession(filterCodex.id);
+  f.controller.handleAgentIdentities(snapshot);
+  assert.equal(f.state.terminals.size, 0, 'late identity cannot reopen a closed terminal');
+});
+
+test('native Codex remains pending until saved and /new removes its old formal identity', async () => {
+  const f = makeFilterFixture({StartNewAgent:async()=> 'new-codex-switch'});
+  await f.controller.initialize();
+  await f.controller.startNew('work','codex');
+  const info = {provider:'codex',runtimeToken:'new-codex-switch',sessionId:filterCodex.id};
+  f.controller.handleAgentIdentities([info]);
+  assert.equal(f.state.newToReal.size,0);
+  assert.equal(f.state.pendingNew[0].identityKnown,true);
+  f.controller.handleAgentIdentities([{...info,restorable:true}]);
+  assert.equal(f.state.newToReal.get(info.runtimeToken),filterCodex.id);
+  const next = {...info,sessionId:'codex:01900000-0000-7000-8000-000000000002'};
+  f.controller.handleAgentIdentities([next]);
+  assert.equal(f.state.newToReal.size,0);
+  assert.equal(f.state.realToNew.size,0);
+  assert.equal(f.state.pendingNew.length,1);
+  f.controller.handleAgentIdentities([{...next,restorable:true,name:'New native title'}]);
+  assert.equal(f.state.pendingNew.length,0);
+  assert.equal(f.state.newToReal.get(info.runtimeToken),next.sessionId);
+  assert.equal(f.state.terminals.get(info.runtimeToken).labelText,'New native title');
+  assert.equal(f.state.terminals.size,1);
+});
+
+test('a restored Codex terminal switched to another thread cannot be opened or closed as the old history', async () => {
+  const f = makeFilterFixture({GetOpenSessionRefs:async()=>[{id:filterCodex.id,provider:'codex'}]});
+  await f.controller.initialize();
+  f.controller.handleAgentIdentities([{provider:'codex',runtimeToken:filterCodex.id,sessionId:'codex:01900000-0000-7000-8000-000000000002',restorable:true}]);
+  assert.equal(await f.controller.openFromList(filterCodex),false);
+  f.controller.closeRealSession(filterCodex.id);
+  assert.equal(f.state.terminals.has(filterCodex.id),true);
+  assert.match(f.statuses.at(-1).message,/已切换/);
+  const label = f.state.terminals.get(filterCodex.id).labelText;
+  await f.controller.renameSession(filterCodex);
+  assert.equal(f.state.terminals.get(filterCodex.id).labelText,label,'renaming old history must not rename the switched terminal');
+  f.state.selectedProviders = new Set(['claude']);
+  f.controller.refreshSessionVisibility();
+  assert.deepEqual(visibleIDs(f),[filterClaude.id,'codex:01900000-0000-7000-8000-000000000002']);
+});
 
 function makeFilterFixture(options = {}) {
   const saved = options.saved || new Map();
@@ -264,8 +336,83 @@ function makeFilterFixture(options = {}) {
 }
 
 function visibleIDs(fixture) {
-  return fixture.listRoot.children.flatMap((group) => group.children[1].children.map((row) => row.dataset.id));
+  return fixture.listRoot.children.flatMap((group) => (group.children[1]?.children || []).map((row) => row.dataset.id));
 }
+
+test('search expands matches without changing provider reads, history names or pane choices', async () => {
+  let choices=[];
+  const f=makeFilterFixture({paneController:{setSessionOptions:list=>{choices=list;}}});
+  await f.controller.initialize();
+  const before=f.queries.length;
+  f.searchInput.value='CLAUDE';f.searchInput.dispatchEvent({type:'input'});
+  assert.deepEqual(visibleIDs(f),[filterClaude.id]);
+  assert.equal(f.listRoot.children[0].classList.contains('collapsed'),false);
+  assert.equal(f.listRoot.children[0].children[1].children[0].classList.contains('fold-hidden'),false);
+  assert.equal(f.state.collapsedDirs.has('work'),true);
+  assert.deepEqual(choices.map(row=>row.id),[filterClaude.id,filterCodex.id]);
+  assert.equal(f.state.sessionNames.get(filterCodex.id),filterCodex.name);
+  f.searchInput.value='WORK';f.searchInput.dispatchEvent({type:'input'});
+  assert.deepEqual(visibleIDs(f),[filterClaude.id,filterCodex.id]);
+  f.searchInput.value='no match';f.searchInput.dispatchEvent({type:'input'});
+  assert.deepEqual(visibleIDs(f),[]);
+  assert.equal(f.listRoot.children[0].textContent,'没有匹配的项目或会话');
+  assert.equal(f.queries.length,before);
+});
+
+test('opened filter combines with search and follows live, exited and temporary terminals', async () => {
+  const f=makeFilterFixture();await f.controller.initialize();
+  f.state.terminals.set(filterClaude.id,{exited:false});
+  f.state.terminals.set(filterCodex.id,{exited:true});
+  f.state.terminals.set('new-codex-test',{exited:false,provider:'codex'});
+  f.state.pendingNew.push({token:'new-codex-test',dir:'work',provider:'codex',name:'Temporary'});
+  f.openedButton.click();
+  assert.deepEqual(visibleIDs(f),[filterClaude.id,'new-codex-test']);
+  assert.equal(f.openedButton.textContent,'已打开 2');
+  f.searchInput.value='Temporary';f.searchInput.dispatchEvent({type:'input'});
+  assert.deepEqual(visibleIDs(f),['new-codex-test']);
+  f.controller.closeRealSession('new-codex-test');
+  assert.deepEqual(visibleIDs(f),[]);
+  assert.equal(f.openedButton.textContent,'已打开 1');
+  assert.equal(f.state.terminals.has(filterClaude.id),true);
+});
+
+test('archive dialog searches locally, restores the original identity, and releases focus and inert state', async () => {
+  let archived=[filterClaude,filterCodex];
+  const f=makeFilterFixture({readHidden:async ids=>({sessions:archived.filter(row=>ids.includes(row.provider)),succeededProviders:ids,warnings:[]})});
+  const restored=[];
+  f.backend.UnhideSession=async id=>{restored.push(id);archived=archived.filter(row=>row.id!==id);};
+  f.controller.start();await f.controller.initialize();
+  const navigation=visibleIDs(f);
+  f.hiddenButton.click();await f.controller.refreshHidden(false);
+  assert.equal(f.archiveOverlay.hidden,false);
+  assert.equal(f.workspaceRoot.inert,true);
+  assert.equal(f.documentRef.activeElement,f.archiveSearch);
+  f.archiveSearch.value='Codex';f.archiveSearch.dispatchEvent({type:'input'});
+  assert.equal(f.hiddenPanel.children.length,1);
+  assert.equal(f.hiddenCount.textContent,' · 2');
+  assert.deepEqual(visibleIDs(f),navigation);
+  await f.hiddenPanel.children[0].children.at(-1).click();
+  await f.controller.refreshHidden(false);
+  assert.deepEqual(restored,[filterCodex.id]);
+  assert.equal(f.hiddenPanel.children[0].textContent,'没有匹配的归档会话');
+  f.documentListeners.get('keydown')({key:'Tab',shiftKey:false,preventDefault(){}});
+  assert.equal(f.documentRef.activeElement,f.archiveClose);
+  f.documentListeners.get('keydown')({key:'Escape',preventDefault(){}});
+  assert.equal(f.archiveOverlay.hidden,true);
+  assert.equal(f.workspaceRoot.inert,false);
+  assert.equal(f.documentRef.activeElement,f.hiddenButton);
+  f.controller.stop();assert.equal(f.documentListeners.has('keydown'),false);
+});
+
+test('navigation search never prevents restoring a filtered-out provider at startup', async () => {
+  const f=makeFilterFixture({saved:new Map([['session-provider-filter','["claude"]']]),
+    GetOpenSessionRefs:async()=>[{id:filterCodex.id,provider:'codex'}]});
+  f.searchInput.value='no match';f.searchInput.dispatchEvent({type:'input'});
+  await f.controller.initialize();
+  assert.equal(f.state.terminals.has(filterCodex.id),true);
+  assert.deepEqual(visibleIDs(f),[]);
+  assert.equal(f.state.sessionNames.get(filterCodex.id),filterCodex.name);
+});
 
 test('provider buttons default to both, persist filtering, and protect the last selection', async () => {
   const fixture = makeFilterFixture();
@@ -581,7 +728,7 @@ test('session rows keep their custom context menu and prevent the native menu', 
   assert.deepEqual(opened, {
     x: 12,
     y: 34,
-    target: { type: 'session', id: 'session-1', dir: 'work', name: 'session-1' },
+    target: { type: 'session', id: 'session-1', dir: 'work', name: 'session-1', provider: 'claude' },
   });
 });
 

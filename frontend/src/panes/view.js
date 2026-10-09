@@ -4,6 +4,16 @@ import {
   normalizeLayoutMode,
   PANE_IDS,
 } from './presets.js';
+import { renderProviderBadge } from '../sessions/provider-icons.js';
+import { leafOf } from '../utils.js';
+
+function sessionOptionLabel(option, fullPath = false) {
+  if (!option.token) return option.label;
+  const provider = option.provider || 'claude';
+  const agent = provider[0].toUpperCase() + provider.slice(1);
+  const project = option.dir ? (fullPath ? option.dir : leafOf(option.dir.replace(/[\\/]+$/, ''))) : '未指定项目';
+  return agent + ' · ' + project + ' · ' + option.label;
+}
 
 function defaultElement(documentRef, tag, className, text) {
   const element = documentRef.createElement(tag);
@@ -44,8 +54,8 @@ export function createPaneView(deps) {
     root.setAttribute?.('aria-label', '终端窗格 ' + paneNumber);
 
     const header = el('div', 'terminal-pane-header');
-    const current = el('span', 'terminal-pane-current', '当前');
-    current.setAttribute?.('aria-hidden', 'true');
+    const providerIcon = el('span', 'terminal-pane-provider');
+    providerIcon.setAttribute?.('aria-hidden', 'true');
     const selector = el('select', 'terminal-pane-session');
     selector.dataset.paneId = paneId;
     selector.setAttribute?.('aria-label', '终端窗格 ' + paneNumber + '会话');
@@ -63,9 +73,9 @@ export function createPaneView(deps) {
     const clear = el('button', 'terminal-pane-clear', '×');
     clear.type = 'button';
     clear.dataset.paneId = paneId;
-    clear.title = '清空窗格并收缩布局（不会关闭会话）';
+    clear.title = '移出窗格并收缩布局（会话保持打开）';
     clear.setAttribute?.('aria-label', clear.title);
-    header.append(current, selector, usageSummary, clear);
+    header.append(providerIcon, selector, usageSummary, clear);
 
     const body = el('div', 'terminal-pane-body');
     body.dataset.paneId = paneId;
@@ -75,7 +85,7 @@ export function createPaneView(deps) {
       id: paneId,
       root,
       header,
-      current,
+      providerIcon,
       selector,
       usageSummary,
       usageDetails,
@@ -176,6 +186,9 @@ export function createPaneView(deps) {
 
   function setLayout(mode) {
     const normalized = normalizeLayoutMode(mode);
+    const preset = allPresets().find((item) => item.mode === normalized);
+    layoutButton.textContent = '布局 · ' + preset.label;
+    layoutButton.title = '选择终端布局，当前为' + preset.label;
     terminalRoot.dataset.layoutMode = normalized;
     terminalRoot.classList?.forEach?.((name) => {
       if (name.startsWith('layout-mode-')) terminalRoot.classList.remove(name);
@@ -230,12 +243,20 @@ export function createPaneView(deps) {
       for (const optionInfo of options) {
         const option = el('option');
         option.value = optionInfo.token;
-        option.textContent = optionInfo.label;
+        option.textContent = sessionOptionLabel(optionInfo);
+        option.title = sessionOptionLabel(optionInfo, true);
         option.disabled = Boolean(optionInfo.disabled);
         pane.selector.appendChild(option);
       }
       pane.selector.value = paneStateItem.token || '';
       const selected = sessionOptions.find((item) => item.token === paneStateItem.token);
+      pane.providerIcon.replaceChildren?.();
+      setHidden(pane.providerIcon, !selected);
+      if (selected) {
+        pane.providerIcon.dataset.provider = selected.provider || 'claude';
+        pane.providerIcon.appendChild(renderProviderBadge({ provider: selected.provider || 'claude', el }));
+      }
+      pane.selector.title = selected ? sessionOptionLabel(selected, true) : '选择运行中的会话';
       pane.usageSummary.disabled = true;
       pane.usageSummary.setAttribute?.(
         'aria-label',
@@ -253,7 +274,7 @@ export function createPaneView(deps) {
     for (const [id, pane] of panes) {
       const focused = id === paneId;
       pane.root.classList?.toggle('is-focused', focused);
-      pane.current.setAttribute?.('aria-hidden', String(!focused));
+      pane.root.setAttribute?.('aria-label', '终端窗格 ' + (Number(id.slice(-1)) + 1) + (focused ? '（当前焦点）' : ''));
     }
   }
 
@@ -286,9 +307,9 @@ export function createPaneView(deps) {
   }
 
   function paneSurfaces() {
-    return [...panes.values()].map(({ id, current, selector, usageSummary, usageDetails, clear, body, header, root }) => ({
+    return [...panes.values()].map(({ id, providerIcon, selector, usageSummary, usageDetails, clear, body, header, root }) => ({
       id,
-      current,
+      providerIcon,
       selector,
       usageSummary,
       usageDetails,

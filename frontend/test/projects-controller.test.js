@@ -16,7 +16,8 @@ test('project bar groups the eye filter and add-project controls', () => {
   assert.match(projectBar, />项目</);
   assert.match(projectBar, /<button id="btn-eye" type="button"[^>]*><\/button>/);
   assert.match(projectBar, /<button id="btn-add-project"[^>]*>\s*\+\s*<\/button>/);
-  assert.equal((projectBar.match(/<button\b/g) || []).length, 2);
+  assert.match(projectBar, /id="btn-opened-only"/);
+  assert.equal((projectBar.match(/<button\b/g) || []).length, 3);
   assert.ok(projectBar.indexOf('id="btn-eye"') < projectBar.indexOf('id="btn-add-project"'));
   for (const forbidden of [
     'project-list', 'project-item', 'project-name', 'project-plus', 'project-delete',
@@ -26,7 +27,7 @@ test('project bar groups the eye filter and add-project controls', () => {
 });
 
 test('sidebar header keeps the eye filter out of the archive controls', () => {
-  const match = indexHTML.match(/<div id="sidebar-header">[\s\S]*?<\/div>\s*<div id="hidden-panel"/);
+  const match = indexHTML.match(/<div id="sidebar-header">[\s\S]*?<label id="session-search-control"/);
   assert.ok(match, 'sidebar header must exist');
   assert.doesNotMatch(match[0], /id="btn-eye"/);
   assert.match(match[0], /id="btn-hidden"/);
@@ -36,18 +37,14 @@ test('sidebar titles are not selectable', () => {
   assert.match(sidebarCSS, /\.provider-filter,\s*\.project-bar-title\s*\{[^}]*user-select:\s*none/);
 });
 
-test('project controls reveal on hover and keyboard focus', () => {
-  assert.match(sidebarCSS, /#project-bar:hover\s+\.project-bar-actions/);
-  assert.match(sidebarCSS, /#project-bar:focus-within\s+\.project-bar-actions/);
-  assert.match(sidebarCSS, /\.project-bar-actions\s*\{[^}]*opacity:\s*0/);
-  assert.match(sidebarCSS, /\.project-bar-actions\s*\{[^}]*pointer-events:\s*none/);
+test('project controls remain visible without hover', () => {
+  assert.match(sidebarCSS, /\.project-bar-actions\s*\{[^}]*opacity:\s*1/);
+  assert.match(sidebarCSS, /\.project-bar-actions\s*\{[^}]*pointer-events:\s*auto/);
 });
 
-test('group new-session controls reveal on hover and keyboard focus', () => {
-  assert.match(sidebarCSS, /\.plus\s*\{[^}]*opacity:\s*0/);
-  assert.match(sidebarCSS, /\.group-head:hover\s+\.plus/);
-  assert.match(sidebarCSS, /\.group-head:focus-within\s+\.plus/);
-  assert.match(sidebarCSS, /\.plus\s*\{[^}]*pointer-events:\s*none/);
+test('group new-session controls remain visible without hover', () => {
+  assert.match(sidebarCSS, /\.plus\s*\{[^}]*opacity:\s*1/);
+  assert.match(sidebarCSS, /\.plus\s*\{[^}]*pointer-events:\s*auto/);
 });
 
 test('favorited project folder icons use the accent color', () => {

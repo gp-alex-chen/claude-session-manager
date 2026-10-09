@@ -44,6 +44,7 @@ export function renderSessionList({
   onClose,
   onContextMenu,
   usageByProject = new Map(),
+  forceExpanded = false,
 }) {
   const groups = new Map();
   for (const session of list) {
@@ -99,7 +100,7 @@ export function renderSessionList({
     const isProject = Boolean(projectDir);
     const isFavorite = favoriteOrder.has(identity);
     const group = el('div', 'group');
-    if (state.collapsedDirs.has(identity)) group.classList.add('collapsed');
+    if (!forceExpanded && state.collapsedDirs.has(identity)) group.classList.add('collapsed');
     const head = el('div', 'group-head');
     head.dataset.dir = identity;
     const folder = el('span', 'folder-icon');
@@ -161,6 +162,7 @@ export function renderSessionList({
         onOpen,
         onClose,
         onContextMenu,
+        forceVisible: forceExpanded,
       }));
     }
     group.appendChild(body);
@@ -187,13 +189,14 @@ function renderSessionRow({
   onOpen,
   onClose,
   onContextMenu,
+  forceVisible = false,
 }) {
   const item = el('div', 'session-item');
   item.dataset.id = session.id;
   item.dataset.provider = session.provider || 'claude';
   item.dataset.dir = dirIdentity(session.dir);
-  item.title = session.dir;
-  if (state.collapsedDirs.has(dirIdentity(session.dir))
+  item.title = session.name + '\n' + session.dir + '\n' + session.time;
+  if (!forceVisible && state.collapsedDirs.has(dirIdentity(session.dir))
     && (state.eyeGlobalOff || agentController.classifyAgent(session.id) === 'idle')) {
     item.classList.add('fold-hidden');
   }
@@ -212,7 +215,9 @@ function renderSessionRow({
   agentController.repaintBadge?.(badge);
   nameRow.append(badge, el('span', 's-name-text', session.name));
 
-  const closeButton = el('span', 's-close', '×');
+  const closeButton = el('button', 's-close', '×');
+  closeButton.type = 'button';
+  closeButton.setAttribute('aria-label', '关闭会话 ' + session.name);
   closeButton.title = '关闭此终端连接';
   closeButton.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -226,7 +231,7 @@ function renderSessionRow({
     event.preventDefault();
     if (session.temporary) return;
     onContextMenu(event.clientX, event.clientY, {
-      type: 'session', id: session.id, dir: session.dir, name: session.name,
+      type: 'session', id: session.id, dir: session.dir, name: session.name, provider,
     });
   });
   return item;
@@ -237,10 +242,11 @@ export function renderHiddenSessions({
   list,
   el,
   onRestore,
+  emptyMessage = '（无归档会话）',
 }) {
   hiddenPanel.innerHTML = '';
   if (!list.length) {
-    hiddenPanel.appendChild(el('div', 'hidden-item', '（无归档会话）'));
+    hiddenPanel.appendChild(el('div', 'hidden-item', emptyMessage));
     return;
   }
   for (const session of list) {

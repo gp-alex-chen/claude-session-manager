@@ -106,23 +106,28 @@ function renderSummary(documentRef, button, token, entry) {
   button.replaceChildren();
   const summary = entry?.summary;
   const session = usageTotal(summary, 'session');
-  let label = '用量 —';
+  let label = '—';
+  let description = token ? '当前会话暂无 Token 用量' : '当前没有会话';
   let disabled = true;
   if (token && entry?.waiting) {
-    label = '等待统计';
+    label = '待统计';
+    description = '等待新会话身份与 Token 用量统计';
   } else if (token && entry?.loading && !summary) {
-    label = '加载中…';
+    label = '…';
+    description = '正在加载 Token 用量';
   } else if (token && entry?.error && !summary) {
-    label = '用量失败';
+    description = 'Token 用量查询失败：' + entry.error;
   } else if (token && summary) {
-    label = `会话 ${session ? formatTokenCount(session.total) : '—'}`;
-    if (entry.stale) label += ' · 较旧';
+    label = session ? formatTokenCount(session.total) : '—';
+    description = '会话累计 ' + label + ' Token，点击查看用量明细';
+    if (entry.stale) { label = '~' + label; description += '（数据较旧）'; }
     disabled = false;
   } else if (token) {
-    label = '暂无用量';
+    description = '当前会话暂无 Token 用量';
   }
   addText(documentRef, button, 'span', 'usage-pane-label', label);
   button.disabled = disabled;
+  button.title = description;
   button.setAttribute?.('aria-busy', String(Boolean(entry?.loading)));
   return { summary, disabled };
 }
@@ -192,7 +197,7 @@ export function createUsageView({
       surface.usageSummary.setAttribute?.('aria-controls', surface.usageDetails.id);
       const paneNumber = Number(surface.id.slice(-1)) + 1;
       surface.usageSummary.setAttribute?.('aria-label', token
-        ? '查看窗格 ' + paneNumber + ' token 用量'
+        ? '窗格 ' + paneNumber + '：' + surface.usageSummary.title
         : '窗格 ' + paneNumber + ' 当前没有会话');
       if (openPaneId === surface.id && (result.disabled || openToken !== token)) {
         setOpen(surface.id, false);

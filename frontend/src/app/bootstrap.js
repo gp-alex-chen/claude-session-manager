@@ -10,6 +10,7 @@ import { createUsageController } from '../usage/controller.js';
 import { createUsageView } from '../usage/view.js';
 import { clampProgress } from '../utils.js';
 import { createPaneController } from '../panes/controller.js';
+import { createWorkspaceController } from '../workspace/controller.js';
 
 const REQUIRED_IDS = [
   'terminal', 'status-bar', 'status-message', 'project-bar', 'btn-add-project',
@@ -19,6 +20,9 @@ const REQUIRED_IDS = [
   'settings-tab-terminal', 'settings-tab-update', 'settings-content',
   'settings-panel-appearance', 'settings-panel-terminal', 'settings-panel-update',
   'settings-version',
+  'app', 'sidebar', 'sidebar-divider', 'workspace-toolbar', 'workspace-project',
+  'workspace-directory', 'workspace-summary', 'btn-sidebar-toggle',
+  'session-search', 'btn-opened-only', 'archive-overlay', 'archive-dialog', 'archive-search', 'btn-close-archive',
 ];
 
 function requiredElement(documentRef, id) {
@@ -51,7 +55,9 @@ export function createApplication(deps) {
   const nodes = Object.fromEntries(REQUIRED_IDS.map((id) => [id, requiredElement(documentRef, id)]));
   const state = createState();
   const termOptions = createTermOptionsFn();
+  let workspaceController;
   const setStatus = (message, className) => {
+    if (workspaceController) return workspaceController.setStatus(message, className);
     nodes['status-message'].textContent = String(message);
     nodes['status-message'].className = className || '';
   };
@@ -69,6 +75,8 @@ export function createApplication(deps) {
   let paneController;
   let usageController;
   let usageView;
+  workspaceController = createWorkspaceController({ state, nodes, storage: preferences, documentRef,
+    onResize: () => paneController?.resizeVisible?.() });
   const agentController = createAgent({
     state,
     GetAgents: backend.GetAgents,
@@ -78,6 +86,7 @@ export function createApplication(deps) {
     listRoot: nodes['session-list'],
     documentRef,
     refreshFoldState: () => sessionController?.refreshFoldState(),
+    onAgents: (list) => sessionController?.handleAgentIdentities?.(list),
   });
   const terminalController = createTerminal({
     state,
@@ -101,22 +110,26 @@ export function createApplication(deps) {
       usageController?.onActivate(token ?? state.activeToken);
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
+      workspaceController.refreshContext();
     },
     onExit: (token) => {
       sessionController?.handleTerminalExit(token);
       paneController?.handleTerminalExit(token);
+      sessionController?.refreshSessionVisibility?.();
+      workspaceController.refreshContext();
     },
     onDispose: (token) => {
       paneController?.removeSession(token);
       usageController?.removeToken?.(token);
       sessionController?.refreshSessionVisibility?.();
+      workspaceController.refreshContext();
     },
   });
   paneController = createPanes({
     state,
     terminalController,
     terminalRoot: nodes.terminal,
-    statusBar: nodes['status-bar'],
+    statusBar: nodes['workspace-toolbar'],
     documentRef,
     storageRef: preferences,
     el,
@@ -125,10 +138,12 @@ export function createApplication(deps) {
       usageController?.onActivate(token);
       sessionController?.syncActiveHighlight();
       agentController.renderUnreadMarks();
+      workspaceController.refreshContext();
     },
     onChange: () => {
       usageView?.render(state);
       void usageController?.refreshVisible?.({ force: false });
+      workspaceController.refreshContext();
     },
   });
   usageView = createUsageView({
@@ -185,12 +200,20 @@ export function createApplication(deps) {
     hiddenPanel: nodes['hidden-panel'],
     hiddenCount: nodes['hidden-count'],
     hiddenButton: nodes['btn-hidden'],
+    searchInput: nodes['session-search'],
+    openedButton: nodes['btn-opened-only'],
+    archiveOverlay: nodes['archive-overlay'],
+    archiveDialog: nodes['archive-dialog'],
+    archiveSearch: nodes['archive-search'],
+    archiveClose: nodes['btn-close-archive'],
+    workspaceRoot: nodes.app,
     eyeButton: nodes['btn-eye'],
     documentRef,
     windowRef,
     el,
     setStatus,
     onProjects: usageController.prefetchProjects,
+    onVisibilityChange: workspaceController.refreshContext,
     onPair: (pendingItem) => {
       usageController.refreshToken?.(pendingItem.token, { force: true });
     },
@@ -239,7 +262,7 @@ export function createApplication(deps) {
   });
 
   const controllers = { agent: agentController, terminal: terminalController, panes: paneController, session: sessionController,
-    settings: settingsController, update: updateController, usage: usageController };
+    settings: settingsController, update: updateController, usage: usageController, workspace: workspaceController };
   const subscriptions = [];
   let resizeHandler = null;
   let started = false;
@@ -286,6 +309,8 @@ export function createApplication(deps) {
     subscribe('update:progress', (progress) => updateController.handleProgress(progress));
     readyPromise = preferences.initialize().then(async () => {
       if (!current()) return;
+      workspaceController.initialize();
+      workspaceController.start();
       agentController.start();
       paneController.start();
       usageController.start();
@@ -314,6 +339,7 @@ export function createApplication(deps) {
       else runtime.EventsOff?.(name);
     }
     settingsController.stop();
+    workspaceController.stop();
     updateController.stop?.();
     sessionController.stop();
     paneController.stop();

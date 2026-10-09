@@ -1,5 +1,5 @@
 import { leafOf } from '../utils.js';
-import { listSig, pairPendingSessions } from './pairing.js';
+import { listSig, pairPendingSessions, terminalForSession } from './pairing.js';
 import { dirIdentity, renderHiddenSessions, renderSessionList, updateProjectUsageLabels } from './view.js';
 import { renderProviderBadge } from './provider-icons.js';
 
@@ -17,6 +17,13 @@ export function createSessionController(deps) {
     hiddenPanel,
     hiddenCount,
     hiddenButton,
+    searchInput = null,
+    openedButton = null,
+    archiveOverlay = null,
+    archiveDialog = null,
+    archiveSearch = null,
+    archiveClose = null,
+    workspaceRoot = null,
     eyeButton,
     documentRef = typeof document === 'undefined' ? null : document,
     windowRef = typeof window === 'undefined' ? null : window,
@@ -24,6 +31,7 @@ export function createSessionController(deps) {
     setStatus,
     onPair,
     onProjects,
+    onVisibilityChange,
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
   } = deps;
@@ -49,6 +57,12 @@ export function createSessionController(deps) {
   let hiddenRequestGeneration = 0;
   let newLaunchInFlight = false;
   let filterReady = false;
+  let searchQuery = '';
+  let openedOnly = false;
+  let archivedSessions = [];
+  const nativeSessions = new Map();
+  let latestAgentIdentities = [];
+  let identitiesEnabled = true;
 
   function providerForID(id) {
     return state.sessionProviders.get(id) || 'claude';
@@ -58,7 +72,7 @@ export function createSessionController(deps) {
     const ids = new Set(state.selectedProviders);
     for (const [token, terminal] of state.terminals) {
       const provider = terminal.provider || providerForID(token);
-      if (token.startsWith('new-') && provider !== 'claude') continue;
+      if (token.startsWith('new-') && provider !== 'claude' && !state.newToReal.has(token)) continue;
       ids.add(provider);
     }
     for (const item of state.pendingNew) if (!item.provider || item.provider === 'claude') ids.add('claude');
@@ -69,7 +83,7 @@ export function createSessionController(deps) {
   function visibleHistory(list) {
     return list.filter((item) => state.selectedProviders.has(item.provider || 'claude')
       || restoringIDs.has(item.id)
-      || state.terminals.has(state.realToNew.get(item.id) || item.id));
+      || Boolean(terminalForSession(state, item.id)));
   }
 
   function renderProviderFilters() {
@@ -106,6 +120,7 @@ export function createSessionController(deps) {
     renderProviderFilters();
     hiddenCount.textContent = '';
     if (hiddenOpen) hiddenPanel.innerHTML = '';
+    archivedSessions = [];
     renderSessions(lastLoaded);
     await loadSessions();
   }
@@ -126,7 +141,8 @@ export function createSessionController(deps) {
   function syncActiveHighlight() {
     for (const item of listRoot.querySelectorAll('.session-item')) {
       const token = state.realToNew.get(item.dataset.id) || item.dataset.id;
-      item.classList.toggle('active', token === state.activeToken);
+      const ownsToken = !state.newToReal.has(token) || state.newToReal.get(token) === item.dataset.id;
+      item.classList.toggle('active', ownsToken && token === state.activeToken);
     }
   }
 
@@ -149,13 +165,19 @@ export function createSessionController(deps) {
       const id = item.dataset.id;
       const dir = dirIdentity(item.dataset.dir);
       const kind = agentController.classifyAgent(id);
-      const hidden = state.collapsedDirs.has(dir) && (state.eyeGlobalOff || kind === 'idle');
+      const hidden = !searchQuery && !openedOnly && state.collapsedDirs.has(dir) && (state.eyeGlobalOff || kind === 'idle');
       item.classList.toggle('fold-hidden', hidden);
     }
   }
 
   async function openFromList(sessionInfo, options = {}) {
     const token = state.realToNew.get(sessionInfo.id) || sessionInfo.id;
+    const currentID = state.newToReal.get(token);
+    if (!sessionInfo.temporary && ((currentID && currentID !== sessionInfo.id)
+      || state.pendingNew.some(item => item.token === token && item.identityKnown))) {
+      setStatus('此终端已切换会话，请先关闭该终端再恢复原会话', 'warn');
+      return false;
+    }
     const targetPaneId = paneController?.getTargetPaneId?.(options.paneId) || options.paneId;
     const showOptions = targetPaneId ? { ...options, paneId: targetPaneId } : options;
     state.sessionDirs.set(sessionInfo.id, sessionInfo.dir);
@@ -182,6 +204,7 @@ export function createSessionController(deps) {
       state.unreadSessions.delete(sessionInfo.id);
       agentController.renderUnreadMarks();
       showTerminal(token, showOptions);
+      renderNavigation();
       return true;
     } catch (error) {
       setStatus('恢复失败: ' + error, 'warn');
@@ -196,6 +219,10 @@ export function createSessionController(deps) {
       state.pendingNew = state.pendingNew.filter((item) => item !== temporary);
       terminalController.closeTab(id);
       renderSessions(lastLoaded);
+      return;
+    }
+    if (state.newToReal.has(id) && state.newToReal.get(id) !== id) {
+      setStatus('此终端已切换会话，请从当前会话关闭终端', 'warn');
       return;
     }
     const mappedToken = state.realToNew.get(id);
@@ -246,10 +273,75 @@ export function createSessionController(deps) {
   }
 
   function handleTerminalExit(token) {
+    nativeSessions.delete(token);
     pendingAdoptions.delete(token);
     if (state.pendingNew.some((item) => item.token === token && item.provider && item.provider !== 'claude')) {
       state.pendingNew = state.pendingNew.filter((item) => item.token !== token);
       renderSessions(lastLoaded);
+    }
+  }
+
+  // Backend has already validated and persisted this native thread identity.
+  // Runtime tokens remain unchanged for PTY data, resize, kill and usage.
+  function handleAgentIdentities(list) {
+    if (!identitiesEnabled) return;
+    latestAgentIdentities = Array.isArray(list) ? list : [];
+    let changed = false;
+    for (const info of latestAgentIdentities) {
+      const token = info?.runtimeToken;
+      const id = info?.sessionId;
+      const terminal = state.terminals.get(token);
+      if (info?.provider !== 'codex' || !id?.startsWith('codex:')
+        || !terminal || terminal.exited || state.closedTokens.has(token)) continue;
+      if (!info.restorable) {
+        const previousID = state.newToReal.get(token);
+        if (previousID) {
+          if (state.realToNew.get(previousID) === token) state.realToNew.delete(previousID);
+          state.newToReal.delete(token);
+          state.unreadSessions.delete(previousID);
+          nativeSessions.delete(token);
+        }
+        const name = info.name || 'Codex 会话 · ' + id.slice(6, 14);
+        const pending = state.pendingNew.find(item => item.token === token);
+        if (!pending || !pending.identityKnown || pending.name !== name || previousID) {
+          state.pendingNew = state.pendingNew.filter(item => item.token !== token);
+          state.pendingNew.push({ token, dir: info.cwd || terminal.dir, provider: 'codex', name, identityKnown: true });
+          terminal.labelText = name;
+          changed = true;
+        }
+        continue;
+      }
+      const existingToken = state.realToNew.get(id) || (state.terminals.has(id) ? id : null);
+      if (existingToken && existingToken !== token) continue;
+      const previousID = state.newToReal.get(token);
+      const history = lastLoaded.find(item => item.id === id);
+      const name = history?.name || info.name || (previousID === id ? nativeSessions.get(token)?.name : null)
+        || 'Codex 会话 · ' + id.slice(6, 14);
+      const dir = history?.dir || info.cwd || terminal.dir;
+      if (previousID === id && nativeSessions.get(token)?.name === name && nativeSessions.get(token)?.dir === dir) continue;
+      if (previousID && previousID !== id) {
+        if (state.realToNew.get(previousID) === token) state.realToNew.delete(previousID);
+        state.unreadSessions.delete(previousID);
+      }
+      state.newToReal.set(token, id);
+      state.realToNew.set(id, token);
+      state.closedTokens.delete(id);
+      if (state.unreadSessions.delete(token)) state.unreadSessions.add(id);
+      state.pendingNew = state.pendingNew.filter(item => item.token !== token);
+      terminal.labelText = name;
+      terminal.dir = dir;
+      state.sessionNames.set(id, name);
+      state.sessionNames.set(token, name);
+      state.sessionDirs.set(id, dir);
+      state.sessionProviders.set(id, 'codex');
+      nativeSessions.set(token, { id, dir, name, provider: 'codex', time: '已打开' });
+      changed = true;
+      onPair?.({ token, dir, provider: 'codex' }, id, nativeSessions.get(token));
+    }
+    if (changed) {
+      renderNavigation();
+      paneController?.setSessionOptions?.(navigationSessions());
+      paneController?.refresh?.();
     }
   }
 
@@ -334,28 +426,68 @@ export function createSessionController(deps) {
     lastLoaded = list;
     lastListSignature = listSig(list);
     for (const session of list) {
+      state.sessionNames.set(session.id, session.name);
       state.sessionDirs.set(session.id, session.dir);
       state.sessionProviders.set(session.id, session.provider || 'claude');
+      const token = state.realToNew.get(session.id);
+      if (token && nativeSessions.has(token)) {
+        nativeSessions.set(token, { ...session });
+        const terminal = state.terminals.get(token);
+        if (terminal) { terminal.labelText = session.name; terminal.dir = session.dir; }
+        state.sessionNames.set(token, session.name);
+      }
     }
+    renderNavigation();
+    onProjects?.(visibleHistory(list));
+    refreshHidden(true);
+    agentController.refreshAgents();
+    paneController?.setSessionOptions?.(navigationSessions());
+  }
+
+  function navigationSessions() {
+    for (const [token] of nativeSessions) {
+      if (!state.terminals.has(token) || state.terminals.get(token)?.exited) nativeSessions.delete(token);
+    }
+    const pendingTokens = new Set(state.pendingNew.filter(item => item.provider === 'codex').map(item => item.token));
+    const historyIDs = new Set(lastLoaded.filter(item => !pendingTokens.has(item.id)).map(item => item.id));
+    const native = [...nativeSessions.values()].filter(item => !historyIDs.has(item.id));
     const temporarySessions = state.pendingNew
       .filter((item) => item.provider && item.provider !== 'claude')
       .map((item) => ({ id: item.token, dir: item.dir, name: item.name, provider: item.provider,
-        temporary: true, time: '临时终端 · 重启不恢复' }));
-    const visibleList = [...visibleHistory(list), ...temporarySessions];
-    if (!state.collapseAllDone && list.length) {
+        temporary: true, time: item.identityKnown ? '等待 Codex 保存会话 · 暂不恢复' : '正在建立 Codex 会话' }));
+    return [...visibleHistory(lastLoaded).filter(item => !pendingTokens.has(item.id)), ...native, ...temporarySessions];
+  }
+
+  function isOpened(session) {
+    const terminal = session.temporary ? state.terminals.get(session.id) : terminalForSession(state, session.id);
+    return Boolean(terminal && !terminal.exited);
+  }
+
+  function matchesSearch(session, query = searchQuery) {
+    return !query || [session.name, session.dir, leafOf(session.dir || '')]
+      .some(value => String(value || '').toLocaleLowerCase().includes(query));
+  }
+
+  function renderNavigation() {
+    const visibleList = navigationSessions().filter(item => (!openedOnly || isOpened(item)) && matchesSearch(item));
+    const projectDirs = state.projects.filter(dir => (!searchQuery || dir.toLocaleLowerCase().includes(searchQuery))
+      && (!openedOnly || visibleList.some(item => dirIdentity(item.dir) === dirIdentity(dir))));
+    if (!state.collapseAllDone && lastLoaded.length) {
       state.collapseAllDone = true;
-      for (const session of list) state.collapsedDirs.add(dirIdentity(session.dir));
+      for (const session of lastLoaded) state.collapsedDirs.add(dirIdentity(session.dir));
     }
 
     renderSessionList({
       listRoot,
       list: visibleList,
-      projects: state.projects,
+      projects: projectDirs,
+      forceExpanded: Boolean(searchQuery || openedOnly),
       state,
       agentController,
       el,
       onStartNew: chooseNewAgent,
       onToggleGroup: (dir, group) => {
+        if (searchQuery || openedOnly) return;
         const identity = dirIdentity(dir);
         const collapsed = group.classList.toggle('collapsed');
         if (collapsed) state.collapsedDirs.add(identity);
@@ -368,13 +500,17 @@ export function createSessionController(deps) {
       favoriteProjects: state.projectFavorites,
       usageByProject: state.usageByProject,
     });
-    onProjects?.(visibleHistory(list));
-    refreshHidden(true);
-    agentController.refreshAgents();
+    if (!listRoot.children.length) listRoot.appendChild(el('div', 'session-list-empty',
+      searchQuery ? '没有匹配的项目或会话' : openedOnly ? '尚无已打开的会话' : '添加项目或新建会话以开始'));
+    if (openedButton) {
+      openedButton.textContent = '已打开 ' + [...state.terminals.values()].filter(item => item && !item.exited).length;
+      openedButton.setAttribute('aria-pressed', String(openedOnly));
+      openedButton.title = openedOnly ? '显示全部历史会话' : '只显示已打开的会话';
+    }
     refreshFoldState();
     agentController.renderUnreadMarks();
-    paneController?.setSessionOptions?.(visibleList);
     syncActiveHighlight();
+    onVisibilityChange?.();
   }
 
   async function startNew(dir, provider = 'claude') {
@@ -407,10 +543,12 @@ export function createSessionController(deps) {
       const terminal = state.terminals.get(token);
       if (terminal) { terminal.dir = dir; terminal.provider = provider; }
       state.pendingNew.push(provider === 'claude' ? { token, dir } : { token, dir, provider, name: label });
+      if (provider === 'codex') handleAgentIdentities(latestAgentIdentities);
       if (provider !== 'claude') renderSessions(lastLoaded);
+      else renderNavigation();
       showTerminal(token, targetPaneId ? { paneId: targetPaneId } : {});
       setStatus(provider === 'claude' ? '已启动新会话: ' + leafOf(dir)
-        : providerName + ' 临时终端已打开；已有历史可从列表恢复，新终端暂不自动恢复', 'ok');
+        : providerName + ' 新终端已打开，确认会话身份后自动加入恢复清单', 'ok');
     } catch (error) {
       if (lifecycle === adoptionGeneration) setStatus('新建失败: ' + error, 'warn');
     } finally {
@@ -588,8 +726,7 @@ export function createSessionController(deps) {
       return;
     }
     state.sessionNames.set(target.id, name);
-    const token = state.realToNew.get(target.id) || target.id;
-    const terminal = state.terminals.get(token);
+    const terminal = terminalForSession(state, target.id);
     if (terminal) terminal.labelText = name;
     const refreshed = await loadSessions();
     if (refreshed === null) return;
@@ -631,11 +768,18 @@ export function createSessionController(deps) {
     if (generation !== filterGeneration || request !== hiddenRequestGeneration) return;
     list = Array.isArray(list) ? list : [];
     list = list.filter((item) => state.selectedProviders.has(item.provider || 'claude'));
+    archivedSessions = list;
     hiddenCount.textContent = list.length ? ' · ' + list.length : '';
     if (!hiddenOpen) return;
+    renderArchive();
+  }
+
+  function renderArchive() {
+    const query = String(archiveSearch?.value || '').trim().toLocaleLowerCase();
     renderHiddenSessions({
       hiddenPanel,
-      list,
+      list: archivedSessions.filter(item => matchesSearch(item, query)),
+      emptyMessage: query ? '没有匹配的归档会话' : '（无归档会话）',
       el,
       onRestore: async (session) => {
         try {
@@ -645,9 +789,40 @@ export function createSessionController(deps) {
           return;
         }
         if ((await loadSessions()) === null) return;
+        archiveSearch?.focus?.();
         setStatus('已恢复显示: ' + session.name, 'ok');
       },
     });
+  }
+
+  function setArchiveOpen(open, restoreFocus = true) {
+    hiddenOpen = open;
+    hiddenPanel.classList.toggle('hidden', !open);
+    hiddenButton.setAttribute('aria-expanded', String(open));
+    if (archiveOverlay) archiveOverlay.hidden = !open;
+    if (workspaceRoot) workspaceRoot.inert = open;
+    if (open) {
+      renderArchive();
+      archiveSearch?.focus?.();
+      refreshHidden(false);
+    } else if (restoreFocus) hiddenButton.focus?.();
+  }
+
+  function onArchiveKeydown(event) {
+    if (!hiddenOpen) return;
+    if (event.key === 'Escape') {
+      event.preventDefault?.();
+      setArchiveOpen(false);
+    } else if (event.key === 'Tab' && archiveDialog) {
+      const controls = [...(archiveDialog.querySelectorAll?.('button, input, [tabindex="0"]') || [])].filter(item => !item.disabled && !item.hidden);
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.shiftKey && documentRef.activeElement === first) {
+        event.preventDefault?.(); last?.focus?.();
+      } else if (!event.shiftKey && documentRef.activeElement === last) {
+        event.preventDefault?.(); first?.focus?.();
+      }
+    }
   }
 
   function setEyeIcon(off) {
@@ -745,17 +920,23 @@ export function createSessionController(deps) {
   function start() {
     if (started) return;
     started = true;
+    identitiesEnabled = true;
+    documentRef.addEventListener('keydown', onArchiveKeydown);
     refreshTimer = setIntervalFn(() => {
       autoRefreshSessions().catch(() => {});
     }, 5000);
   }
 
   function stop() {
+    identitiesEnabled = false;
+    latestAgentIdentities = [];
+    setArchiveOpen(false, false);
     filterReady = false;
     if (started) {
       started = false;
       clearIntervalFn(refreshTimer);
       refreshTimer = null;
+      documentRef.removeEventListener?.('keydown', onArchiveKeydown);
     }
     adoptionGeneration += 1;
     filterGeneration += 1;
@@ -765,10 +946,16 @@ export function createSessionController(deps) {
   }
 
   hiddenButton.addEventListener('click', () => {
-    hiddenOpen = !hiddenOpen;
-    hiddenPanel.classList.toggle('hidden', !hiddenOpen);
-    if (hiddenOpen) refreshHidden(true);
+    setArchiveOpen(!hiddenOpen);
   });
+  archiveClose?.addEventListener('click', () => setArchiveOpen(false));
+  archiveOverlay?.addEventListener('click', event => { if (event.target === archiveOverlay) setArchiveOpen(false); });
+  archiveSearch?.addEventListener('input', renderArchive);
+  searchInput?.addEventListener('input', () => {
+    searchQuery = String(searchInput.value || '').trim().toLocaleLowerCase();
+    renderNavigation();
+  });
+  openedButton?.addEventListener('click', () => { openedOnly = !openedOnly; renderNavigation(); });
   eyeButton.addEventListener('click', () => {
     state.eyeGlobalOff = !state.eyeGlobalOff;
     paintEye();
@@ -792,6 +979,7 @@ export function createSessionController(deps) {
     openFolder,
     pairNewSessions,
     handleTerminalExit,
+    handleAgentIdentities,
     refreshFoldState,
     refreshHidden,
     renderSessions,
@@ -804,6 +992,6 @@ export function createSessionController(deps) {
     stop,
     syncActiveHighlight,
     toggleProvider,
-    refreshSessionVisibility: () => renderSessions(lastLoaded),
+    refreshSessionVisibility: renderNavigation,
   };
 }

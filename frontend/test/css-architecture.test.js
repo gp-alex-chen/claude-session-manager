@@ -45,6 +45,7 @@ test('all CSS variable references have a token declaration or dynamic ownership'
     'dot', 'term-bg', 'theme-bg', 'theme-fg',
     'terminal-split-columns-first', 'terminal-split-columns-second',
     'terminal-split-rows-first', 'terminal-split-rows-second',
+    'sidebar-width',
   ]);
   for (const file of fs.readdirSync(stylesDir).filter((name) => name.endsWith('.css'))) {
     const source = read(file);
@@ -104,13 +105,9 @@ test('terminal styles define adjustable pane geometries and divider tracks', () 
   assert.match(terminal, /terminal-pane-slot::after[\s\S]*z-index:\s*10/);
   assert.match(terminal, /terminal-pane-slot::after[\s\S]*pointer-events:\s*none/);
   assert.match(terminal, /terminal-pane-slot\.is-focused::after\s*\{\s*border-color:\s*var\(--accent\)/);
-  assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-header[\s\S]*background:\s*var\(--accent-soft\)/);
-  assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-header[\s\S]*box-shadow:\s*inset 3px 0 0 var\(--accent\)/);
-  assert.match(terminal, /terminal-pane-current[\s\S]*visibility:\s*hidden/);
-  assert.match(terminal, /terminal-pane-current[\s\S]*width:\s*32px/);
-  assert.match(terminal, /terminal-pane-slot\.is-focused \.terminal-pane-current[\s\S]*visibility:\s*visible/);
-  assert.match(terminal, /terminal-pane-usage-summary[\s\S]*width:\s*88px/);
-  assert.match(terminal, /terminal-pane-usage-summary[\s\S]*flex:\s*0 0 88px/);
+  assert.doesNotMatch(terminal, /terminal-pane-current/);
+  assert.match(terminal, /terminal-pane-provider[\s\S]*flex:\s*0 0 18px/);
+  assert.match(terminal, /terminal-pane-usage-summary[\s\S]*flex:\s*0 0 auto/);
   assert.match(terminal, /terminal-pane-usage-details[\s\S]*position:\s*absolute/);
   assert.doesNotMatch(terminal, /terminal-pane-title::after/);
 });

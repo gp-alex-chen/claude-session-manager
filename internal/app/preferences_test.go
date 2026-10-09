@@ -30,7 +30,7 @@ func TestLocalAppDataShutdownPersistStartupRestore(t *testing.T) {
 	if err := store.SetProjectFavorite(project, true); err != nil {
 		t.Fatal(err)
 	}
-	for key, value := range map[string]string{"ui-theme": "dark", "term-theme": "dracula", "term-font-size": "19", "terminal-layout-mode": "grid-2x2", "session-provider-filter": `["claude"]`} {
+	for key, value := range map[string]string{"ui-theme": "dark", "term-theme": "dracula", "term-font-size": "19", "terminal-layout-mode": "grid-2x2", "session-provider-filter": `["claude"]`, "sidebar-width": "310", "sidebar-collapsed": "true"} {
 		if err := a.SetPreference(key, value); err != nil {
 			t.Fatal(err)
 		}
@@ -61,6 +61,9 @@ func TestLocalAppDataShutdownPersistStartupRestore(t *testing.T) {
 	}
 	if values["session-provider-filter"] != `["claude"]` {
 		t.Fatalf("lost provider selection: %v", values)
+	}
+	if values["sidebar-width"] != "310" || values["sidebar-collapsed"] != "true" {
+		t.Fatalf("lost workspace layout: %v", values)
 	}
 	if got := restarted.ListProjectFavorites(); !reflect.DeepEqual(got, []string{project}) {
 		t.Fatalf("favorites=%v", got)

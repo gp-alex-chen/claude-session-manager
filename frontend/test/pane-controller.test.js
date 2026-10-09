@@ -270,35 +270,49 @@ test('saved split ratios restore independently for each layout', () => {
   );
 });
 
-test('pane headers use current, session, usage, and clear slots without duplicate titles', () => {
+test('pane headers use provider, session, usage, and clear slots without a current marker', () => {
   const fixture = makeFixture();
   const firstRoot = fixture.controller.view.paneRoot('pane-0');
   const firstHeader = firstRoot.children[0];
 
   assert.deepEqual(firstHeader.children.map((child) => child.className), [
-    'terminal-pane-current',
+    'terminal-pane-provider',
     'terminal-pane-session',
     'terminal-pane-usage-summary',
     'terminal-pane-clear',
   ]);
   assert.equal(firstRoot.children[1].className, 'terminal-pane-usage-details');
   assert.equal(firstRoot.children[2].className, 'terminal-pane-body');
-  assert.equal(firstHeader.children[0].textContent, '当前');
-  assert.equal(firstHeader.children[0].getAttribute('aria-hidden'), 'false');
+  assert.equal(firstHeader.children[0].hidden, true);
+  assert.match(firstRoot.getAttribute('aria-label'), /当前焦点/);
   assert.equal(fixture.controller.view.paneRoot('pane-1').children[0].children[0].getAttribute('aria-hidden'), 'true');
   assert.equal(firstHeader.children.some((child) => child.className === 'terminal-pane-title'), false);
   assert.equal(firstHeader.children[2].disabled, true);
 });
 
-test('focused pane marker moves without removing its fixed slot', () => {
+test('focused pane changes its border state without adding a label slot', () => {
   const fixture = makeFixture();
   fixture.controller.setLayout('split-cols-2');
   fixture.controller.view.paneBody('pane-1').click();
 
-  assert.equal(fixture.controller.view.paneRoot('pane-0').children[0].children[0].getAttribute('aria-hidden'), 'true');
-  assert.equal(fixture.controller.view.paneRoot('pane-1').children[0].children[0].getAttribute('aria-hidden'), 'false');
-  assert.equal(fixture.controller.view.paneRoot('pane-0').children[0].children[0].hidden, false);
-  assert.equal(fixture.controller.view.paneRoot('pane-1').children[0].children[0].hidden, false);
+  assert.equal(fixture.controller.view.paneRoot('pane-0').classList.contains('is-focused'), false);
+  assert.equal(fixture.controller.view.paneRoot('pane-1').classList.contains('is-focused'), true);
+  assert.doesNotMatch(fixture.controller.view.paneRoot('pane-0').getAttribute('aria-label'), /当前焦点/);
+  assert.match(fixture.controller.view.paneRoot('pane-1').getAttribute('aria-label'), /当前焦点/);
+});
+
+test('pane product icon follows the assigned terminal and clearing preserves the terminal', () => {
+  const f=makeFixture();
+  f.state.terminals.get('b').provider='codex';
+  f.controller.showSession('b',{paneId:'pane-0'});
+  const surface=f.controller.view.paneSurfaces()[0];
+  assert.equal(surface.providerIcon.hidden,false);
+  assert.equal(surface.providerIcon.dataset.provider,'codex');
+  assert.equal(surface.providerIcon.children[0].getAttribute('aria-label'),'Codex');
+  assert.match(surface.clear.title,/会话保持打开/);
+  surface.clear.click();
+  assert.equal(f.state.terminals.has('b'),true);
+  assert.equal(surface.providerIcon.hidden,true);
 });
 
 test('pane mutations notify the usage surface after DOM state is synchronized', () => {
@@ -388,6 +402,45 @@ test('showing an existing session focuses its original pane and never duplicates
   assert.equal(fixture.state.panes.filter((pane) => pane.token === 'a').length, 1);
   assert.equal(fixture.state.focusedPaneId, 'pane-0');
   assert.deepEqual(fixture.focuses.at(-1), ['a', { focus: true }]);
+});
+
+test('choosing another visible session in a pane selector swaps both panes and keeps focus at the selector', () => {
+  for (const mode of ['split-rows-2', 'split-cols-2', 'split-main-left-3', 'grid-2x2']) {
+    const fixture = makeFixture();
+    fixture.controller.initialize();
+    fixture.controller.setLayout(mode);
+    fixture.controller.start();
+    const ids = fixture.controller.getVisiblePaneIds();
+    for (const targetId of ids) {
+      for (const sourceId of ids.filter((id) => id !== targetId)) {
+        const before = fixture.state.panes.map((pane) => pane.token);
+        const target = fixture.state.panes.find((pane) => pane.id === targetId);
+        const source = fixture.state.panes.find((pane) => pane.id === sourceId);
+        const targetToken = target.token;
+        const sourceToken = source.token;
+        const sessions = new Map(fixture.state.terminals);
+        const selector = fixture.controller.view.paneSelector(targetId);
+        const mountStart = fixture.mounts.length;
+        selector.value = sourceToken;
+        selector.dispatchEvent({ type: 'change', target: selector });
+
+        assert.deepEqual(fixture.state.panes.map((pane) => pane.token), before.map((token) =>
+          token === targetToken ? sourceToken : token === sourceToken ? targetToken : token), mode);
+        assert.equal(fixture.controller.view.paneSelector(targetId).value, sourceToken);
+        assert.equal(fixture.controller.view.paneSelector(sourceId).value, targetToken);
+        assert.equal(fixture.state.focusedPaneId, targetId);
+        assert.equal(fixture.state.activeToken, sourceToken);
+        assert.deepEqual(fixture.focuses.at(-1), [sourceToken, { focus: true }]);
+        const mounts = fixture.mounts.slice(mountStart);
+        assert.ok(mounts.some(([token, body]) => token === sourceToken && body === fixture.controller.view.paneBody(targetId)));
+        assert.ok(mounts.some(([token, body]) => token === targetToken && body === fixture.controller.view.paneBody(sourceId)));
+        assert.deepEqual(fixture.state.terminals, sessions);
+        assert.equal(fixture.unmounts.length, 0);
+        assert.equal(fixture.state.layoutMode, mode);
+      }
+    }
+    fixture.controller.stop();
+  }
 });
 
 test('clearing a pane collapses a two-pane layout to single and keeps the other session', () => {
@@ -539,5 +592,5 @@ test('an exited assigned session keeps its pane label and disabled selector opti
   const selected = selector.children.find((option) => option.value === 'a');
   assert.equal(selector.value, 'a');
   assert.equal(selected.disabled, true);
-  assert.equal(selected.textContent, 'Session a（已退出）');
+  assert.equal(selected.textContent, 'Claude · 未指定项目 · Session a（已退出）');
 });

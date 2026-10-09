@@ -27,6 +27,10 @@ main.go
 - `internal/notify`：Windows 提示音。
 - `internal/updater`：`v*-wails` Release 检查、下载和自替换。
 
+`frontend/src/workspace/controller.js` 管理侧栏宽度、收起状态、当前工作目录和底部提示。默认均衡布局为 280px 两行会话列表；`sidebar-width` 限制为 220–360，`sidebar-collapsed` 使用 `true/false` 字符串，经共享 preferences 读写。侧栏拖动期间只更新几何与终端 fit，拖动结束、键盘调整和收起操作才保存设置。成功提示短暂显示，警告保持可见。顶部 `workspace-toolbar` 放置布局菜单，底部 `status-bar` 显示提示和存活终端数；窗格只保留产品图标、会话 select、紧凑 Token 按钮和移出按钮。select 显示 Agent、项目文件夹名和会话标题，悬停展示完整项目路径；只有 select 的选择事件传入 swap，选择其他已占用窗格的会话时交换两边的 runtime token 和原有终端 host，保持目标窗格焦点并同步用量与额度。侧栏选择已打开会话仍定位原窗格。
+
+搜索和「已打开」是 session controller 内的临时导航状态，只筛选缓存的历史与临时行，不额外请求历史、不改写 provider 基线，也不减少 pane controller 的运行会话选项。搜索匹配会话名/项目目录，结果强制展开但不改写用户的折叠集合；未匹配的历史仍保留身份和名称，用于恢复与状态通知。归档仍使用原有 hidden 语义，独立 dialog 具有背景 inert、焦点循环、Escape/遮罩关闭和来源按钮焦点恢复，搜索不改变来源筛选后的归档总数。
+
 前端目录：
 
 - `app/bootstrap.js` 统一创建 controller、DOM、事件路由和生命周期。

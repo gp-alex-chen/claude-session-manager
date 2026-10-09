@@ -1,4 +1,5 @@
 import { paintProviderStatusIcon } from '../sessions/provider-icons.js';
+import { terminalForSession } from '../sessions/pairing.js';
 
 const BUSY_STATES = new Set(['working', 'queued']);
 
@@ -16,6 +17,7 @@ export function createAgentController(deps) {
     listRoot,
     documentRef = typeof document === 'undefined' ? null : document,
     refreshFoldState,
+    onAgents,
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
     setTimeoutFn = setTimeout,
@@ -34,16 +36,17 @@ export function createAgentController(deps) {
     const provider = state.sessionProviders?.get(id) || 'claude';
     const hasStatus = state.agentProviders?.get(provider)?.hasStatus ?? (provider === 'claude');
     if (!hasStatus) {
-      const token = state.realToNew.get(id) || id;
-      const terminal = state.terminals.get(token);
+      const terminal = terminalForSession(state, id);
       return terminal && !terminal.exited ? 'unknown-open' : 'idle';
     }
-    const agent = state.runningAgents.get(id);
+    const agent = state.runningAgents.get(id) || state.runningAgents.get(state.realToNew.get(id));
     if (provider === 'codex') {
+      const owner = state.newToReal.get(id);
+      if (owner && owner !== id) return 'idle';
       if (!isBusy(agent) && agent?.state !== 'blocked' && ['failed', 'interrupted'].includes(agent?.turnStatus)) return agent.turnStatus;
       if (agent?.state === 'failed' || agent?.state === 'interrupted') return agent.state;
       if (!agent || agent.state === 'unknown') {
-        const terminal = state.terminals.get(state.realToNew.get(id) || id);
+        const terminal = terminalForSession(state, id);
         return terminal && !terminal.exited ? 'unknown-open' : 'idle';
       }
     }
@@ -162,9 +165,12 @@ export function createAgentController(deps) {
 
   function applyAgents(list) {
     const safeList = Array.isArray(list) ? list : [];
+    onAgents?.(safeList);
     const next = new Map();
     for (const agent of safeList) {
-      const id = agent?.provider === 'codex' && agent.runtimeToken ? agent.runtimeToken : agent?.sessionId;
+      const id = agent?.provider === 'codex' && agent.runtimeToken
+        ? (state.newToReal.get(agent.runtimeToken) === agent.sessionId ? agent.sessionId : agent.runtimeToken)
+        : agent?.sessionId;
       if (id) next.set(id, agent);
     }
     DebugLog('应用 agents=' + safeList.length + ' 条, 可识别' + next.size + ' 个');
@@ -191,8 +197,9 @@ export function createAgentController(deps) {
 
     for (const [id, current] of next) {
       if (current.provider !== 'codex' || !current.turnId || current.turnStatus !== 'completed') continue;
-      if (completedCodexTurns.get(id) === current.turnId) continue;
-      completedCodexTurns.set(id, current.turnId);
+      const turnKey = current.runtimeToken || id;
+      if (completedCodexTurns.get(turnKey) === current.turnId) continue;
+      completedCodexTurns.set(turnKey, current.turnId);
       if (baselineReady && !state.closedTokens.has(id)) {
         state.endedAgents.add(id);
         markEnded(id, state.sessionNames.get(id) || id, true);

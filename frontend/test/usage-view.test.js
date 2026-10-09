@@ -109,10 +109,10 @@ test('per-pane view renders each session usage independently', () => {
     ]),
   });
 
-  assert.equal(fixture.surfaces[0].usageSummary.children[0].textContent, '会话 100');
-  assert.equal(fixture.surfaces[1].usageSummary.children[0].textContent, '会话 8');
-  assert.equal(fixture.surfaces[0].usageSummary.getAttribute('aria-label'), '查看窗格 1 token 用量');
-  assert.equal(fixture.surfaces[1].usageSummary.getAttribute('aria-label'), '查看窗格 2 token 用量');
+  assert.equal(fixture.surfaces[0].usageSummary.children[0].textContent, '100');
+  assert.equal(fixture.surfaces[1].usageSummary.children[0].textContent, '8');
+  assert.match(fixture.surfaces[0].usageSummary.getAttribute('aria-label'), /窗格 1：会话累计 100 Token/);
+  assert.match(fixture.surfaces[1].usageSummary.getAttribute('aria-label'), /窗格 2：会话累计 8 Token/);
   assert.equal(fixture.surfaces[0].usageSummary.disabled, false);
   assert.equal(fixture.surfaces[1].usageSummary.disabled, false);
   assert.equal(fixture.surfaces[0].usageDetails.hidden, true);
@@ -136,7 +136,7 @@ test('pane summary handles waiting, loading, unavailable, and stale states witho
   });
 
   assert.deepEqual(fixture.surfaces.map((surface) => surface.usageSummary.children[0].textContent), [
-    '等待统计', '加载中…', '用量失败', '会话 100 · 较旧',
+    '待统计', '…', '—', '~100',
   ]);
   assert.equal(fixture.surfaces[2].usageSummary.disabled, true);
   assert.doesNotMatch(textOf(fixture.surfaces[2].usageDetails), /C:\\private/);

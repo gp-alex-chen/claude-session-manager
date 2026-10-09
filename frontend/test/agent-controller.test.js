@@ -65,6 +65,20 @@ test('Codex authoritative status follows temporary runtime token without adoptin
   assert.equal(f.state.newToReal.size, 0);
 });
 
+test('Codex formal identity keeps status and completion notifications on its canonical row', () => {
+  const f = fixture();
+  const token='new-codex-formal',id='codex:uuid';
+  f.state.agentProviders.set('codex',{hasStatus:true});
+  f.state.sessionProviders.set(id,'codex');
+  f.state.newToReal.set(token,id);f.state.realToNew.set(id,token);
+  f.controller.applyAgents([agent(id,{provider:'codex',runtimeToken:token,kind:'interactive',state:'working',turnId:'one',turnStatus:'inProgress'})]);
+  assert.equal(f.controller.classifyAgent(id),'working');
+  f.controller.applyAgents([agent(id,{provider:'codex',runtimeToken:token,kind:'interactive',state:'idle',turnId:'one',turnStatus:'completed'})]);
+  assert.equal(f.notices.length,1);
+  assert.equal(f.state.unreadSessions.has(id),true);
+  assert.equal(f.state.unreadSessions.has(token),false);
+});
+
 test('Codex terminal lifecycle never claims task completion or working state', () => {
   const f = fixture();
   f.state.sessionProviders.set('codex:id', 'codex');

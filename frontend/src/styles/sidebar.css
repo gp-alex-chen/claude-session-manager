@@ -1,36 +1,38 @@
 /* Sidebar layout and session navigation. */
 #sidebar {
-  width: 316px;
-  min-width: 316px;
+  width: var(--sidebar-width, 280px);
+  flex: 0 0 var(--sidebar-width, 280px);
+  min-width: 0;
   background: var(--panel);
-  border-right: 1px solid var(--border);
+  border-right: 0;
   display: flex;
   flex-direction: column;
 }
 #sidebar-header {
-  padding: 12px 14px;
+  padding: 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 #provider-filters {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 .provider-filter {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 13px;
+  gap: 4px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-dim);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  padding: 5px 7px;
+  padding: 4px 5px;
   white-space: nowrap;
   cursor: pointer;
   transition: background .15s, color .15s, border-color .15s;
@@ -45,7 +47,7 @@
 .provider-filter:disabled { cursor: default; }
 .provider-filter:not(.selected) .s-provider { opacity: .5; }
 .provider-filter .s-provider { margin: 0; }
-.provider-filter .s-provider svg { width: 17px; height: 17px; }
+.provider-filter .s-provider svg { width: 15px; height: 15px; }
 .provider-filter, .project-bar-title { user-select: none; }
 .header-btns { display: flex; gap: 6px; flex-shrink: 0; }
 #btn-hidden {
@@ -53,7 +55,7 @@
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 4px 10px;
+  padding: 4px 6px;
   font-size: 12px;
   cursor: pointer;
   transition: background .15s, color .15s, border-color .15s;
@@ -68,7 +70,8 @@
 .hidden-panel {
   background: var(--panel-2);
   border-bottom: 1px solid var(--border);
-  max-height: 220px;
+  min-height: 80px;
+  flex: 1;
   overflow-y: auto;
 }
 .hidden-panel.hidden { display: none; }
@@ -85,7 +88,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 .hidden-item .h-dir { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
 .hidden-item button {
@@ -123,14 +126,9 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .12s;
-}
-#project-bar:hover .project-bar-actions,
-#project-bar:focus-within .project-bar-actions {
   opacity: 1;
   pointer-events: auto;
+  transition: opacity .12s;
 }
 #btn-add-project {
   background: transparent;
@@ -221,16 +219,11 @@
   padding: 0;
   border-radius: 6px;
   cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: auto;
   transition: color .12s, background .12s, opacity .12s;
 }
 .plus svg { display: block; }
-.group-head:hover .plus,
-.group-head:focus-within .plus {
-  opacity: 1;
-  pointer-events: auto;
-}
 .plus:hover { color: var(--accent); background: var(--accent-soft); }
 
 /* Fold filter toggle. */
@@ -292,6 +285,9 @@
   color: var(--text);
 }
 .s-close {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   color: var(--text-faint);
   font-size: 15px;
   line-height: 1;
@@ -319,7 +315,7 @@
   width: 18px;
   height: 18px;
 }
-.session-item:hover .s-close { visibility: visible; }
+.session-item:hover .s-close, .session-item:focus-within .s-close { visibility: visible; }
 .s-close:hover { color: var(--danger); background: var(--danger-soft); }
 
 /* Session status badges. */
@@ -404,6 +400,34 @@
   border-color: var(--border-strong);
 }
 #btn-settings .gear { font-size: 13px; line-height: 1; }
+#sidebar[hidden], #sidebar-divider[hidden] { display: none; }
+#sidebar-divider {
+  flex: 0 0 5px;
+  position: relative;
+  background: var(--bg);
+  cursor: col-resize;
+  touch-action: none;
+}
+#sidebar-divider::before { content: ''; position: absolute; inset: 0 2px; background: var(--border); }
+#sidebar-divider:hover::before, #sidebar-divider:focus-visible::before, #sidebar-divider.is-dragging::before { background: var(--accent); }
+#app.sidebar-resizing { user-select: none; cursor: col-resize; }
+#app.sidebar-resizing .term-host { pointer-events: none; }
+#session-search-control {
+  display: flex; align-items: center; gap: 6px; margin: 10px 10px 5px;
+  padding: 5px 8px; color: var(--text-faint); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+#session-search { width: 100%; min-width: 0; color: var(--text); background: transparent; border: 0; font: inherit; }
+#session-search::placeholder { color: var(--text-faint); }
+#btn-opened-only { white-space: nowrap; color: var(--text-dim); background: transparent; border: 0; border-radius: var(--radius-sm); padding: 3px 4px; font: inherit; font-size: 11px; cursor: pointer; }
+#btn-opened-only[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.session-list-empty { padding: 22px 10px; font-size: 12px; color: var(--text-faint); text-align: center; }
+.archive-overlay { position: fixed; z-index: 80; inset: 0; background: rgba(0, 0, 0, .35); display: flex; justify-content: flex-start; align-items: flex-start; padding: 54px 18px 24px; }
+.archive-overlay[hidden] { display: none; }
+#archive-dialog { display: flex; flex-direction: column; width: min(480px, 100%); max-height: min(620px, 100%); min-height: 0; overflow: hidden; padding: 14px; color: var(--text); background: var(--menu-bg); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 12px 32px var(--shadow-lg); }
+.archive-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 14px; font-weight: 600; }
+#btn-close-archive { color: var(--text-dim); background: transparent; border: 0; border-radius: var(--radius-sm); padding: 0 6px; font-size: 21px; cursor: pointer; }
+#archive-search { flex: 0 0 auto; min-width: 0; width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 8px; margin-bottom: 10px; font: inherit; }
 .update-notice {
   color: var(--accent);
   font-size: 11px;
