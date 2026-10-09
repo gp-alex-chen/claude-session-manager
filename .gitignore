@@ -14,10 +14,12 @@ frontend/dist/
 # Logs and diagnostics
 *.log
 
-# Per-user state (stored beside the executable)
+# Per-user state; legacy copies may remain beside the executable
 favorites.json
 open-sessions.json
 settings.json
+projects.json
+preferences.json
 last-session.json
 # Legacy state name retained for old installations.
 *.json.tmp-*

@@ -116,6 +116,7 @@ function makeFixture(options = {}) {
       stop: () => { calls.stops[name] += 1; },
       initialize: () => {
         calls.initializes[name] += 1;
+        options.onInitialize?.(name, calls);
         if (options.rejectInitialize === name) return Promise.reject(new Error(name + ' failed'));
         return Promise.resolve();
       },
@@ -176,7 +177,7 @@ function makeFixture(options = {}) {
       });
     },
   };
-  const backend = new Proxy({}, { get: () => () => {} });
+  const backend = new Proxy({}, { get: (_, key) => key === 'LoadPreferences' ? (options.LoadPreferences || (async () => ({}))) : () => {} });
   const app = createApplication({
     documentRef,
     windowRef,
@@ -267,14 +268,15 @@ test('start is idempotent and initializes session/settings once', async () => {
   assert.equal(first, second);
   assert.equal(fixture.runtimeListeners.size, 5);
   assert.equal(fixture.windowListeners.size, 1);
-  assert.deepEqual(fixture.calls.starts, { agent: 1, terminal: 0, session: 1, settings: 1, usage: 1 });
+  assert.deepEqual(fixture.calls.starts, { agent: 0, terminal: 0, session: 0, settings: 0, usage: 0 });
   await first;
+  assert.deepEqual(fixture.calls.starts, { agent: 1, terminal: 0, session: 1, settings: 1, usage: 1 });
   assert.deepEqual(fixture.calls.initializes, { agent: 0, terminal: 0, session: 1, settings: 1, usage: 0 });
 });
 
-test('runtime and resize events route to the matching controllers', () => {
+test('runtime and resize events route to the matching controllers', async () => {
   const fixture = makeFixture();
-  fixture.app.start();
+  await fixture.app.start();
   fixture.runtimeListeners.get('agents:update')(['agent']);
   fixture.runtimeListeners.get('term:data')('token', 'b64');
   fixture.runtimeListeners.get('term:exit')('token');
@@ -292,7 +294,7 @@ test('runtime and resize events route to the matching controllers', () => {
   assert.equal(fixture.calls.resize, 1);
 });
 
-test('stop is idempotent and uses returned event cancellation functions', () => {
+test('stop is idempotent and uses returned event cancellation functions', async () => {
   const fixture = makeFixture({ cancelEvents: true });
   fixture.app.start();
   fixture.app.stop();
@@ -301,7 +303,7 @@ test('stop is idempotent and uses returned event cancellation functions', () => 
   assert.equal(fixture.windowListeners.size, 0);
   assert.equal(fixture.runtimeListeners.size, 0);
   assert.deepEqual(fixture.eventsOff, []);
-  assert.equal(fixture.calls.dailyStarts, 1);
+  assert.equal(fixture.calls.dailyStarts, 0);
   assert.equal(fixture.calls.dailyStops, 1);
 });
 
@@ -316,7 +318,7 @@ test('stop falls back to EventsOff when EventsOn returns no cancel function', ()
 
 test('stop permits a clean second start and fresh initialization', async () => {
   const fixture = makeFixture();
-  fixture.app.start();
+  await fixture.app.start();
   fixture.app.stop();
   const ready = fixture.app.start();
   await ready;
@@ -349,4 +351,37 @@ test('storage access errors do not prevent settings construction', async () => {
   const fixture = makeFixture({ storageError: true });
   await assert.doesNotReject(fixture.app.start());
   assert.equal(fixture.calls.initializes.settings, 1);
+});
+
+test('loads JSON settings before restoring layout, themes and sessions', async () => {
+  let finishLoad;
+  const loading = new Promise((resolve) => { finishLoad = resolve; });
+  const order = [];
+  const fixture = makeFixture({ LoadPreferences: () => loading,
+    onInitialize: (name, calls) => {
+      order.push(name);
+      assert.equal(calls.factories.settings.storage.getItem('ui-theme'), 'dark');
+      assert.equal(calls.factories.terminal.storageRef.getItem('term-theme'), 'nord');
+    },
+  });
+  const ready = fixture.app.start();
+  assert.equal(fixture.calls.initializes.session, 0);
+  assert.equal(fixture.calls.starts.settings, 0);
+  finishLoad({ 'ui-theme': 'dark', 'term-theme': 'nord', 'terminal-layout-mode': 'grid-2x2' });
+  await ready;
+  assert.equal(fixture.app.state.layoutMode, 'grid-2x2');
+  assert.deepEqual(order, ['settings', 'session']);
+});
+
+test('a stopped startup cannot initialize controllers after a later restart', async () => {
+  let finishLoad;
+  const fixture = makeFixture({ LoadPreferences: () => new Promise((resolve) => { finishLoad = resolve; }) });
+  const first = fixture.app.start();
+  fixture.app.stop();
+  const second = fixture.app.start();
+  finishLoad({});
+  await Promise.all([first, second]);
+  assert.equal(fixture.calls.starts.settings, 1);
+  assert.equal(fixture.calls.initializes.settings, 1);
+  assert.equal(fixture.calls.initializes.session, 1);
 });

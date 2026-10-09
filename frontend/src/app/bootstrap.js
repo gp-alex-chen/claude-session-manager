@@ -4,6 +4,7 @@ import { createAgentController } from '../agents/controller.js';
 import { createTerminalController } from '../terminal/controller.js';
 import { createSessionController } from '../sessions/controller.js';
 import { createSettingsController } from '../settings/controller.js';
+import { createPreferenceStorage } from '../settings/storage.js';
 import { createUpdateController } from '../updates/controller.js';
 import { createUsageController } from '../usage/controller.js';
 import { createUsageView } from '../usage/view.js';
@@ -24,10 +25,6 @@ function requiredElement(documentRef, id) {
   const element = documentRef.getElementById(id);
   if (!element) throw new Error('Missing required DOM element: #' + id);
   return element;
-}
-
-function safeStorage(windowRef) {
-  try { return windowRef?.localStorage || null; } catch (error) { return null; }
 }
 
 export function createApplication(deps) {
@@ -64,6 +61,10 @@ export function createApplication(deps) {
     if (text !== undefined) element.textContent = text;
     return element;
   };
+  const preferences = createPreferenceStorage({
+    backend,
+    onError: (error) => setStatus('保存或读取应用设置失败: ' + error, 'warn'),
+  });
   let sessionController;
   let paneController;
   let usageController;
@@ -95,7 +96,7 @@ export function createApplication(deps) {
     requestFrame: typeof windowRef?.requestAnimationFrame === 'function'
       ? (callback) => windowRef.requestAnimationFrame(callback)
       : undefined,
-    storageRef: safeStorage(windowRef),
+    storageRef: preferences,
     onActivate: (token) => {
       usageController?.onActivate(token ?? state.activeToken);
       sessionController?.syncActiveHighlight();
@@ -116,7 +117,7 @@ export function createApplication(deps) {
     terminalRoot: nodes.terminal,
     statusBar: nodes['status-bar'],
     documentRef,
-    storageRef: safeStorage(windowRef),
+    storageRef: preferences,
     el,
     setStatus,
     onFocus: (token) => {
@@ -193,7 +194,7 @@ export function createApplication(deps) {
     showToast: (message) => agentController.showToast(message),
     clampProgress,
     noticeNode: nodes['update-notice'],
-    storage: safeStorage(windowRef),
+    storage: preferences,
   });
   const settingsController = createSettings({
     state,
@@ -223,7 +224,7 @@ export function createApplication(deps) {
     },
     documentRef,
     windowRef,
-    storage: safeStorage(windowRef),
+    storage: preferences,
     el,
     setStatus,
     updateController,
@@ -234,6 +235,7 @@ export function createApplication(deps) {
   const subscriptions = [];
   let resizeHandler = null;
   let started = false;
+  let generation = 0;
   let readyPromise = null;
 
   function reportError(error) {
@@ -261,6 +263,9 @@ export function createApplication(deps) {
   function start() {
     if (started) return readyPromise;
     started = true;
+    const startupGeneration = ++generation;
+    const current = () => started && generation === startupGeneration;
+    nodes.terminal.inert = true;
     resizeHandler = () => {
       if (typeof paneController.resizeVisible === 'function') paneController.resizeVisible();
       else terminalController.resizeActive();
@@ -271,21 +276,28 @@ export function createApplication(deps) {
     subscribe('term:exit', (token) => terminalController.handleExit(token));
     subscribe('update:state', (phase) => updateController.handleState(phase));
     subscribe('update:progress', (progress) => updateController.handleProgress(progress));
-    agentController.start();
-    paneController.start();
-    usageController.start();
-    sessionController.start();
-    settingsController.start();
-    updateController.start?.();
-    readyPromise = initialize(paneController).then(() => Promise.all([
-      initialize(sessionController), initialize(settingsController),
-    ]));
+    readyPromise = preferences.initialize().then(async () => {
+      if (!current()) return;
+      agentController.start();
+      paneController.start();
+      usageController.start();
+      sessionController.start();
+      settingsController.start();
+      updateController.start?.();
+      await initialize(paneController);
+      if (!current()) return;
+      await initialize(settingsController);
+      if (current()) await initialize(sessionController);
+      if (current()) nodes.terminal.inert = false;
+    });
     return readyPromise;
   }
 
   function stop() {
     if (!started) return;
     started = false;
+    generation += 1;
+    nodes.terminal.inert = false;
     if (resizeHandler) windowRef.removeEventListener?.('resize', resizeHandler);
     resizeHandler = null;
     while (subscriptions.length) {
@@ -304,6 +316,7 @@ export function createApplication(deps) {
 
   return {
     controllers,
+    flushPreferences: preferences.flush,
     get ready() { return readyPromise; },
     start,
     state,

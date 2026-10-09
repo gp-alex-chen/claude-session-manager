@@ -13,6 +13,7 @@ const expected = [
   'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'OpenFolder', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',
+  'LoadPreferences', 'SetPreference',
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
@@ -55,6 +56,13 @@ test('usage wrapper forwards both arguments unchanged', () => {
     binding,
     /export function GetUsageSummary\(sessionID, projectDir\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetUsageSummary'\]\(sessionID, projectDir\);\s*\}/,
   );
+});
+
+test('preference wrapper forwards key and value unchanged', () => {
+  assert.match(binding,
+    /export function SetPreference\(key, value\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['SetPreference'\]\(key, value\);\s*\}/);
+  assert.match(binding,
+    /export function LoadPreferences\(\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['LoadPreferences'\]\(\);\s*\}/);
 });
 
 test('directory project wrappers forward arguments unchanged', () => {

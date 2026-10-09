@@ -13,7 +13,7 @@ export function createTerminalController(deps) {
     hostFactory,
     documentRef = typeof document === 'undefined' ? null : document,
     navigatorRef = typeof navigator === 'undefined' ? null : navigator,
-    storageRef = typeof localStorage === 'undefined' ? null : localStorage,
+    storageRef = null,
     onActivate,
     onExit,
     onDispose,

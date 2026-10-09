@@ -27,11 +27,14 @@ type Store struct {
 func NewStore(dir string) *Store { return &Store{dir: dir} }
 
 func DefaultDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
+	root := os.Getenv("LOCALAPPDATA")
+	if root == "" {
+		root, _ = os.UserCacheDir()
 	}
-	return filepath.Dir(exe)
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, "ClaudeSessionManager")
 }
 
 var defaultStore = NewStore(DefaultDir())
@@ -132,58 +135,64 @@ func (s *Store) Save(st *FavState) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.saveLocked(st)
+	return s.withDocumentLock(".favorites.lock", func() error {
+		return s.saveLocked(st)
+	})
 }
 
 func (s *Store) SetAlias(id, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, err := s.loadLocked()
-	if err != nil {
-		// Preserve the safe state but do not overwrite a corrupt file silently.
-		return err
-	}
-	if name == "" {
-		delete(st.Aliases, id)
-	} else {
-		st.Aliases[id] = name
-	}
-	return s.saveLocked(st)
+	return s.withDocumentLock(".favorites.lock", func() error {
+		st, err := s.loadLocked()
+		if err != nil {
+			// Preserve the safe state but do not overwrite a corrupt file silently.
+			return err
+		}
+		if name == "" {
+			delete(st.Aliases, id)
+		} else {
+			st.Aliases[id] = name
+		}
+		return s.saveLocked(st)
+	})
 }
 
 func (s *Store) SetHidden(id string, hidden bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, err := s.loadLocked()
-	if err != nil {
-		return err
-	}
-	if hidden {
-		seen := false
-		out := st.Hidden[:0]
-		for _, item := range st.Hidden {
-			if item == id {
-				if seen {
-					continue
+	return s.withDocumentLock(".favorites.lock", func() error {
+		st, err := s.loadLocked()
+		if err != nil {
+			return err
+		}
+		if hidden {
+			seen := false
+			out := st.Hidden[:0]
+			for _, item := range st.Hidden {
+				if item == id {
+					if seen {
+						continue
+					}
+					seen = true
 				}
-				seen = true
-			}
-			out = append(out, item)
-		}
-		if !seen {
-			out = append(out, id)
-		}
-		st.Hidden = out
-	} else {
-		out := st.Hidden[:0]
-		for _, item := range st.Hidden {
-			if item != id {
 				out = append(out, item)
 			}
+			if !seen {
+				out = append(out, id)
+			}
+			st.Hidden = out
+		} else {
+			out := st.Hidden[:0]
+			for _, item := range st.Hidden {
+				if item != id {
+					out = append(out, item)
+				}
+			}
+			st.Hidden = out
 		}
-		st.Hidden = out
-	}
-	return s.saveLocked(st)
+		return s.saveLocked(st)
+	})
 }
 
 func (s *Store) SaveOpen(ids []string) error {

@@ -14,7 +14,7 @@ Windows 原生 Claude 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成
 - 左下角「⚙ 设置」管理日间/夜间 UI 主题、8 套终端主题和底层 Shell（cmd / pwsh）。
 - 终端支持单屏、上下/左右双屏、三分屏和四分屏；分屏控制线可拖动调整比例，清空窗格时会按布局自动收缩。
 - 设置中的「更新」只检查 GitHub Releases 的 `v*-wails` 正式版本；应用每天自动检查一次，也可手动查看更新说明、显示下载进度并自动替换重启。
-- 本地状态包括 `favorites.json`、`open-sessions.json`、`settings.json` 和 `projects.json`，默认位于 exe 同目录。
+- 应用数据统一保存到 `%LOCALAPPDATA%\ClaudeSessionManager`，不受 exe 文件名或所在目录影响。收藏、项目、Shell、打开会话和界面设置分别保存为 JSON；主题、配色、字号、布局和更新检查日期保存在 `preferences.json`，WebView 数据位于 `WebView2` 子目录。旧目录的数据不会自动导入或删除。
 
 ## 快速使用
 

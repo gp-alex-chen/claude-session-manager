@@ -94,7 +94,7 @@ export function createPaneController(deps) {
     terminalRoot,
     statusBar,
     documentRef = typeof document === 'undefined' ? null : document,
-    storageRef = typeof localStorage === 'undefined' ? null : localStorage,
+    storageRef = null,
     el,
     setStatus,
     onFocus,
@@ -260,7 +260,7 @@ export function createPaneController(deps) {
     if (!Number.isFinite(point)) return;
     const next = dividerDrag.startRatio
       + (point - dividerDrag.startPoint) / dividerDrag.availableSize;
-    setSplitRatio(dividerDrag.axis, next);
+    setSplitRatio(dividerDrag.axis, next, { persist: false });
     event.preventDefault?.();
   }
 
@@ -272,6 +272,7 @@ export function createPaneController(deps) {
     documentRef.removeEventListener?.('pointermove', onDividerPointerMove);
     documentRef.removeEventListener?.('pointerup', finishDividerDrag);
     documentRef.removeEventListener?.('pointercancel', finishDividerDrag);
+    persistSplitRatios();
     dividerDrag = null;
   }
 
@@ -498,6 +499,8 @@ export function createPaneController(deps) {
   }
 
   function initialize() {
+    currentMode = normalizeLayoutMode(readStorage(storageRef, LAYOUT_STORAGE_KEY));
+    Object.assign(splitRatios, readSplitRatios(storageRef));
     state.layoutMode = currentMode;
     if (!visibleIds().includes(state.focusedPaneId)) state.focusedPaneId = visibleIds()[0];
     syncView();

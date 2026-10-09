@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 )
 
 var debugMu sync.Mutex
@@ -20,11 +22,11 @@ var debugMu sync.Mutex
 func DebugLog(msg string) {
 	debugMu.Lock()
 	defer debugMu.Unlock()
-	exe, err := os.Executable()
-	if err != nil {
+	dir := state.DefaultDir()
+	if dir == "" || os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(filepath.Dir(exe), "agents-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(filepath.Join(dir, "agents-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
