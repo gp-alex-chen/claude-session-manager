@@ -1,6 +1,6 @@
-# Claude + Codex 会话管理器
+# TheOne
 
-Windows 原生 Claude / Codex 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成右侧多会话终端，左侧列表负责分组、折叠、恢复和归档；切换和关闭都在左侧会话列表完成。
+一个程序，管理多个 Agent。TheOne 是 Windows 原生 Claude / Codex 会话管理器：Go/Wails v2、xterm.js 与 ConPTY 组成右侧多会话终端，左侧列表负责分组、折叠、恢复和归档；切换和关闭都在左侧会话列表完成。
 
 ![界面预览](docs/images/overview.svg)
 

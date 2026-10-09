@@ -30,7 +30,7 @@ func main() {
 	webviewPath := filepath.Join(dataDir, "WebView2")
 	a := app.NewApp()
 	if err := wails.Run(&options.App{
-		Title:            "Claude + Codex 会话管理",
+		Title:            "TheOne",
 		Width:            1180,
 		Height:           800,
 		MinWidth:         800,

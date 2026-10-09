@@ -134,6 +134,23 @@ JSON 格式必须保持：
 
 更新源只认 `v*-wails` 正式 Release；`.old`、`.update-*.old` 和 `.new` 是 Windows 自替换的临时残留，启动时尝试清理。旧程序备份带随机后缀，避免上次备份因旧进程尚未退出而阻止下一次更新。更新核对 Release 资产 SHA256、实际下载大小和 MZ 头，但不做代码签名验证；exe 目录需要可写。更新前保存打开会话失败时不会关闭终端或替换程序。
 
+## 应用名称与图标
+
+应用显示名称为 TheOne，`main.go` 的窗口标题、前端 HTML title 和 `wails.json` 的 name 保持一致。发布资产仍使用 `claude-terminal.exe`，数据目录仍为 `%LOCALAPPDATA%\ClaudeSessionManager`，固定窗口类名仍为 `ClaudeSessionManagerWindow`，以兼容既有更新、设置和任务栏角标。
+
+`assets/icon.svg` 是 TO 合字的矢量母版：靛蓝圆角底、暖白 O 轮廓和留白 T。`assets/build-icon.cjs` 使用设计环境中的 Playwright 与 Microsoft Edge，将母版导出为透明 PNG 和包含 16、20、24、32、40、48、64、128、256px 的 ICO。Playwright 仅用于设计导出，不加入应用运行依赖或普通构建；可通过设计环境的 `NODE_PATH` 提供。
+
+修改母版后，在仓库根目录执行：
+
+```powershell
+node assets/build-icon.cjs
+windres --input=assets/icon.rc --output-format=coff --output=.codex-build/theone-icon-resource.syso
+# 确认前两步成功后再替换已跟踪的链接资源。
+Copy-Item -LiteralPath .codex-build/theone-icon-resource.syso -Destination rsrc_windows_amd64.syso
+```
+
+`assets/icon.rc` 使用图标组 ID 3；Wails Windows 窗口和资源管理器都使用这份 exe 图标资源。常规 Go/CI 构建直接链接仓库中的 `rsrc_windows_amd64.syso`。构建后执行 `./assets/verify-icon.ps1 -Path .codex-build/TheOne-dev.exe`，验证所有原生图标帧与 ICO 完全一致，并检查 Windows 提取图标的颜色；可添加 `-PreviewPath .codex-build/theone-exe-icon.png` 保存提取预览。
+
 ## 构建、测试与环境
 
 前置条件：Windows 10/11、WebView2 Runtime、Go 1.25、Node 22/npm，以及需要运行真实集成测试时在 PATH 中的 Claude CLI。普通 Go/Node 测试不依赖真实 Claude 或 ConPTY。
