@@ -2,7 +2,7 @@ package app
 
 // App 的更新相关绑定方法：一键"检查更新 / 更新到最新版"。
 // 数据层在 internal/updater；这里负责：
-//   - 组装更新器（本仓库 + claude-terminal.exe 资产）
+//   - 组装更新器（本仓库 + TheOne.exe 资产）
 //   - 下载进度/状态经事件推给前端（update:state / update:progress）
 //   - 更新前持久化打开的会话并关闭所有 ConPTY，再替换+自动重启
 
@@ -19,11 +19,11 @@ import (
 )
 
 // 更新源常量：与本仓库 GitHub Releases 约定一致
-// （CI：打 v*-wails tag 时构建并发布 claude-terminal.exe）。
+// （CI：打 v*-wails tag 时构建并发布 TheOne.exe）。
 const (
 	updateOwner = "gp-alex-chen"
 	updateRepo  = "claude-session-manager"
-	updateAsset = "claude-terminal.exe"
+	updateAsset = "TheOne.exe"
 
 	// updateCheckTimeout 一次检查/下载的上下文超时
 	updateCheckTimeout    = 15 * time.Second

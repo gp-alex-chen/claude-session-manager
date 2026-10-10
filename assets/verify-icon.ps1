@@ -1,6 +1,6 @@
 # Verify the TheOne icon in the Windows PE resources and the shell icon.
 param(
-    [string]$Path = (Join-Path (Split-Path $PSScriptRoot -Parent) 'claude-terminal.exe'),
+    [string]$Path = (Join-Path (Split-Path $PSScriptRoot -Parent) 'TheOne.exe'),
     [string]$PreviewPath = ''
 )
 $ErrorActionPreference = 'Stop'

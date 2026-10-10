@@ -136,7 +136,7 @@ JSON 格式必须保持：
 
 ## 应用名称与图标
 
-应用显示名称为 TheOne，`main.go` 的窗口标题、前端 HTML title 和 `wails.json` 的 name 保持一致。发布资产仍使用 `claude-terminal.exe`，数据目录仍为 `%LOCALAPPDATA%\ClaudeSessionManager`，固定窗口类名仍为 `ClaudeSessionManagerWindow`，以兼容既有更新、设置和任务栏角标。
+应用显示名称为 TheOne，`main.go` 的窗口标题、前端 HTML title 和 `wails.json` 的 name 保持一致。正式下载和构建产物使用 `TheOne.exe`；Release 额外保留同内容的 `claude-terminal.exe`，供旧版更新器使用。数据目录仍为 `%LOCALAPPDATA%\ClaudeSessionManager`，固定窗口类名仍为 `ClaudeSessionManagerWindow`，以兼容既有更新、设置和任务栏角标。
 
 `assets/icon.svg` 是 TO 合字的矢量母版：靛蓝圆角底、暖白 O 轮廓和留白 T。`assets/build-icon.cjs` 使用设计环境中的 Playwright 与 Microsoft Edge，将母版导出为透明 PNG 和包含 16、20、24、32、40、48、64、128、256px 的 ICO。Playwright 仅用于设计导出，不加入应用运行依赖或普通构建；可通过设计环境的 `NODE_PATH` 提供。
 
@@ -166,7 +166,7 @@ go vet ./...
 New-Item -ItemType Directory -Force .codex-build | Out-Null
 go build -tags "webview2 production" `
   -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=dev" `
-  -o .codex-build/claude-terminal-dev.exe .
+  -o .codex-build/TheOne-dev.exe .
 ```
 
 真实环境测试使用明确的 integration tag：
@@ -211,6 +211,6 @@ git diff --check
 
 ## 发布与限制
 
-CI 对 PR/main 只做 validate；`v*-wails` tag 或手动触发才运行 Windows 交叉构建。tag 构建上传 `claude-terminal.exe`，只有 tag 发布 GitHub Release；手动触发只保留 artifact。发布前把中文说明写入 `docs/releases/<tag>.md` 并随代码提交；CI 从该文件填充 Release 正文，文件缺失或为空时发布失败。正式版说明可用标题、无序列表、粗体、行内代码和 HTTPS 链接；应用会以安全的 DOM 节点展示这些格式，其他 Markdown 会作为普通文字显示。
+CI 对 PR/main 只做 validate；`v*-wails` tag 或手动触发才运行 Windows 交叉构建。artifact 名称为 `TheOne-windows`，包含 `TheOne.exe`。tag 发布 GitHub Release 时额外复制同内容的 `claude-terminal.exe` 兼容资产，确保已经发布的旧版更新器仍能找到下载；新版本更新器查询 `TheOne.exe`。手动触发只保留 artifact。发布前把中文说明写入 `docs/releases/<tag>.md` 并随代码提交；CI 从该文件填充 Release 正文，文件缺失或为空时发布失败。正式版说明可用标题、无序列表、粗体、行内代码和 HTTPS 链接；应用会以安全的 DOM 节点展示这些格式，其他 Markdown 会作为普通文字显示。
 
 ConPTY 会结束更新前的会话进程，但 open-sessions 清单会供新版恢复。Claude 的 `/theme auto` 可能因 conhost 背景查询误判亮色，需要在 Claude 内手动 `/theme light`。未读状态是内存态。pwsh 必须是 PowerShell 7 的 `pwsh`，不可用时回退 cmd。

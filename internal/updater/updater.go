@@ -1,7 +1,7 @@
 // Package updater 实现"一键更新到最新版"。
 //
 // 更新源：本项目 GitHub Releases —— 按 v*-wails tag 发布、资产名为
-// claude-terminal.exe 的 Windows 可执行程序。
+// TheOne.exe 的 Windows 可执行程序。
 //
 // 链路：GitHub API 查最新正式版 -> 从 Release 下载 exe -> 替换自身
 // -> 自动重启进新版（Windows 上运行中的 exe 允许改名不允许删除，
@@ -82,7 +82,7 @@ type Updater struct {
 }
 
 // New 构造更新器；owner/repo/asset 例如
-// ("gp-alex-chen", "claude-session-manager", "claude-terminal.exe", Version)。
+// ("gp-alex-chen", "claude-session-manager", "TheOne.exe", Version)。
 func New(owner, repo, asset, current string) *Updater {
 	return &Updater{
 		Owner:   owner,

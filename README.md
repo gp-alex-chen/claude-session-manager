@@ -29,7 +29,7 @@
 
 ## 快速使用
 
-1. 从 [Releases](https://github.com/gp-alex-chen/claude-session-manager/releases/latest) 下载最新的 `claude-terminal.exe`，并确保 Windows 已安装 WebView2 Runtime。
+1. 从 [Releases](https://github.com/gp-alex-chen/claude-session-manager/releases/latest) 下载最新的 `TheOne.exe`，并确保 Windows 已安装 WebView2 Runtime。
 2. 确认要使用的 `claude` / `codex` CLI 已安装、登录并加入 `PATH`，然后双击运行 exe。只安装 Claude 也可使用，选择未安装的 Codex 时会显示启动失败。
 3. 点击左侧「项目」旁的 `+` 添加工作目录；点击目录分组的 `+`，选择 Claude 或 Codex，即可在该目录下新建终端。已有会话会按工作目录自动分组。
 4. 点击右侧工作区工具栏的「布局」选择单屏、双屏、三分屏或四分屏；分屏后的控制线可以左右或上下拖动。工具栏左侧按钮可收起和展开侧栏。
@@ -119,7 +119,7 @@ go vet ./...
 New-Item -ItemType Directory -Force .codex-build | Out-Null
 go build -tags "webview2 production" `
   -ldflags "-s -w -H windowsgui -X github.com/gp-alex-chen/claude-session-manager/internal/app.Version=dev" `
-  -o .codex-build/claude-terminal-dev.exe .
+  -o .codex-build/TheOne-dev.exe .
 ```
 
 `-H windowsgui` 生成 GUI 子系统版本；调试时可去掉它。普通 Go 单元测试使用 fake、临时目录和依赖注入，不需要本机 Claude 会话。真实环境测试明确使用 integration tag：
@@ -166,7 +166,7 @@ git diff --check
 
 ## 发布与更新
 
-CI 对 `v*-wails` tag 构建 `claude-terminal.exe` 并发布 GitHub Release；`-pre`/`-rc` tag 标为预发布。手动触发可构建 artifact，但不会创建 release。应用更新只选择 `v*-wails` 正式版本，版本通过 `internal/app.Version` 注入。打 tag 前必须提交同名的 `docs/releases/<tag>.md` 中文说明；缺少该文件时 CI 不会发布 Release。
+CI 对 `v*-wails` tag 构建 `TheOne.exe` 并发布 GitHub Release，同时保留 `claude-terminal.exe` 同内容兼容文件供旧版自动更新；`-pre`/`-rc` tag 标为预发布。手动触发可构建 artifact，但不会创建 release。应用更新只选择 `v*-wails` 正式版本，版本通过 `internal/app.Version` 注入。打 tag 前必须提交同名的 `docs/releases/<tag>.md` 中文说明；缺少该文件时 CI 不会发布 Release。
 
 ```powershell
 $tag = Read-Host '输入新的正式版 tag（例如 v0.11-wails）'
