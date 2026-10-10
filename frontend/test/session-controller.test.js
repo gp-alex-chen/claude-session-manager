@@ -1066,6 +1066,55 @@ test('directories with the same leaf name remain separate groups', () => {
   ], []);
 
   assert.equal(listRoot.children.filter((node) => node.className === 'group').length, 2);
+  assert.deepEqual(listRoot.children.map(group => group.children[0].children[1].textContent), [
+    'same · one', 'same · two',
+  ]);
+});
+
+test('same-name saved project and worktree history have distinct labels and launch directories', () => {
+  const saved = 'D:\\projects\\sample';
+  const worktree = 'C:\\workspace\\worktrees\\task-one\\sample';
+  const started = [];
+  const listRoot = renderProjectGroups([saved], [session('worktree-session', worktree)], dir => started.push(dir));
+  const heads = listRoot.children.map(group => group.children[0]);
+  assert.deepEqual(heads.map(head => head.children[1].textContent), ['sample · task-one', 'sample · projects']);
+  assert.deepEqual(heads.map(head => head.children[1].title), [worktree, saved]);
+  assert.deepEqual(listRoot.children.map(group => group.children[1].children.length), [1, 0]);
+  for (const head of heads) {
+    const plus = head.children.find(child => child.className === 'plus');
+    assert.ok(plus.attributes.get('aria-label').includes(head.children[1].textContent));
+    plus.click();
+  }
+  assert.deepEqual(started, [worktree, saved]);
+});
+
+test('same-name labels extend the parent suffix until distinct, including drive and UNC server', () => {
+  for (const [dirs, labels] of [
+    [['C:\\one\\shared\\app', 'D:\\two\\shared\\app'], ['app · one/shared', 'app · two/shared']],
+    [['C:\\work\\app', 'D:\\work\\app'], ['app · C:/work', 'app · D:/work']],
+    [['\\\\server-one\\share\\app', '\\\\server-two\\share\\app'], ['app · server-one/share', 'app · server-two/share']],
+  ]) {
+    const listRoot = renderProjectGroups(dirs, []);
+    assert.deepEqual(listRoot.children.map(group => group.children[0].children[1].textContent), labels);
+  }
+});
+
+test('case differences in leaf labels still disambiguate different Windows directories', () => {
+  const listRoot = renderProjectGroups(['C:\\one\\App', 'D:\\two\\app'], []);
+  assert.deepEqual(listRoot.children.map(group => group.children[0].children[1].textContent), ['App · one', 'app · two']);
+});
+
+test('normalized duplicate directories keep a single short label from the saved project', () => {
+  const saved = 'C:\\Work\\Alpha';
+  const listRoot = renderProjectGroups([saved, 'c:/work/alpha/'], [session('one', 'c:/work/alpha/')]);
+  assert.equal(listRoot.children.length, 1);
+  assert.equal(listRoot.children[0].children[0].children[1].textContent, 'Alpha');
+  assert.equal(listRoot.children[0].children[0].children[1].title, saved);
+});
+
+test('unique projects and drive roots keep their short labels', () => {
+  const listRoot = renderProjectGroups(['C:\\', 'D:\\', 'C:\\work\\unique\\'], []);
+  assert.deepEqual(listRoot.children.map(group => group.children[0].children[1].textContent), ['C:\\', 'D:\\', 'unique']);
 });
 
 test('cancelled project chooser does not call AddProject', async () => {

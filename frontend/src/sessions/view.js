@@ -30,6 +30,40 @@ function projectUsage(usageByProject, dir, identity = dirIdentity(dir)) {
   return undefined;
 }
 
+function projectLabels(groups) {
+  const labels = new Map();
+  const byName = new Map();
+  for (const group of groups) {
+    const dir = group.projectDir || group.dir;
+    const parts = dir.trim().replaceAll('\\', '/').split('/').filter(Boolean);
+    const leaf = /^[A-Za-z]:\/$/.test(dir.trim().replaceAll('\\', '/')) ? dir : parts.at(-1) || dir;
+    const entry = { identity: group.identity, dir, leaf, parents: parts.slice(0, -1) };
+    const key = leaf.toLowerCase();
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(entry);
+  }
+  for (const entries of byName.values()) {
+    for (const entry of entries) {
+      let label = entry.leaf;
+      if (entries.length > 1) {
+        // Use the shortest parent suffix that distinguishes this directory.
+        let qualifier = entry.dir;
+        for (let depth = 1; depth <= entry.parents.length; depth++) {
+          const suffix = entry.parents.slice(-depth).join('/');
+          if (entries.every(other => other === entry
+            || other.parents.slice(-depth).join('/').toLowerCase() !== suffix.toLowerCase())) {
+            qualifier = suffix;
+            break;
+          }
+        }
+        label += ' · ' + qualifier;
+      }
+      labels.set(entry.identity, label);
+    }
+  }
+  return labels;
+}
+
 export function renderSessionList({
   listRoot,
   list = [],
@@ -94,6 +128,7 @@ export function renderSessionList({
     return left.order - right.order;
   });
 
+  const labels = projectLabels(orderedGroups);
   listRoot.innerHTML = '';
   for (const { identity, dir, projectDir, items } of orderedGroups) {
     const startDir = projectDir || dir;
@@ -120,8 +155,8 @@ export function renderSessionList({
       'V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4',
       'a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M2 10h20"/></svg>',
     ].join('');
-    const name = el('span', 'group-name', leafOf(dir));
-    name.title = dir;
+    const name = el('span', 'group-name', labels.get(identity));
+    name.title = startDir;
     head.dataset.favorite = String(isFavorite);
     const summary = projectUsage(usageByProject, dir, identity);
     const usage = el('span', 'group-usage', formatProjectUsage(summary));
@@ -129,7 +164,7 @@ export function renderSessionList({
     const plus = el('button', 'plus');
     plus.type = 'button';
     plus.title = '在 ' + startDir + ' 新建会话';
-    plus.setAttribute('aria-label', '在「' + (leafOf(startDir) || '项目') + '」中新建会话');
+    plus.setAttribute('aria-label', '在「' + (labels.get(identity) || '项目') + '」中新建会话');
     plus.innerHTML = [
       '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"',
       ' fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"',
