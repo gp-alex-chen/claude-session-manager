@@ -4,6 +4,16 @@ export function remainingPercent(window) {
     ? Math.round(Math.max(0, Math.min(100, 100 - used))) : null;
 }
 
+// A steady pace leaves the same fraction of allowance as time in the window.
+// Expired or incomplete reset metadata cannot provide a meaningful reference.
+export function expectedRemainingPercent(window, now = Date.now()) {
+  const minutes = window?.windowMinutes;
+  const reset = window?.resetsAt;
+  if (!Number.isFinite(minutes) || minutes <= 0 || !Number.isFinite(reset) || reset <= 0
+    || !Number.isFinite(now) || reset * 1000 <= now) return null;
+  return Math.min(100, (reset * 1000 - now) / (minutes * 60_000) * 100);
+}
+
 export function ringWindows(windows = []) {
   const shared = windows.filter(w => !w.scope && remainingPercent(w) !== null);
   const five = shared.find(w => w.windowMinutes === 300);
@@ -18,7 +28,8 @@ function resetText(window) {
   }) + ' 重置' : '重置时间未知';
 }
 
-export function createQuotaView({ root, documentRef, onRefresh }) {
+export function createQuotaView({ root, documentRef, onRefresh, nowFn = () => Date.now(),
+  setIntervalFn = setInterval, clearIntervalFn = clearInterval }) {
   const el = (tag, className, text) => {
     const node = documentRef.createElement(tag);
     if (className) node.className = className;
@@ -46,10 +57,24 @@ export function createQuotaView({ root, documentRef, onRefresh }) {
   const escape = (event) => { if (event.key === 'Escape' && !panel.hidden) { close(); button.focus?.(); } };
   const refreshClick = () => onRefresh?.();
   let started = false;
+  let paceTimer = null;
+  let lastRender = null;
 
-  function render({ provider, snapshot, loading, error }) {
+  function syncPaceTimer(active) {
+    // Move the time reference locally; this never requests account quota.
+    if (started && active && paceTimer === null) paceTimer = setIntervalFn(() => {
+      if (started && lastRender) render(lastRender);
+    }, 60_000);
+    if ((!started || !active) && paceTimer !== null) {
+      clearIntervalFn(paceTimer); paceTimer = null;
+    }
+  }
+
+  function render(input) {
+    lastRender = input;
+    const { provider, snapshot, loading, error } = input;
     root.hidden = !provider;
-    if (!provider) { close(); return; }
+    if (!provider) { syncPaceTimer(false); close(); return; }
     const name = provider === 'codex' ? 'Codex' : provider === 'claude' ? 'Claude' : provider;
     label.textContent = name;
     const windows = snapshot?.status === 'available' ? snapshot.windows || [] : [];
@@ -60,19 +85,32 @@ export function createQuotaView({ root, documentRef, onRefresh }) {
     const chart = svgEl('svg', { viewBox: '0 0 56 56', width: 36, height: 36 });
     const descriptions = [];
     const tracks = selected.length ? selected : [null];
+    const now = nowFn();
+    syncPaceTimer(selected.some(window => expectedRemainingPercent(window, now) !== null));
     tracks.forEach((window, index) => {
       const radius = index === 0 ? 25 : 20;
       const remaining = remainingPercent(window);
+      const used = remaining === null ? null : 100 - remaining;
       const colorClass = window?.windowMinutes === 10080 ? 'quota-week' : 'quota-short';
       chart.append(svgEl('circle', { cx: 28, cy: 28, r: radius, class: 'quota-track', fill: 'none', 'stroke-width': 3 }));
-      if (remaining > 0) chart.append(svgEl('circle', { cx: 28, cy: 28, r: radius, class: colorClass,
-        fill: 'none', 'stroke-width': 3, pathLength: 100, 'stroke-dasharray': `${remaining} 100`,
+      // SVG circles run clockwise; rotate the used arc's start to noon.
+      if (used > 0) chart.append(svgEl('circle', { cx: 28, cy: 28, r: radius, class: colorClass,
+        fill: 'none', 'stroke-width': 3, pathLength: 100, 'stroke-dasharray': `${used} 100`,
         'stroke-linecap': 'round', transform: 'rotate(-90 28 28)' }));
+      const expected = expectedRemainingPercent(window, now);
+      if (expected !== null) {
+        const angle = (100 - expected) / 100 * 2 * Math.PI - Math.PI / 2;
+        const points = { x1: 28 + (radius - 1.3) * Math.cos(angle), y1: 28 + (radius - 1.3) * Math.sin(angle),
+          x2: 28 + (radius + 1.3) * Math.cos(angle), y2: 28 + (radius + 1.3) * Math.sin(angle) };
+        chart.append(svgEl('line', { ...points, class: 'quota-pace-outline', 'stroke-width': 3.5 }),
+          svgEl('line', { ...points, class: 'quota-pace-marker', 'stroke-width': 1.7, 'stroke-linecap': 'round' }));
+      }
       const text = svgEl('text', { x: 28, y: tracks.length === 1 ? 33 : index === 0 ? 25 : 39,
         class: remaining === null ? 'quota-unknown' : colorClass, 'text-anchor': 'middle' });
       text.textContent = remaining === null ? loading ? '…' : '—' : `${remaining}%`;
       chart.append(text);
-      if (window) descriptions.push(`${window.label || '额度'}剩余 ${remaining}% · ${resetText(window)}`);
+      if (window) descriptions.push(`${window.label || '额度'}剩余 ${remaining}%`
+        + (expected === null ? '' : ` · 均匀使用应已用 ${Math.round(100 - expected)}%`) + ` · ${resetText(window)}`);
     });
     meter.replaceChildren(chart);
     let message = error || snapshot?.message || (loading ? '正在查询订阅额度' : '暂无额度数据');
@@ -84,6 +122,8 @@ export function createQuotaView({ root, documentRef, onRefresh }) {
     const rows = windows.map(w => {
       const row = el('div', 'quota-detail-row');
       row.append(el('span', '', `${w.label || '额度'} · 剩余 ${remainingPercent(w)}%`), el('small', '', resetText(w)));
+      const expected = expectedRemainingPercent(w, now);
+      if (expected !== null) row.append(el('small', '', `参考刻度：均匀使用应已用 ${Math.round(100 - expected)}%`));
       return row;
     });
     if (!windows.length || stale) rows.push(el('p', 'quota-message', message));
@@ -96,9 +136,11 @@ export function createQuotaView({ root, documentRef, onRefresh }) {
     if (started) return; started = true;
     button.addEventListener('click', toggle); refresh.addEventListener('click', refreshClick);
     documentRef.addEventListener?.('pointerdown', outside); documentRef.addEventListener?.('keydown', escape);
+    if (lastRender) render(lastRender);
   }
   function stop() {
     if (!started) return; started = false; close(); root.hidden = true;
+    syncPaceTimer(false); lastRender = null;
     button.removeEventListener?.('click', toggle); refresh.removeEventListener?.('click', refreshClick);
     documentRef.removeEventListener?.('pointerdown', outside); documentRef.removeEventListener?.('keydown', escape);
   }

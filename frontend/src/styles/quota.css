@@ -10,6 +10,8 @@
 .quota-week { stroke: #d97757; fill: #d97757; }
 .quota-meter text.quota-short, .quota-meter text.quota-week { stroke: none; }
 .quota-meter circle.quota-short, .quota-meter circle.quota-week { fill: none; }
+.quota-pace-outline { stroke: var(--menu-bg); }
+.quota-pace-marker { stroke: var(--text); }
 .quota-unknown { fill: var(--text-faint); }
 .quota-stale .quota-meter { opacity: .6; }
 .quota-details { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: min(270px, calc(100vw - 28px)); max-height: calc(100vh - 90px); overflow: auto; padding: 12px; color: var(--text); background: var(--menu-bg); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 10px 24px var(--shadow-lg); }
