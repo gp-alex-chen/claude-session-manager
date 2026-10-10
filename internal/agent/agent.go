@@ -20,6 +20,9 @@ import (
 var debugMu sync.Mutex
 
 func DebugLog(msg string) {
+	if !debugLoggingEnabled {
+		return
+	}
 	debugMu.Lock()
 	defer debugMu.Unlock()
 	dir := state.DefaultDir()

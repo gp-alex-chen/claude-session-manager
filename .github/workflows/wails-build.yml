@@ -35,6 +35,10 @@ jobs:
           npm run build
       - name: Test Go packages
         run: go test ./...
+      - name: Verify release logging is disabled
+        run: go test -tags "webview2 production" ./internal/agent -run TestDebugLogDefaultBuildDoesNotWrite -count=1
+      - name: Verify diagnostic logging opt-in
+        run: go test -tags debuglog ./internal/agent -run TestDebugLogDiagnosticBuildWritesToIsolatedDirectory -count=1
       - name: Vet Go packages
         run: go vet ./...
 

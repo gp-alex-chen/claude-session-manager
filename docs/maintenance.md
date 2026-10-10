@@ -169,6 +169,8 @@ go build -tags "webview2 production" `
   -o .codex-build/TheOne-dev.exe .
 ```
 
+应用调试日志通过构建标签隔离：默认及 CI 发布构建不添加 `debuglog`，`agent.DebugLog` 直接返回，不创建日志目录、不写入或截断已有 `agents-debug.log`；前端 Wails `DebugLog` 入口同样经过该开关。本地诊断时显式使用 `-tags "webview2 production debuglog"` 构建。CI 分别验证发布构建不写日志与诊断构建可写日志，测试使用临时目录隔离用户数据。`log.Fatal` 仍报告启动失败，不写应用日志文件。
+
 真实环境测试使用明确的 integration tag：
 
 ```powershell

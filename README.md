@@ -122,7 +122,7 @@ go build -tags "webview2 production" `
   -o .codex-build/TheOne-dev.exe .
 ```
 
-`-H windowsgui` 生成 GUI 子系统版本；调试时可去掉它。普通 Go 单元测试使用 fake、临时目录和依赖注入，不需要本机 Claude 会话。真实环境测试明确使用 integration tag：
+`-H windowsgui` 生成 GUI 子系统版本；调试时可去掉它。普通构建与 CI 发布版默认不写应用调试日志；需要本地日志诊断时，显式使用 `-tags "webview2 production debuglog"` 构建，日志写入应用数据目录的 `agents-debug.log`。发布构建不添加 `debuglog` 标签。普通 Go 单元测试使用 fake、临时目录和依赖注入，不需要本机 Claude 会话。真实环境测试明确使用 integration tag：
 
 ```powershell
 go test -tags integration ./internal/terminal
