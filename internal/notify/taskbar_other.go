@@ -2,5 +2,5 @@
 
 package notify
 
-func findBadgeTarget() badgeTarget             { return badgeTarget{} }
-func applyTaskbarBadge(badgeTarget, int) error { return nil }
+func findBadgeTarget() badgeTarget                       { return badgeTarget{} }
+func applyTaskbarBadge(badgeTarget, taskbarStatus) error { return nil }

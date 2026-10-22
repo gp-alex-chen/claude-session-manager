@@ -9,7 +9,7 @@ const binding = fs.readFileSync(path.join(frontendDir, 'wailsjs/go/app/App.js'),
 const backend = fs.readFileSync(path.join(frontendDir, 'src/api/backend.js'), 'utf8');
 const expected = [
   'GetAgents', 'GetOpenSessions', 'GetShell', 'ShellInstalled', 'SetShell',
-  'NotifyBeep', 'SetCompletionBadge', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
+  'NotifyBeep', 'SetCompletionBadge', 'SetTaskbarStatus', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
   'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'StartNewAgent', 'ListAgentProviders', 'OpenFolder', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',
@@ -63,6 +63,11 @@ test('usage wrapper forwards both arguments unchanged', () => {
 test('quota wrapper forwards provider and refresh intent unchanged', () => {
   assert.match(binding,
     /export function GetAccountQuota\(provider, force\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetAccountQuota'\]\(provider, force\);\s*\}/);
+});
+
+test('taskbar wrapper forwards count, attention and force as one snapshot', () => {
+  assert.match(binding,
+    /export function SetTaskbarStatus\(count, attention, force\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['SetTaskbarStatus'\]\(count, attention, force\);\s*\}/);
 });
 
 test('agent creation wrapper forwards provider and directory unchanged', () => {

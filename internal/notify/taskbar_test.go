@@ -12,8 +12,8 @@ func TestTaskbarBadgeCachesOnlySuccessfulApplicationsAndRecoversShell(t *testing
 	var calls []int
 	fail := false
 	b := &TaskbarBadge{changed: make(chan struct{}, 1), target: func() badgeTarget { return target },
-		apply: func(_ badgeTarget, count int) error {
-			calls = append(calls, count)
+		apply: func(_ badgeTarget, status taskbarStatus) error {
+			calls = append(calls, status.count)
 			if fail {
 				return errors.New("fixture")
 			}
@@ -73,7 +73,7 @@ func TestTaskbarBadgeMissingWindowRetriesAndCancellationClears(t *testing.T) {
 	target := badgeTarget{}
 	var calls []int
 	b := &TaskbarBadge{changed: make(chan struct{}, 1), target: func() badgeTarget { return target },
-		apply: func(_ badgeTarget, count int) error { calls = append(calls, count); return nil }}
+		apply: func(_ badgeTarget, status taskbarStatus) error { calls = append(calls, status.count); return nil }}
 	if err := b.Set(1, false); err == nil {
 		t.Fatal("missing window was accepted")
 	}
@@ -95,7 +95,7 @@ func TestTaskbarBadgeMissingWindowRetriesAndCancellationClears(t *testing.T) {
 
 func TestTaskbarBadgeSerializesConcurrentNativeApplications(t *testing.T) {
 	b := &TaskbarBadge{changed: make(chan struct{}, 1), target: func() badgeTarget { return badgeTarget{1, 2} },
-		apply: func(_ badgeTarget, _ int) error { return nil }}
+		apply: func(_ badgeTarget, _ taskbarStatus) error { return nil }}
 	var wg sync.WaitGroup
 	for i := 0; i < 40; i++ {
 		wg.Add(1)

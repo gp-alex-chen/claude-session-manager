@@ -1,10 +1,12 @@
-export function createCompletionController({ state, SetCompletionBadge, documentRef, windowRef, onRead }) {
+export function createCompletionController({ state, SetTaskbarStatus, getAttention = () => false, documentRef, windowRef, onRead }) {
   const completed = new Set();
   let started = false;
   let desired = 0;
+  let desiredAttention = false;
   let revision = 0;
   let applied = 0;
   let lastCount = null;
+  let lastAttention = null;
   let forceNext = false;
   let writing = false;
   const foreground = () => documentRef?.visibilityState !== 'hidden' && (documentRef?.hasFocus?.() ?? true);
@@ -19,12 +21,14 @@ export function createCompletionController({ state, SetCompletionBadge, document
       while (applied < revision) {
         const current = revision;
         const count = desired;
+        const attention = desiredAttention;
         const force = forceNext;
         forceNext = false;
-        if (count !== lastCount || force) {
-          try { await SetCompletionBadge?.(count, force); }
-          catch { lastCount = null; return; }
+        if (count !== lastCount || attention !== lastAttention || force) {
+          try { await SetTaskbarStatus?.(count, attention, force); }
+          catch { lastCount = null; lastAttention = null; return; }
           lastCount = count;
+          lastAttention = attention;
         }
         applied = current;
       }
@@ -32,6 +36,7 @@ export function createCompletionController({ state, SetCompletionBadge, document
   }
   function sync(force = false) {
     desired = completed.size;
+    desiredAttention = started && Boolean(getAttention());
     forceNext ||= force;
     revision++;
     void write();

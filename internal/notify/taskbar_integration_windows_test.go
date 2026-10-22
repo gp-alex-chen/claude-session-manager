@@ -49,20 +49,20 @@ func TestTaskbarBadgeNativeIconCOMAndResourcesIntegration(t *testing.T) {
 	process, _, _ := kernel.NewProc("GetCurrentProcess").Call()
 	measure := func(flag uintptr) uintptr { result, _, _ := resources.Call(process, flag); return result }
 	// Warm COM/Shell initialization before measuring per-update resources.
-	if err := applyTaskbarBadge(target, 1); err != nil {
+	if err := applyTaskbarBadge(target, taskbarStatus{count: 1}); err != nil {
 		t.Fatal(err)
 	}
 	baselineGDI, baselineUSER := measure(0), measure(1)
 	for i := 0; i < 100; i++ {
-		count := []int{1, 2, 9, 10, 99, 0}[i%6]
-		if err := applyTaskbarBadge(target, count); err != nil {
-			t.Fatal(count, err)
+		status := []taskbarStatus{{count: 1}, {count: 9}, {count: 10}, {attention: true}, {count: 2, attention: true}, {}}[i%6]
+		if err := applyTaskbarBadge(target, status); err != nil {
+			t.Fatal(status, err)
 		}
 		if findBadgeTarget().window != hwnd {
 			t.Fatal("callback changed window target")
 		}
 	}
-	if err := applyTaskbarBadge(target, 0); err != nil {
+	if err := applyTaskbarBadge(target, taskbarStatus{}); err != nil {
 		t.Fatal(err)
 	}
 	if after := measure(0); after > baselineGDI+2 {

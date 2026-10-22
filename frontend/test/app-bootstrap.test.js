@@ -132,6 +132,7 @@ function makeFixture(options = {}) {
       return makeController('agent', {
         applyAgents: (value) => calls.routed.push(['agents', value]),
         renderUnreadMarks: () => {},
+        hasTaskbarAttention: () => options.hasTaskbarAttention?.(deps.state) ?? false,
         showToast: (value) => calls.routed.push(['toast', value]),
       });
     },
@@ -181,6 +182,7 @@ function makeFixture(options = {}) {
     },
   };
   const backend = new Proxy({}, { get: (_, key) => key === 'LoadPreferences' ? (options.LoadPreferences || (async () => ({})))
+    : key === 'SetTaskbarStatus' ? options.SetTaskbarStatus || (() => {})
     : key === 'GetAccountQuota' ? options.GetAccountQuota || (() => {}) : () => {} });
   const app = createApplication({
     documentRef,
@@ -429,5 +431,22 @@ test('pairing acknowledges completed canonical identity only when its original r
   f.calls.factories.agent.onTaskCompleted('claude-id');
   f.calls.factories.session.onPair({ token: 'new-claude-one' });
   assert.equal(completion.count(), 1);
+  f.app.stop();
+});
+
+test('bootstrap sends waiting snapshots through the combined binding and resyncs terminal exits', async () => {
+  let waiting = false;
+  const writes = [];
+  const f = makeFixture({ hasTaskbarAttention: () => waiting, SetTaskbarStatus: async (...args) => { writes.push(args); } });
+  await f.app.start();
+  assert.deepEqual(writes[0], [0, false, true]);
+  waiting = true;
+  f.calls.factories.agent.onUnreadChange();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.deepEqual(writes.at(-1).slice(0, 2), [0, true]);
+  waiting = false;
+  f.calls.factories.terminal.onExit('session');
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.deepEqual(writes.at(-1).slice(0, 2), [0, false]);
   f.app.stop();
 });

@@ -12,7 +12,7 @@ function fixture(update) {
     addEventListener: (event, cb) => listeners.set(event, cb), removeEventListener: event => listeners.delete(event) };
   const win = { addEventListener: (event, cb) => listeners.set(event, cb), removeEventListener: event => listeners.delete(event) };
   const controller = createCompletionController({ state, documentRef: doc, windowRef: win,
-    SetCompletionBadge: async (...args) => { calls.push(args); await update?.(...args); } });
+    SetTaskbarStatus: async (...args) => { calls.push(args); await update?.(...args); } });
   controller.start();
   return { state, calls, controller, doc, listeners, focus: value => { focused = value; } };
 }

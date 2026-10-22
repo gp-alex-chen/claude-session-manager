@@ -663,7 +663,7 @@ func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 		"ListProjectFavorites", "SetProjectFavorite",
 		"LoadPreferences", "SetPreference",
 		"ListSessionsForProviders", "ListHiddenSessionsForProviders",
-		"GetOpenSessionRefs", "SetCompletionBadge",
+		"GetOpenSessionRefs", "SetCompletionBadge", "SetTaskbarStatus",
 	}
 	for _, name := range want {
 		if _, ok := typ.MethodByName(name); !ok {

@@ -41,9 +41,11 @@ Claude `settings.disableAllHooks` 禁止用户/项目/插件 hooks 和 status li
 
 `QuotaSnapshot.authMode` 显式标识已确认的 API/订阅模式。Codex 只在 account.type 为 apiKey 时确认 API；Claude 使用 SDK 初始化的 accountInfo 元数据确认已知 API key 来源或云 API backend，未知来源、未登录及单独 rate_limits_available=false 不作为 API 证据。已确认 API 返回 unsupported 并保留提示；Go 对非 force 查询直接返回缓存，前端停止该 provider 的轮询，焦点切换不重复启动 helper。手动 force 查询仍遵循 30 秒最小间隔；刷新失败保留停查状态，成功识别订阅或其他登录状态后退出 API 停查。暂停状态只在内存中，重启应用会重新识别；当前短生命周期查询不监听登录变化，切换登录后需点击手动刷新。
 
-任务栏完成角标由独立 `notifications/controller.js` 记录 canonical 会话身份集合，通过串行、合并最新计数的 `SetCompletionBadge(count, force)` 写队列同步；它不使用包含普通会话结束的 unread 总数。Codex 完成事件直接携带原生 sessionId，临时身份确认和 `/new` 不把旧会话未查看状态迁移到新会话。只有文档可见且有焦点、当前 active token 对应的会话才视为查看；激活时同时清除 runtime/canonical 未读，主动关闭在移除映射前清理。计数只在内存中，不请求新的任务或账户信息。
+任务栏角标由独立 `notifications/controller.js` 记录 canonical 完成会话身份集合，通过串行、合并最新组合快照的 `SetTaskbarStatus(count, attention, force)` 写队列同步；`SetCompletionBadge(count, force)` 仅保留旧调用兼容。等待状态由 agent controller 复用 `classifyAgent(id) === 'blocked'` 派生，不把失败、中断、执行或未知状态当成等待。任一会话等待权限批准或用户输入时优先显示红圆白色叹号；窗口聚焦和查看会话不清除尚未解除的等待，全部等待解除后恢复未查看完成数字。关闭标记在首次 dismiss 前设置，运行 token 和原生 ID 都参与关闭过滤，防止迟到状态残留；已退出的终端不触发等待角标。
 
-原生 `internal/notify/taskbar*.go` 使用固定 `ClaudeSessionManagerWindow` 类名与当前 PID 定位主窗，按需在同一锁定 OS 线程创建/释放 COM ITaskbarList3，调用 SetOverlayIcon，位图与 HICON 在调用后释放，零值清除。只有成功调用才更新缓存；非零期间每 15 秒检查主窗/Shell HWND，未变化不调用 COM，变化或失败时尝试重新应用，归零停止检查，shutdown 清除并结束。Explorer 重启恢复为 best-effort，未侵入 Wails WndProc；小任务栏图标模式可能由 Windows 忽略 overlay。Windows 原生隔离检查：`go test -tags integration ./internal/notify -run TestTaskbarBadgeNativeIconCOMAndResourcesIntegration -v`，使用隐藏的本进程窗口验证 COM、图标和 100 次更新的资源释放，不读取应用状态或真实 agent。
+完成计数不使用包含普通会话结束的 unread 总数。Codex 完成事件直接携带原生 sessionId，临时身份确认和 `/new` 不把旧会话未查看状态迁移到新会话。只有文档可见且有焦点、当前 active token 对应的会话才视为查看；激活时同时清除 runtime/canonical 未读，主动关闭在移除映射前清理。计数和等待状态只在内存中，不请求新的任务或账户信息。
+
+原生 `internal/notify/taskbar*.go` 使用固定 `ClaudeSessionManagerWindow` 类名与当前 PID 定位主窗，按需在同一锁定 OS 线程创建/释放 COM ITaskbarList3，调用 SetOverlayIcon，位图与 HICON 在调用后释放；完成数为零且没有等待时清除。只有成功调用才更新完成数、等待标记和窗口身份缓存；有数字或叹号期间每 15 秒检查主窗/Shell HWND，未变化不调用 COM，变化或失败时尝试重新应用，均清零后停止检查，shutdown 清除并结束。等待期间仍保留最新完成数量，辅助说明也包含被叹号遮住的完成数量。Explorer 重启恢复为 best-effort，未侵入 Wails WndProc；小任务栏图标模式可能由 Windows 忽略 overlay。Windows 原生隔离检查：`go test -tags integration ./internal/notify -run TestTaskbarBadgeNativeIconCOMAndResourcesIntegration -v`，使用隐藏的本进程窗口验证 COM、数字/叹号图标和 100 次更新的资源释放，不读取应用状态或真实 agent。
 
 前端目录：
 

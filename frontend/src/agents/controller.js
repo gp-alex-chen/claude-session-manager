@@ -71,6 +71,17 @@ export function createAgentController(deps) {
     toast._tm = setTimeoutFn(() => toast.classList.remove('show'), 2800);
   }
 
+  function hasTaskbarAttention() {
+    for (const [id, agent] of state.runningAgents) {
+      const token = agent.runtimeToken || state.realToNew.get(id) || id;
+      if (state.closedTokens.has(id) || state.closedTokens.has(token)) continue;
+      const terminal = state.terminals.get(token) || terminalForSession(state, id);
+      if (terminal?.exited || (agent.runtimeToken && !terminal)) continue;
+      if (classifyAgent(id) === 'blocked') return true;
+    }
+    return false;
+  }
+
   function repaintBadge(badge) {
     const id = badge.dataset.id;
     const kind = classifyAgent(id);
@@ -262,6 +273,7 @@ export function createAgentController(deps) {
   return {
     applyAgents,
     classifyAgent,
+    hasTaskbarAttention,
     markEnded,
     refreshAgents,
     renderUnreadMarks,

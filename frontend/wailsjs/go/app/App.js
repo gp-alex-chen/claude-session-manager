@@ -39,3 +39,4 @@ export function ChooseProjectDir() { return window['go']['app']['App']['ChoosePr
 export function AddProject(dir) { return window['go']['app']['App']['AddProject'](dir); }
 export function DeleteProject(dir) { return window['go']['app']['App']['DeleteProject'](dir); }
 export function SetCompletionBadge(count, force) { return window['go']['app']['App']['SetCompletionBadge'](count, force); }
+export function SetTaskbarStatus(count, attention, force) { return window['go']['app']['App']['SetTaskbarStatus'](count, attention, force); }

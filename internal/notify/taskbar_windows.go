@@ -58,7 +58,7 @@ func findBadgeTarget() badgeTarget {
 	return target
 }
 
-func applyTaskbarBadge(target badgeTarget, count int) error {
+func applyTaskbarBadge(target badgeTarget, status taskbarStatus) error {
 	// COM creation, use, Release and uninitialization stay on the same thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -82,14 +82,14 @@ func applyTaskbarBadge(target badgeTarget, count int) error {
 		return fmt.Errorf("初始化任务栏接口失败: 0x%x", hr)
 	}
 	var icon uintptr
-	if count > 0 {
-		icon, err = createBadgeIcon(count)
+	if status.count > 0 || status.attention {
+		icon, err = createBadgeIcon(status)
 		if err != nil {
 			return err
 		}
 		defer badgeDestroyIcon.Call(icon)
 	}
-	description, _ := syscall.UTF16PtrFromString(fmt.Sprintf("%d 个会话已完成，尚未查看", count))
+	description, _ := syscall.UTF16PtrFromString(status.description())
 	hr, _, _ = syscall.SyscallN(table[18], self, target.window, icon, uintptr(unsafe.Pointer(description)))
 	runtime.KeepAlive(object)
 	runtime.KeepAlive(description)
@@ -112,20 +112,27 @@ var badgeGlyphs = map[rune][7]string{
 	'8': {"01110", "10001", "10001", "01110", "10001", "10001", "01110"},
 	'9': {"01110", "10001", "10001", "01111", "00001", "00001", "01110"},
 	'+': {"00000", "00100", "00100", "11111", "00100", "00100", "00000"},
+	'!': {"00100", "00100", "00100", "00100", "00100", "00000", "00100"},
 }
 
-func badgeImage(count int) *image.RGBA {
+func badgeImage(status taskbarStatus) *image.RGBA {
 	const size = 32
 	out := image.NewRGBA(image.Rect(0, 0, size, size))
+	background := color.RGBA{42, 42, 46, 255}
+	if status.attention {
+		background = color.RGBA{220, 38, 38, 255}
+	}
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
 			coverage := math.Max(0, math.Min(1, 16-math.Hypot(float64(x)-15.5, float64(y)-15.5)))
 			a := uint8(coverage * 255)
-			out.SetRGBA(x, y, color.RGBA{uint8(uint16(a) * 42 / 255), uint8(uint16(a) * 42 / 255), uint8(uint16(a) * 46 / 255), a})
+			out.SetRGBA(x, y, color.RGBA{uint8(uint16(a) * uint16(background.R) / 255), uint8(uint16(a) * uint16(background.G) / 255), uint8(uint16(a) * uint16(background.B) / 255), a})
 		}
 	}
-	label := strconv.Itoa(count)
-	if count > 9 {
+	label := strconv.Itoa(status.count)
+	if status.attention {
+		label = "!"
+	} else if status.count > 9 {
 		label = "9+"
 	}
 	scale := 3
@@ -150,8 +157,8 @@ func badgeImage(count int) *image.RGBA {
 	return out
 }
 
-func createBadgeIcon(count int) (uintptr, error) {
-	pixels := badgeImage(count)
+func createBadgeIcon(status taskbarStatus) (uintptr, error) {
+	pixels := badgeImage(status)
 	type bitmapHeader struct {
 		Size                   uint32
 		Width, Height          int32

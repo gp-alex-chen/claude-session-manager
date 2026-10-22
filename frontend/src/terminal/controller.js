@@ -262,8 +262,8 @@ export function createTerminalController(deps) {
   }
 
   function closeTab(token) {
-    onBeforeClose?.(token);
     state.closedTokens.add(token);
+    onBeforeClose?.(token);
     const session = state.terminals.get(token);
     if (backend.TermKill) Promise.resolve(backend.TermKill(token)).catch(() => {});
     clearNewMapping(token);

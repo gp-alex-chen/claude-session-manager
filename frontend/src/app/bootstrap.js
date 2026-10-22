@@ -57,8 +57,11 @@ export function createApplication(deps) {
   const createUsage = controllerFactories.usage || createUsageController;
   const nodes = Object.fromEntries(REQUIRED_IDS.map((id) => [id, requiredElement(documentRef, id)]));
   const state = createState();
+  let agentController;
   const completionController = createCompletionController({ state, documentRef, windowRef,
-    SetCompletionBadge: backend.SetCompletionBadge, onRead: () => agentController.renderUnreadMarks() });
+    SetTaskbarStatus: backend.SetTaskbarStatus,
+    getAttention: () => agentController?.hasTaskbarAttention?.() ?? false,
+    onRead: () => agentController.renderUnreadMarks() });
   const termOptions = createTermOptionsFn();
   let workspaceController;
   const setStatus = (message, className) => {
@@ -83,7 +86,7 @@ export function createApplication(deps) {
   let quotaController;
   workspaceController = createWorkspaceController({ state, nodes, storage: preferences, documentRef,
     onResize: () => paneController?.resizeVisible?.() });
-  const agentController = createAgent({
+  agentController = createAgent({
     state,
     GetAgents: backend.GetAgents,
     DebugLog: backend.DebugLog,
@@ -124,6 +127,7 @@ export function createApplication(deps) {
     },
     onBeforeClose: completionController.dismiss,
     onExit: (token) => {
+      completionController.sync();
       sessionController?.handleTerminalExit(token);
       paneController?.handleTerminalExit(token);
       sessionController?.refreshSessionVisibility?.();
