@@ -248,7 +248,18 @@
   border-bottom: 1px solid var(--border);
   font-size: 11px;
 }
-#terminal .terminal-pane-provider { display: inline-flex; flex: 0 0 18px; align-items: center; }
+#terminal .terminal-pane-provider {
+  display: inline-flex;
+  flex: 0 0 18px;
+  align-items: center;
+  user-select: none;
+}
+#terminal .terminal-pane-provider[draggable="true"] { cursor: grab; }
+#terminal .terminal-pane-provider.is-dragging { cursor: grabbing; opacity: .55; }
+#terminal.is-session-dragging .terminal-pane-slot.is-drop-target::after {
+  border: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
 #terminal .terminal-pane-provider[hidden] { display: none; }
 #terminal .terminal-pane-provider[data-provider="codex"] .s-provider-icon { color: #3b82f6; }
 #terminal .terminal-pane-session {

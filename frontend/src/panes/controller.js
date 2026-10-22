@@ -115,6 +115,7 @@ export function createPaneController(deps) {
   let resizeFramePending = false;
   let geometryFramePending = false;
   let dividerDrag = null;
+  let sessionDrag = null;
   const resizeTargets = new Set();
 
   const view = createPaneView({
@@ -134,6 +135,10 @@ export function createPaneController(deps) {
     onClearPane: (paneId) => clearPane(paneId),
     onDividerPointerDown: (axis, event) => startDividerDrag(axis, event),
     onDividerKeydown: (axis, event) => handleDividerKeydown(axis, event),
+    onSessionDragStart: startSessionDrag,
+    onSessionDragOver: sessionDragOver,
+    onSessionDrop: dropSession,
+    onSessionDragEnd: finishSessionDrag,
   });
 
   const resizeObserver = typeof ResizeObserverCtor === 'function'
@@ -297,6 +302,7 @@ export function createPaneController(deps) {
   }
 
   function syncView() {
+    if (sessionDrag && !validSessionDrag()) finishSessionDrag();
     const mode = normalizeLayoutMode(state.layoutMode);
     view.setLayout(mode);
     view.setSplitRatios(splitRatios[mode]);
@@ -309,6 +315,52 @@ export function createPaneController(deps) {
     view.updatePanes(state.panes, [...optionsByToken.values()]);
     view.setFocusedPane(state.focusedPaneId);
     onChange?.(state);
+  }
+
+  function validSessionDrag() {
+    if (!sessionDrag || !isVisiblePane(sessionDrag.paneId)) return false;
+    const session = state.terminals.get(sessionDrag.token);
+    return Boolean(session && !session.exited
+      && paneById(state, sessionDrag.paneId)?.token === sessionDrag.token);
+  }
+
+  function startSessionDrag(paneId, event) {
+    finishSessionDrag();
+    const token = paneById(state, paneId)?.token;
+    const session = state.terminals.get(token);
+    if (!isVisiblePane(paneId) || !session || session.exited || !event.dataTransfer) {
+      event.preventDefault?.();
+      return;
+    }
+    sessionDrag = { paneId, token };
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-theone-pane', paneId);
+    view.setSessionDragging(paneId);
+  }
+
+  function sessionDragOver(paneId, event) {
+    if (!validSessionDrag()) { finishSessionDrag(); return; }
+    const target = isVisiblePane(paneId) && paneId !== sessionDrag.paneId ? paneId : null;
+    view.setSessionDragging(sessionDrag.paneId, target);
+    if (!target) return;
+    event.preventDefault?.();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  }
+
+  function finishSessionDrag() {
+    sessionDrag = null;
+    view.setSessionDragging(null);
+  }
+
+  function dropSession(paneId, event) {
+    const token = validSessionDrag() && isVisiblePane(paneId)
+      && paneId !== sessionDrag.paneId ? sessionDrag.token : null;
+    finishSessionDrag();
+    if (!token) return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    showSession(token, { paneId, focus: true, swap: true });
+    resizeVisible();
   }
 
   function mountVisibleSessions(options = {}) {
@@ -430,6 +482,7 @@ export function createPaneController(deps) {
   }
 
   function setLayout(mode, options = {}) {
+    finishSessionDrag();
     const normalized = normalizeLayoutMode(mode);
     const excludedTokens = new Set(
       options.excludeTokens instanceof Set
@@ -528,6 +581,7 @@ export function createPaneController(deps) {
   }
 
   function stop() {
+    finishSessionDrag();
     if (!started) return;
     started = false;
     finishDividerDrag();

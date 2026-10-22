@@ -29,6 +29,8 @@ main.go
 
 `frontend/src/workspace/controller.js` 管理侧栏宽度、收起状态、当前工作目录和底部提示。默认均衡布局为 280px 两行会话列表；`sidebar-width` 限制为 220–360，`sidebar-collapsed` 使用 `true/false` 字符串，经共享 preferences 读写。侧栏拖动期间只更新几何与终端 fit，拖动结束、键盘调整和收起操作才保存设置。成功提示短暂显示，警告保持可见。顶部 `workspace-toolbar` 放置布局菜单，底部 `status-bar` 显示提示和存活终端数；窗格只保留产品图标、会话 select、紧凑 Token 按钮和移出按钮。select 显示 Agent、项目文件夹名和会话标题，悬停展示完整项目路径；只有 select 的选择事件传入 swap，选择其他已占用窗格的会话时交换两边的 runtime token 和原有终端 host，保持目标窗格焦点并同步用量与额度。侧栏选择已打开会话仍定位原窗格。
 
+窗格标题栏 Agent 图标使用 HTML drag/drop 在现有可见分屏间移动会话。pane controller 保存本次拖动的源窗格和 runtime token，仅接受自身发起且源会话仍存活、仍占据原窗格的拖动；drop 复用 `showSession(..., { swap: true })`，交换已占用窗格或移入空窗格，保留终端 host 并同步焦点、用量和尺寸。外部拖入不接管；dragend、布局切换、源身份变化、退出或 stop 清理反馈。目标窗格高亮不截获指针，不改变布局模式。
+
 搜索和「已打开」是 session controller 内的临时导航状态，只筛选缓存的历史与临时行，不额外请求历史、不改写 provider 基线，也不减少 pane controller 的运行会话选项。搜索匹配会话名/项目目录，结果强制展开但不改写用户的折叠集合；未匹配的历史仍保留身份和名称，用于恢复与状态通知。归档仍使用原有 hidden 语义，独立 dialog 具有背景 inert、焦点循环、Escape/遮罩关闭和来源按钮焦点恢复，搜索不改变来源筛选后的归档总数。
 
 账户额度是独立可选的 `QuotaProvider.AccountQuota(ctx)` 能力，由 `GetAccountQuota(provider, force)` 暴露；不能混入会话/项目的 `UsageProvider` Token 统计。Go 缓存按 provider 合并并发查询，Claude/Codex 的自动刷新与缓存间隔统一为 15 分钟，失败后的自动重试也是 15 分钟；手动刷新最小间隔仍为 30 秒，前端计时器在当前 Agent 查询完成后重新计时；失败最多保留 1 小时的旧数据并标记 `stale/readAt`，确认非订阅登录或已退出登录时清除旧窗口。缓存只在内存中。前端 `quota/controller.js` 以存活的 `state.activeToken` 对应 terminal.provider 为准，跟随聚焦窗格，临时 Codex token 同样适用；无活动窗格时隐藏圆环并停掉轮询，迟到响应只能填充对应 provider 的缓存。圆环彩色弧线使用已用百分比作为 dash 长度，不使用 dash offset，从 12 点方向顺时针增长；灰色轨道表示未使用额度，数字仍显示剩余百分比；均匀使用参考值为 `(resetsAt - now) / windowMinutes` 对应的剩余时间比例，参考刻度位于已流逝比例的位置，对应均匀使用时彩色弧线应到的位置，悬停和详情显示应已用百分比。缺少有效时长/重置时间或窗口已过期时隐藏刻度；每分钟仅在前端更新刻度和参考说明，不额外请求额度，隐藏、API 模式或 view stop 时清理本地计时器。

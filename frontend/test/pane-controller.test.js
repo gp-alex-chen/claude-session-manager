@@ -149,6 +149,133 @@ function makeFixture(options = {}) {
   };
 }
 
+function paneDrag(fixture, source = 'pane-0') {
+  const icon = fixture.controller.view.paneSurfaces().find(({ id }) => id === source).providerIcon;
+  const data = new Map();
+  const dataTransfer = { setData: (key, value) => data.set(key, value) };
+  const event = (type, extra = {}) => ({
+    type, dataTransfer, preventDefault() { this.prevented = true; }, stopPropagation() {}, ...extra,
+  });
+  icon.dispatchEvent(event('dragstart'));
+  return { icon, event, dataTransfer };
+}
+
+test('dragging the provider icon swaps occupied panes and focuses the moved session', () => {
+  const fixture = makeFixture();
+  fixture.controller.setLayout('split-cols-2');
+  const sessions = [...fixture.state.terminals.values()];
+  const { icon, event, dataTransfer } = paneDrag(fixture);
+  assert.equal(icon.draggable, true);
+  assert.equal(dataTransfer.effectAllowed, 'move');
+  const target = fixture.controller.view.paneRoot('pane-1');
+  const over = event('dragover');
+  target.dispatchEvent(over);
+  assert.equal(over.prevented, true);
+  assert.equal(target.classList.contains('is-drop-target'), true);
+  target.dispatchEvent(event('drop'));
+  assert.deepEqual(fixture.state.panes.map(pane => pane.token), ['b', 'a', null, null]);
+  assert.equal(fixture.state.activeToken, 'a');
+  assert.equal(fixture.state.focusedPaneId, 'pane-1');
+  assert.deepEqual([...fixture.state.terminals.values()], sessions);
+  assert.equal(fixture.unmounts.length, 0);
+  assert.equal(target.classList.contains('is-drop-target'), false);
+  assert.equal(fixture.terminalRoot.classList.contains('is-session-dragging'), false);
+});
+
+test('dragging to an empty pane moves the session without collapsing the layout', () => {
+  const fixture = makeFixture();
+  fixture.controller.setLayout('grid-2x2');
+  fixture.controller.clearPane('pane-3', { collapse: false });
+  const { event } = paneDrag(fixture);
+  fixture.controller.view.paneRoot('pane-3').dispatchEvent(event('drop'));
+  assert.deepEqual(fixture.state.panes.map(pane => pane.token), [null, 'c', 'b', 'a']);
+  assert.equal(fixture.state.layoutMode, 'grid-2x2');
+  assert.equal(fixture.state.activeToken, 'a');
+});
+
+test('cancelled and same-pane drags leave sessions in place and clear feedback', () => {
+  const fixture = makeFixture();
+  fixture.controller.setLayout('split-rows-2');
+  const { icon, event } = paneDrag(fixture);
+  assert.equal(fixture.terminalRoot.classList.contains('is-session-dragging'), true);
+  fixture.controller.view.paneRoot('pane-1').dispatchEvent(event('dragover'));
+  icon.dispatchEvent(event('dragend'));
+  assert.equal(fixture.controller.view.paneRoot('pane-1').classList.contains('is-drop-target'), false);
+  assert.deepEqual(fixture.state.panes.map(pane => pane.token), ['a', 'b', null, null]);
+  const next = paneDrag(fixture);
+  fixture.controller.view.paneRoot('pane-0').dispatchEvent(next.event('drop'));
+  assert.deepEqual(fixture.state.panes.map(pane => pane.token), ['a', 'b', null, null]);
+  assert.equal(fixture.terminalRoot.classList.contains('is-session-dragging'), false);
+});
+
+test('external drags, hidden targets and stale sources cannot replace pane sessions', () => {
+  const fixture = makeFixture();
+  fixture.controller.setLayout('split-main-left-3');
+  const external = { type: 'dragover', preventDefault() { this.prevented = true; } };
+  fixture.controller.view.paneRoot('pane-1').dispatchEvent(external);
+  assert.equal(external.prevented, undefined);
+  const hidden = paneDrag(fixture);
+  fixture.controller.view.paneRoot('pane-3').dispatchEvent(hidden.event('drop'));
+  assert.deepEqual(fixture.state.panes.map(pane => pane.token), ['a', 'b', 'c', null]);
+  const stale = paneDrag(fixture);
+  fixture.state.terminals.get('a').exited = true;
+  fixture.controller.view.paneRoot('pane-1').dispatchEvent(stale.event('drop'));
+  assert.deepEqual(fixture.state.panes.map(pane => pane.token), ['a', 'b', 'c', null]);
+  assert.equal(fixture.terminalRoot.classList.contains('is-session-dragging'), false);
+});
+
+test('layout changes and controller stop cancel an ongoing session drag', () => {
+  const fixture = makeFixture();
+  fixture.controller.start();
+  fixture.controller.setLayout('split-cols-2');
+  const drag = paneDrag(fixture);
+  fixture.controller.setLayout('grid-2x2');
+  fixture.controller.view.paneRoot('pane-1').dispatchEvent(drag.event('drop'));
+  assert.deepEqual(fixture.state.panes.map(pane => pane.token), ['a', 'c', 'b', 'd']);
+  const next = paneDrag(fixture);
+  fixture.controller.view.paneRoot('pane-1').dispatchEvent(next.event('dragover'));
+  fixture.controller.stop();
+  assert.equal(fixture.terminalRoot.classList.contains('is-session-dragging'), false);
+  assert.equal(fixture.controller.view.paneRoot('pane-1').classList.contains('is-drop-target'), false);
+});
+
+test('mixed providers can swap in every split layout without changing their terminal hosts', () => {
+  for (const mode of ['split-rows-2', 'split-cols-2', 'split-main-left-3', 'grid-2x2']) {
+    const fixture = makeFixture();
+    fixture.state.terminals.get('a').provider = 'codex';
+    fixture.controller.setLayout(mode);
+    const before = fixture.state.panes.map(pane => pane.token);
+    const targetId = fixture.controller.getVisiblePaneIds().at(-1);
+    const targetIndex = fixture.state.panes.findIndex(pane => pane.id === targetId);
+    const host = fixture.state.terminals.get('a').host;
+    const { event } = paneDrag(fixture);
+    fixture.controller.view.paneRoot(targetId).dispatchEvent(event('drop'));
+    const expected = [...before];
+    [expected[0], expected[targetIndex]] = [expected[targetIndex], expected[0]];
+    assert.deepEqual(fixture.state.panes.map(pane => pane.token), expected, mode);
+    assert.equal(fixture.state.terminals.get('a').host, host);
+    assert.equal(fixture.controller.view.paneSurfaces().find(pane => pane.id === targetId).providerIcon.dataset.provider, 'codex');
+    assert.equal(fixture.resizes.at(-1).includes('a'), true);
+  }
+});
+
+test('refresh cancels a drag when its source session changes and empty or exited icons cannot start one', () => {
+  const fixture = makeFixture();
+  fixture.controller.setLayout('split-cols-2');
+  const { event } = paneDrag(fixture);
+  fixture.controller.showSession('c', { paneId: 'pane-0' });
+  assert.equal(fixture.terminalRoot.classList.contains('is-session-dragging'), false);
+  fixture.controller.view.paneRoot('pane-1').dispatchEvent(event('drop'));
+  assert.deepEqual(fixture.state.panes.map(pane => pane.token), ['c', 'b', null, null]);
+  fixture.state.terminals.get('c').exited = true;
+  fixture.controller.refresh();
+  assert.equal(paneDrag(fixture).icon.draggable, false);
+  assert.equal(fixture.terminalRoot.classList.contains('is-session-dragging'), false);
+  fixture.controller.clearPane('pane-1', { collapse: false });
+  assert.equal(paneDrag(fixture, 'pane-1').icon.draggable, false);
+  assert.equal(fixture.terminalRoot.classList.contains('is-session-dragging'), false);
+});
+
 test('fixed layouts expose the requested visible pane geometry', () => {
   const fixture = makeFixture();
   fixture.controller.initialize();

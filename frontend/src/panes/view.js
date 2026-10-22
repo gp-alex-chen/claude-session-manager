@@ -39,6 +39,10 @@ export function createPaneView(deps) {
     onClearPane,
     onDividerPointerDown,
     onDividerKeydown,
+    onSessionDragStart,
+    onSessionDragOver,
+    onSessionDrop,
+    onSessionDragEnd,
   } = deps;
 
   terminalRoot.classList?.add('terminal-layout');
@@ -94,6 +98,14 @@ export function createPaneView(deps) {
     });
 
     body.addEventListener?.('click', () => onPaneFocus?.(paneId));
+    providerIcon.title = '按住拖到其他窗格：交换会话，空窗格则移入';
+    providerIcon.addEventListener?.('dragstart', (event) => onSessionDragStart?.(paneId, event));
+    providerIcon.addEventListener?.('dragend', () => onSessionDragEnd?.());
+    root.addEventListener?.('dragover', (event) => onSessionDragOver?.(paneId, event));
+    root.addEventListener?.('drop', (event) => onSessionDrop?.(paneId, event));
+    root.addEventListener?.('dragleave', (event) => {
+      if (!root.contains?.(event.relatedTarget)) root.classList?.remove('is-drop-target');
+    });
     selector.addEventListener?.('click', () => onPaneFocus?.(paneId, { focus: false }));
     selector.addEventListener?.('change', () => onSessionChange?.(paneId, selector.value));
     clear.addEventListener?.('click', (event) => {
@@ -234,6 +246,14 @@ export function createPaneView(deps) {
     terminalRoot.classList?.toggle('is-resizing', dragging);
   }
 
+  function setSessionDragging(sourceId, targetId = null) {
+    terminalRoot.classList?.toggle('is-session-dragging', Boolean(sourceId));
+    for (const [id, pane] of panes) {
+      pane.providerIcon.classList?.toggle('is-dragging', id === sourceId);
+      pane.root.classList?.toggle('is-drop-target', id === targetId);
+    }
+  }
+
   function updatePanes(paneState, sessionOptions = []) {
     const options = [{ token: '', label: '选择运行中的会话' }, ...sessionOptions];
     for (const paneStateItem of paneState) {
@@ -250,6 +270,7 @@ export function createPaneView(deps) {
       }
       pane.selector.value = paneStateItem.token || '';
       const selected = sessionOptions.find((item) => item.token === paneStateItem.token);
+      pane.providerIcon.draggable = Boolean(selected && !selected.disabled);
       pane.providerIcon.replaceChildren?.();
       setHidden(pane.providerIcon, !selected);
       if (selected) {
@@ -333,6 +354,7 @@ export function createPaneView(deps) {
     paneUsageDetails,
     paneUsageSummary,
     setDividerDragging,
+    setSessionDragging,
     setSplitRatios,
     setFocusedPane,
     setLayout,
