@@ -2,6 +2,10 @@
 // builds do not require the Wails CLI. If the CLI regenerates this file,
 // review the method set and keep it aligned with src/api/backend.js.
 export function GetAgents() { return window['go']['app']['App']['GetAgents'](); }
+export function GetNotificationConfig() { return window['go']['app']['App']['GetNotificationConfig'](); }
+export function SetNotificationConfig(config) { return window['go']['app']['App']['SetNotificationConfig'](config); }
+export function GetNotificationStatus() { return window['go']['app']['App']['GetNotificationStatus'](); }
+export function TestNotification(event) { return window['go']['app']['App']['TestNotification'](event); }
 export function GetOpenSessions() { return window['go']['app']['App']['GetOpenSessions'](); }
 export function GetOpenSessionRefs() { return window['go']['app']['App']['GetOpenSessionRefs'](); }
 export function GetShell() { return window['go']['app']['App']['GetShell'](); }

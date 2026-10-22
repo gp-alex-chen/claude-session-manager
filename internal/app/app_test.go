@@ -662,6 +662,7 @@ func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 		"ListProjects", "ChooseProjectDir", "AddProject", "DeleteProject", "OpenFolder",
 		"ListProjectFavorites", "SetProjectFavorite",
 		"LoadPreferences", "SetPreference",
+		"GetNotificationConfig", "SetNotificationConfig", "GetNotificationStatus", "TestNotification",
 		"ListSessionsForProviders", "ListHiddenSessionsForProviders",
 		"GetOpenSessionRefs", "SetCompletionBadge", "SetTaskbarStatus",
 	}

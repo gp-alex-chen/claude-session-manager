@@ -6,5 +6,6 @@ export {
   UnhideSession, AdoptSession, StartSession, StartNew, StartNewAgent, ListAgentProviders, OpenFolder, TermWrite, TermResize, TermKill,
   GetVersion, GetUsageSummary, GetAccountQuota, CheckForUpdate, UpdateToLatest,
   LoadPreferences, SetPreference,
+  GetNotificationConfig, SetNotificationConfig, GetNotificationStatus, TestNotification,
   ListProjects, ListProjectFavorites, SetProjectFavorite, ChooseProjectDir, AddProject, DeleteProject,
 } from '../../wailsjs/go/app/App';

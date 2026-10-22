@@ -98,6 +98,7 @@ func Signature(list []AgentInfo) string {
 func cloneAgents(in []AgentInfo) []AgentInfo { return append([]AgentInfo(nil), in...) }
 
 type Watcher struct {
+	fetchMu     sync.Mutex
 	lifecycleMu sync.Mutex
 	running     bool
 	cancel      context.CancelFunc
@@ -108,9 +109,18 @@ type Watcher struct {
 	cacheReady  bool
 	fetch       Fetcher
 	emit        func([]AgentInfo)
+	observe     func([]AgentInfo)
 }
 
 func NewWatcher(emit func([]AgentInfo)) *Watcher { return NewWatcherWithFetcher(FetchFull, emit) }
+
+// The observer receives every successful snapshot, including the first empty
+// baseline. Failed reads never become an empty snapshot or a completion event.
+func NewWatcherWithObserver(emit, observe func([]AgentInfo)) *Watcher {
+	w := NewWatcher(emit)
+	w.observe = observe
+	return w
+}
 func NewWatcherWithFetcher(fetch Fetcher, emit func([]AgentInfo)) *Watcher {
 	if fetch == nil {
 		fetch = FetchFull
@@ -172,6 +182,8 @@ func (w *Watcher) run(ctx context.Context, done chan struct{}) {
 }
 
 func (w *Watcher) pollOnce(ctx context.Context, fail *int) time.Duration {
+	w.fetchMu.Lock()
+	defer w.fetchMu.Unlock()
 	list, raw := w.fetch(ctx)
 	if list == nil {
 		(*fail)++
@@ -187,6 +199,9 @@ func (w *Watcher) pollOnce(ctx context.Context, fail *int) time.Duration {
 	changed := sig != w.sig
 	w.cache, w.sig, w.cacheReady = cloneAgents(list), sig, true
 	w.cacheMu.Unlock()
+	if w.observe != nil {
+		w.observe(cloneAgents(list))
+	}
 	if len(list) > 0 {
 		DebugLog("watch raw=" + raw)
 	}
@@ -213,6 +228,11 @@ func (w *Watcher) snapshot() ([]AgentInfo, bool) {
 
 func (w *Watcher) Get() []AgentInfo { return w.GetContext(context.Background()) }
 func (w *Watcher) GetContext(ctx context.Context) []AgentInfo {
+	if got, ready := w.snapshot(); ready {
+		return got
+	}
+	w.fetchMu.Lock()
+	defer w.fetchMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -228,6 +248,9 @@ func (w *Watcher) GetContext(ctx context.Context) []AgentInfo {
 	w.cacheMu.Lock()
 	w.cache, w.sig, w.cacheReady = cloneAgents(list), Signature(list), true
 	w.cacheMu.Unlock()
+	if w.observe != nil {
+		w.observe(cloneAgents(list))
+	}
 	DebugLog("GetAgents 首次拉取 len=" + fmt.Sprint(len(list)) + " raw=" + raw)
 	return cloneAgents(list)
 }

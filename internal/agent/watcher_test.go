@@ -96,6 +96,31 @@ func TestPollSignatureEmitsOnlyOnChange(t *testing.T) {
 	}
 }
 
+func TestObserverReceivesSuccessfulEmptyAndReasonChangesButNeverReadFailures(t *testing.T) {
+	var observed [][]AgentInfo
+	w := NewWatcherWithObserver(nil, func(list []AgentInfo) { observed = append(observed, list) })
+	w.fetch = func(context.Context) ([]AgentInfo, string) { return []AgentInfo{}, "" }
+	fail := 0
+	w.pollOnce(context.Background(), &fail)
+	w.fetch = func(context.Context) ([]AgentInfo, string) { return nil, "failed" }
+	w.pollOnce(context.Background(), &fail)
+	if len(observed) != 1 || len(observed[0]) != 0 {
+		t.Fatalf("empty baseline/failure: %#v", observed)
+	}
+	a := AgentInfo{SessionID: "s", State: "blocked", Status: "waiting", WaitingFor: "approval"}
+	w.fetch = func(context.Context) ([]AgentInfo, string) { return []AgentInfo{a}, "" }
+	w.pollOnce(context.Background(), &fail)
+	a.WaitingFor = "userInput"
+	w.pollOnce(context.Background(), &fail)
+	if len(observed) != 3 || observed[2][0].WaitingFor != "userInput" {
+		t.Fatalf("reason change lost: %#v", observed)
+	}
+	observed[2][0].State = "mutated"
+	if w.Snapshot()[0].State != "blocked" {
+		t.Fatal("observer mutated cache")
+	}
+}
+
 func TestGetPerformsInitialSynchronousFetchAndReturnsCopy(t *testing.T) {
 	calls := 0
 	w := NewWatcherWithFetcher(func(context.Context) ([]AgentInfo, string) {

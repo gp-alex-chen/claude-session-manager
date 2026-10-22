@@ -40,28 +40,30 @@ type pendingAdoption struct {
 }
 
 type App struct {
-	launchMu           sync.Mutex
-	renameMu           sync.Mutex
-	lifecycleMu        sync.Mutex
-	adoptionMu         sync.Mutex
-	ctx                context.Context
-	cancelLifecycle    context.CancelFunc
-	terms              *terminal.Manager
-	store              *state.Store
-	watcher            *agent.Watcher
-	lifecycleID        uint64
-	lookPath           func(string) (string, error)
-	debugLog           func(string)
-	startPTYFn         func(string, string, string) error
-	chooseDirFn        func(context.Context, runtime.OpenDialogOptions) (string, error)
-	usageScanner       *usage.Scanner
-	providers          *provider.Registry
-	quotaCache         *provider.QuotaCache
-	completionBadge    *notify.TaskbarBadge
-	sessionCatalog     *session.Catalog
-	pendingAdoptions   map[string]*pendingAdoption
-	cancelledAdoptions map[string]struct{}
-	statusChanged      chan struct{}
+	launchMu            sync.Mutex
+	renameMu            sync.Mutex
+	lifecycleMu         sync.Mutex
+	notificationMu      sync.Mutex
+	adoptionMu          sync.Mutex
+	ctx                 context.Context
+	cancelLifecycle     context.CancelFunc
+	terms               *terminal.Manager
+	store               *state.Store
+	watcher             *agent.Watcher
+	lifecycleID         uint64
+	lookPath            func(string) (string, error)
+	debugLog            func(string)
+	startPTYFn          func(string, string, string) error
+	chooseDirFn         func(context.Context, runtime.OpenDialogOptions) (string, error)
+	usageScanner        *usage.Scanner
+	providers           *provider.Registry
+	quotaCache          *provider.QuotaCache
+	completionBadge     *notify.TaskbarBadge
+	notificationProgram *notify.ProgramService
+	sessionCatalog      *session.Catalog
+	pendingAdoptions    map[string]*pendingAdoption
+	cancelledAdoptions  map[string]struct{}
+	statusChanged       chan struct{}
 }
 
 func NewApp() *App {
@@ -115,14 +117,16 @@ func (a *App) startup(ctx context.Context) {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	watcher := agent.NewWatcher(func([]agent.AgentInfo) {
+	watcher := agent.NewWatcherWithObserver(func([]agent.AgentInfo) {
 		a.signalProviderUpdate()
-	})
+	}, func(list []agent.AgentInfo) { a.observeNotificationSource(ctx, "claude", list) })
 	// Register the candidate before stopping the old watcher. Stop may wait on
 	// its fetch loop, so it must never run while lifecycleMu is held.
 	a.lifecycleMu.Lock()
 	old := a.watcher
 	oldCancel := a.cancelLifecycle
+	oldNotifications := a.notificationProgram
+	a.notificationProgram = nil
 	a.lifecycleID++
 	lifecycleID := a.lifecycleID
 	a.ctx = ctx
@@ -132,14 +136,23 @@ func (a *App) startup(ctx context.Context) {
 	if oldCancel != nil {
 		oldCancel()
 	}
+	if oldNotifications != nil {
+		oldNotifications.Close()
+	}
 	if old != nil {
 		old.Stop()
 	}
 	// Recheck the generation before installing callbacks or starting the
 	// candidate. A concurrent Startup/Shutdown may have made it stale.
+	a.notificationMu.Lock()
+	notificationConfig, configErr := a.store.NotificationConfig()
+	if configErr != nil {
+		notificationConfig = state.DefaultNotificationConfig()
+	}
 	a.lifecycleMu.Lock()
 	current := a.lifecycleID == lifecycleID && a.watcher == watcher
 	if current {
+		a.notificationProgram = notify.NewProgramService(ctx, notificationConfig)
 		if a.completionBadge != nil {
 			a.completionBadge.Close()
 		}
@@ -151,15 +164,31 @@ func (a *App) startup(ctx context.Context) {
 		})
 		watcher.Start(ctx)
 		go a.watchProviderUpdates(ctx)
+		a.signalProviderUpdate()
 	}
 	a.lifecycleMu.Unlock()
+	a.notificationMu.Unlock()
 	if !current {
 		cancel()
 	}
 }
 func (a *App) shutdown(context.Context) {
 	a.launchMu.Lock()
-	defer a.launchMu.Unlock()
+	var notifications *notify.ProgramService
+	defer func() {
+		a.launchMu.Unlock()
+		if notifications != nil {
+			notifications.Close()
+		}
+	}()
+	// Stop delivery before shutdown snapshots or terminal exits can be observed.
+	a.lifecycleMu.Lock()
+	notifications = a.notificationProgram
+	a.notificationProgram = nil
+	a.lifecycleMu.Unlock()
+	if notifications != nil {
+		notifications.Stop()
+	}
 	// Capture native identities even when the UI has never queried agents.
 	a.sealProviderRestoration()
 	a.codexStatusLocked(context.Background(), true)

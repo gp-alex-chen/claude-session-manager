@@ -109,6 +109,8 @@ docs/releases/                  按 tag 保存的中文更新说明
 
 ## 可复现开发命令
 
+自定义通知程序位于「设置 → 通知」，可在等待回答、权限审批或任务完成时调用 Python、Go exe 等程序，通过标准输入传入 UTF-8 JSON。支持事件勾选、工作目录、超时和测试调用；默认关闭，调用结果不写日志。接入本地服务器的示例见 [自定义通知程序](docs/custom-notifications.md)。
+
 ```powershell
 cd frontend
 npm ci

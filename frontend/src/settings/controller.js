@@ -1,4 +1,5 @@
 import { formatVersion } from '../utils.js';
+import { createNotificationSettings } from '../notifications/settings.js';
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
   MAX_TERMINAL_FONT_SIZE,
@@ -30,6 +31,7 @@ export function createSettingsController(deps) {
   let buildGeneration = 0;
   let activeCategory = 'appearance';
   const categoryHandlers = new Map();
+  const notificationSettings = createNotificationSettings({ backend, el });
 
   function isOpen() {
     return !settingsMenu.hidden;
@@ -68,6 +70,7 @@ export function createSettingsController(deps) {
   }
 
   function hide(restoreFocus = false) {
+    notificationSettings.stop();
     buildGeneration += 1;
     settingsMenu.hidden = true;
     settingsMenu.setAttribute('aria-hidden', 'true');
@@ -259,13 +262,15 @@ export function createSettingsController(deps) {
   }
 
   async function build() {
+    notificationSettings.stop();
     const generation = ++buildGeneration;
     for (const panel of Object.values(panels)) panel.innerHTML = '';
     addThemeGroups(panels.appearance);
     addFontSizeGroup(panels.terminal);
     const shellBuild = addShellGroup(generation, panels.terminal);
+    const notificationBuild = panels.notifications ? notificationSettings.mount(panels.notifications) : Promise.resolve();
     updateController.mount(panels.update);
-    await shellBuild;
+    await Promise.all([shellBuild, notificationBuild]);
     if (generation !== buildGeneration) return;
   }
 

@@ -139,15 +139,19 @@ func (a *App) emitAgentUpdate(ctx context.Context) {
 	// Only the update worker takes this lock; watcher callbacks merely queue.
 	// Recheck lifecycle after waiting so an old worker cannot emit after exit.
 	a.launchMu.Lock()
-	defer a.launchMu.Unlock()
 	a.lifecycleMu.Lock()
 	current := a.ctx == ctx && ctx.Err() == nil
 	watcher := a.watcher
 	a.lifecycleMu.Unlock()
+	var list, others []agent.AgentInfo
 	if current && watcher != nil {
-		list := watcher.Snapshot()
-		others := a.codexStatusLocked(ctx, false)
+		list = watcher.Snapshot()
+		others = a.codexStatusLocked(ctx, false)
 		list = append(list, others...)
+	}
+	a.launchMu.Unlock()
+	if current && watcher != nil {
+		a.observeNotificationSource(ctx, "codex", others)
 		runtime.EventsEmit(ctx, "agents:update", list)
 	}
 }

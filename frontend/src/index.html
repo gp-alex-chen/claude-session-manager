@@ -91,6 +91,13 @@
             aria-controls="settings-panel-terminal"
           >终端</button>
           <button
+            id="settings-tab-notifications"
+            type="button"
+            role="tab"
+            data-category="notifications"
+            aria-controls="settings-panel-notifications"
+          >通知</button>
+          <button
             id="settings-tab-update"
             type="button"
             role="tab"
@@ -112,6 +119,14 @@
             data-panel="terminal"
             role="tabpanel"
             aria-labelledby="settings-tab-terminal"
+            hidden
+          ></section>
+          <section
+            id="settings-panel-notifications"
+            class="settings-panel"
+            data-panel="notifications"
+            role="tabpanel"
+            aria-labelledby="settings-tab-notifications"
             hidden
           ></section>
           <section

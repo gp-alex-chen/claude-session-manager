@@ -29,6 +29,8 @@ main.go
 
 `frontend/src/workspace/controller.js` 管理侧栏宽度、收起状态、当前工作目录和底部提示。默认均衡布局为 280px 两行会话列表；`sidebar-width` 限制为 220–360，`sidebar-collapsed` 使用 `true/false` 字符串，经共享 preferences 读写。侧栏拖动期间只更新几何与终端 fit，拖动结束、键盘调整和收起操作才保存设置。成功提示短暂显示，警告保持可见。顶部 `workspace-toolbar` 放置布局菜单，底部 `status-bar` 显示提示和存活终端数；窗格只保留产品图标、会话 select、紧凑 Token 按钮和移出按钮。select 显示 Agent、项目文件夹名和会话标题，悬停展示完整项目路径；只有 select 的选择事件传入 swap，选择其他已占用窗格的会话时交换两边的 runtime token 和原有终端 host，保持目标窗格焦点并同步用量与额度。侧栏选择已打开会话仍定位原窗格。
 
+自定义通知由 `internal/notify/program*.go` 管理，`state.Store` 使用独立文档锁和原子替换保存 `notification.json`。Claude watcher 的独立 observer 接收每次成功快照（包括首次空快照和只有 waitingFor 变化的快照），失败读取不送入状态机；fetch/observer 通过 fetchMu 排序。Codex 由后端更新 worker 采集成功状态后独立观察；`GetAgents` 不触发通知调用。各来源独立建立启动基线，等待边沿及成功轮次去重，消失不推断完成；runtime token 优先保证 Codex 原生身份接管不重复通知。单 worker、32 条有界等待队列，配置保存成功后替换并取消旧调用、清空旧队列，基线保持；生命周期更换创建新状态机。shutdown 先非阻塞停止通知，释放 launchMu 后再等待 worker。运行不持有应用生命周期或启动锁，Windows suspended start → Job Object 绑定 → resume 防止派生进程逃离取消范围。stdin JSON、参数数组与工作目录直接交给进程，不经过 Shell；stderr 有界、结果仅内存。公开绑定为 `GetNotificationConfig`、`SetNotificationConfig`、`GetNotificationStatus` 和 `TestNotification(event)`。前端独立 `notifications/settings.js` 使用 generation 防止关闭或重建后写入旧面板，打开设置期间轮询结果，关闭时停止。协议、观测限制和 Python/Go 示例见 [自定义通知程序](custom-notifications.md)。
+
 窗格标题栏 Agent 图标使用 HTML drag/drop 在现有可见分屏间移动会话。pane controller 保存本次拖动的源窗格和 runtime token，仅接受自身发起且源会话仍存活、仍占据原窗格的拖动；drop 复用 `showSession(..., { swap: true })`，交换已占用窗格或移入空窗格，保留终端 host 并同步焦点、用量和尺寸。外部拖入不接管；dragend、布局切换、源身份变化、退出或 stop 清理反馈。目标窗格高亮不截获指针，不改变布局模式。
 
 搜索和「已打开」是 session controller 内的临时导航状态，只筛选缓存的历史与临时行，不额外请求历史、不改写 provider 基线，也不减少 pane controller 的运行会话选项。搜索匹配会话名/项目目录，结果强制展开但不改写用户的折叠集合；未匹配的历史仍保留身份和名称，用于恢复与状态通知。归档仍使用原有 hidden 语义，独立 dialog 具有背景 inert、焦点循环、Escape/遮罩关闭和来源按钮焦点恢复，搜索不改变来源筛选后的归档总数。

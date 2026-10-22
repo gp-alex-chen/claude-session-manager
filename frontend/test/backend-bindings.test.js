@@ -14,6 +14,7 @@ const expected = [
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',
   'LoadPreferences', 'SetPreference',
+  'GetNotificationConfig', 'SetNotificationConfig', 'GetNotificationStatus', 'TestNotification',
   'ListSessionsForProviders', 'ListHiddenSessionsForProviders',
   'GetOpenSessionRefs', 'GetAccountQuota',
 ];
@@ -68,6 +69,12 @@ test('quota wrapper forwards provider and refresh intent unchanged', () => {
 test('taskbar wrapper forwards count, attention and force as one snapshot', () => {
   assert.match(binding,
     /export function SetTaskbarStatus\(count, attention, force\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['SetTaskbarStatus'\]\(count, attention, force\);\s*\}/);
+});
+
+test('notification wrappers forward complete config and selected event without shell parsing', () => {
+  for (const [name, arg] of [['SetNotificationConfig', 'config'], ['TestNotification', 'event']]) {
+    assert.match(binding, new RegExp(`export function ${name}\\(${arg}\\)\\s*\\{\\s*return window\\['go'\\]\\['app'\\]\\['App'\\]\\['${name}'\\]\\(${arg}\\);\\s*\\}`));
+  }
 });
 
 test('agent creation wrapper forwards provider and directory unchanged', () => {
