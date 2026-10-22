@@ -125,3 +125,89 @@ func TestCodexRelayMalformedObservationDoesNotBlockTUI(t *testing.T) {
 		t.Fatalf("observer affected forward: %q %v", got, err)
 	}
 }
+
+func relayMessageWithSize(size int) string {
+	const prefix = `{"id":101,"result":{"padding":"`
+	const suffix = `"}}`
+	return prefix + strings.Repeat("x", size-len(prefix)-len(suffix)) + suffix
+}
+
+func TestCodexRelayForwardsLargeServerMessagesAndKeepsFraming(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		size      int
+		separator string
+	}{
+		{"large plugin catalog", 16818092, "\n"},
+		{"64 MiB payload with CRLF", 64 << 20, "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, f := testRelay(t)
+			ws := dialRelay(t, r)
+			ws.SetReadDeadline(time.Now().Add(15 * time.Second))
+			large := relayMessageWithSize(tc.size)
+			const next = `{"id":102,"result":{"stillConnected":true}}`
+			done := make(chan error, 1)
+			go func() {
+				for _, part := range []string{large, tc.separator, next, "\n"} {
+					if _, err := io.WriteString(f.output, part); err != nil {
+						done <- err
+						return
+					}
+				}
+				done <- nil
+			}()
+			for _, expected := range []string{large, next} {
+				kind, got, err := ws.ReadMessage()
+				if err != nil || kind != websocket.TextMessage || string(got) != expected {
+					t.Fatalf("server message changed: got %d bytes, want %d, kind=%d, err=%v", len(got), len(expected), kind, err)
+				}
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCodexRelayForwardsLargeClientMessageAndNextRequest(t *testing.T) {
+	r, f := testRelay(t)
+	ws := dialRelay(t, r)
+	ws.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	for _, message := range []string{relayMessageWithSize(16818092), `{"id":102,"method":"future/next"}`} {
+		if err := ws.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-f.requests:
+			if got != message+"\n" {
+				t.Fatalf("client message changed: got %d bytes, want %d", len(got), len(message)+1)
+			}
+		case <-f.closed:
+			t.Fatal("relay closed instead of forwarding the large client message")
+		case <-time.After(15 * time.Second):
+			t.Fatal("client message was not forwarded")
+		}
+	}
+}
+
+func TestCodexRelayRejectsServerPayloadOver64MiB(t *testing.T) {
+	r, f := testRelay(t)
+	ws := dialRelay(t, r)
+	ws.SetReadDeadline(time.Now().Add(15 * time.Second))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		io.WriteString(f.output, relayMessageWithSize((64<<20)+1))
+		io.WriteString(f.output, "\n")
+	}()
+	if _, got, err := ws.ReadMessage(); err == nil {
+		t.Fatalf("oversized server message was forwarded: %d bytes", len(got))
+	}
+	select {
+	case <-f.closed:
+	case <-time.After(15 * time.Second):
+		t.Fatal("oversized message did not close the owned transport")
+	}
+	<-done
+}

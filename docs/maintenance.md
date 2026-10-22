@@ -83,6 +83,8 @@ Claude watcher 与 Codex observer 只向容量为 1 的合并队列发信号，�
 
 透明转发保持原始消息、顺序和未知字段，只添加/去除 stdio 的换行 framing；观察器接收副本，不回答审批或用户输入请求。转发器只绑定 `127.0.0.1:0`、使用 256-bit 随机 bearer、拒绝浏览器 Origin 和第二客户端。凭据仅加入该 PTY 环境，大小写不敏感地替换同名环境变量，不写入父进程环境、日志或状态文件。`LaunchSpec.Env` 与 `Close` 将 server/relay 作为终端专属资源交给 Manager，启动失败时 App 清理，成功后 reader 退出、替换、Kill 和 CloseAll 均由幂等 `ptyRef.Close` 清理。专属 server 的运行期由 PTY 所有权控制，避免 Wails context 提前取消导致恢复清单被退出事件擦除；Shutdown 先持久化并关闭终端，再取消其他读请求，启动与关闭由 App launch 锁串行。
 
+中继双向单条 JSON 消息上限统一为 64 MiB，以容纳超过旧 16 MiB 上限的远程 `plugin/list` 目录响应。stdio 读取为 LF/CRLF 结束符额外预留两个字节，结束符不计入消息大小；超过 64 MiB 的消息仍关闭专属传输。回归测试覆盖大目录原样转发、64 MiB 临界消息、后续消息 framing、反向大消息及超限关闭。
+
 Codex `thread/status/changed` 映射 active/idle/systemError/notLoaded 与审批/输入标记，`turn/completed` 保留 completed/failed/interrupted。断线显示 unknown，只有显式 completed 才产生成功提示；Claude 原有状态推断不变。Claude watcher 与 Codex 事件合并后推送同一 `agents:update`，Codex 通过 runtimeToken 更新临时行，外部终端不猜测。
 
 Codex 用量只采用 `thread/tokenUsage/updated` 的累计 total 与最近 last 快照，重复事件替换而不累加。input 已含 cache read/write，适配时扣除缓存部分得到普通 input；reasoning 是 output 的明细，不额外加到总量。校验非负、分类范围、必需字段和 total=input+output；异常保留旧快照并标旧。模型请求数、缓存层级和项目总量不猜测；Codex 不进入 Claude project prefetch/cache。新开终端时，快照缓存以 1024 项为收敛目标，优先清理最旧的非活动项；活动终端保留，应用重启后不宣称旧快照可用。公开 thread/read/resume/Turn schema 没有历史 usage 字段，0.161.0 的合成历史恢复实验未回放旧 token 事件。
