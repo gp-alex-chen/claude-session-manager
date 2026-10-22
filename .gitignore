@@ -20,6 +20,7 @@ open-sessions.json
 settings.json
 projects.json
 preferences.json
+notification.json
 last-session.json
 # Legacy state name retained for old installations.
 *.json.tmp-*

@@ -66,12 +66,12 @@ func TestScannerLocatesRealSessionAndReportsUnknownSession(t *testing.T) {
 func TestScannerAcceptsAbsoluteProjectPathWithoutBasenameCollision(t *testing.T) {
 	root := t.TempDir()
 	// Claude encodes a Windows project path by replacing its drive/path
-	// separators with hyphens, e.g. D:\plug\fyne-sidebar becomes
-	// D--plug-fyne-sidebar. The other project has the same leaf directory but
+	// separators with hyphens, e.g. D:\projects\example-app becomes
+	// D--projects-example-app. The other project has the same leaf directory but
 	// must not be selected when the absolute path is supplied.
-	absoluteProject := `D:\plug\fyne-sidebar`
-	encodedProject := "D--plug-fyne-sidebar"
-	otherProject := "D--other-fyne-sidebar"
+	absoluteProject := `D:\projects\example-app`
+	encodedProject := "D--projects-example-app"
+	otherProject := "D--other-example-app"
 	writeSession(t, root, otherProject, "same-session", assistantLine("other", "", usageJSON(22, 0, 0, 0, 0, 0, 0)))
 	writeSession(t, root, encodedProject, "same-session", assistantLine("target", "", usageJSON(11, 0, 0, 0, 0, 0, 0)))
 
