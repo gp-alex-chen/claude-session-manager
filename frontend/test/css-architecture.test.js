@@ -62,11 +62,20 @@ test('controller-driven classes and states remain represented in split styles', 
     .join('\n');
   for (const selector of [
     'active', 'fold-hidden', 'collapsed', 'off', 'idle', 'open', 'running',
-    'blocked', 'ecg', 'green', 'ended-anim', 'unread', 'show', 'cur',
+    'blocked', 'working', 'ended-anim', 'unread', 'show', 'cur',
     'has-update', 'disabled', 'hidden', 'ok', 'warn',
   ]) {
     assert.match(css, new RegExp('\\.' + selector + '\\b|#status-bar\\.' + selector));
   }
+});
+
+test('working provider icons rotate slowly and respect reduced motion', () => {
+  const sidebar = read('sidebar.css');
+  const rotation = splitBlock(sidebar, '\\.badge\\.working\\.provider-status-icon svg');
+  assert.match(rotation, /animation:\s*provider-spin 6s linear infinite/);
+  assert.match(rotation, /transform-origin:\s*50% 50%/);
+  assert.match(sidebar, /@keyframes provider-spin\s*\{\s*to\s*\{\s*transform:\s*rotate\(360deg\)/);
+  assert.match(sidebar, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.badge\.working\.provider-status-icon svg\s*\{\s*animation:\s*none/);
 });
 
 test('terminal styles define adjustable pane geometries and divider tracks', () => {

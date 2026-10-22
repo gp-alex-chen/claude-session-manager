@@ -9,9 +9,16 @@ const icons = new Map([
 export function paintProviderStatusIcon(badge, provider = 'claude') {
   const icon = icons.get(provider);
   if (icon) {
+    if (badge.dataset.statusIconProvider !== provider || !badge.classList.contains('provider-status-icon')) {
+      badge.innerHTML = icon.replaceAll('fill="#D97757"', 'fill="currentColor"');
+      badge.dataset.statusIconProvider = provider;
+    }
     badge.classList.add('provider-status-icon');
-    badge.innerHTML = icon.replaceAll('fill="#D97757"', 'fill="currentColor"');
-  } else badge.textContent = '●';
+  } else {
+    badge.classList.remove('provider-status-icon');
+    delete badge.dataset.statusIconProvider;
+    badge.textContent = '●';
+  }
 }
 
 export function renderProviderBadge({ provider = 'claude', name, temporary = false, el }) {

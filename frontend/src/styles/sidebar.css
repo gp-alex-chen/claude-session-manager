@@ -346,13 +346,17 @@
   animation: blocked-blink 1.2s ease-in-out infinite;
 }
 @keyframes blocked-blink { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
-.badge.ecg.green {
+.badge.working {
   color: var(--live-green);
-  text-shadow: 0 0 6px var(--glow-green);
 }
-.badge.ecg.orange {
-  color: var(--live-orange);
-  text-shadow: 0 0 6px var(--glow-orange);
+.badge.working.provider-status-icon svg {
+  transform-origin: 50% 50%;
+  transform-box: view-box;
+  animation: provider-spin 6s linear infinite;
+}
+@keyframes provider-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .badge.working.provider-status-icon svg { animation: none; }
 }
 .badge.ended-anim {
   color: var(--idle);

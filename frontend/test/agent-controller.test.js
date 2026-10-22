@@ -214,14 +214,14 @@ test('GetAgents rejection preserves the existing snapshot', async () => {
   assert.equal(fixtureData.notices.length, 0);
 });
 
-test('start is idempotent and stop clears both timers', () => {
+test('start is idempotent and stop clears the status polling timer', () => {
   const fixtureData = fixture();
   fixtureData.controller.start();
   fixtureData.controller.start();
-  assert.deepEqual(fixtureData.intervals.map((timer) => timer.delay), [120, 30000]);
+  assert.deepEqual(fixtureData.intervals.map((timer) => timer.delay), [30000]);
   fixtureData.controller.stop();
   fixtureData.controller.stop();
-  assert.equal(fixtureData.cleared.length, 2);
+  assert.equal(fixtureData.cleared.length, 1);
   assert.deepEqual(fixtureData.cleared, fixtureData.intervals);
 });
 test('late completed after a mapped runtime was closed cannot restore completion counts', () => {

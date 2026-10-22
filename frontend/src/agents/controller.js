@@ -26,9 +26,6 @@ export function createAgentController(deps) {
     clearTimeoutFn = clearTimeout,
   } = deps;
 
-  const ecgFrames = ['▁', '▂', '▃', '▅', '▇', '▅', '▃', '▂', '▁', '─', '─', '─'];
-  let ecgTick = 0;
-  let ecgTimer = null;
   let refreshTimer = null;
   let started = false;
   let baselineReady = false;
@@ -79,10 +76,13 @@ export function createAgentController(deps) {
     const kind = classifyAgent(id);
     const provider = badge.dataset.provider || state.sessionProviders.get(id) || 'claude';
     badge.dataset.provider = provider;
-    badge.classList.remove('ecg', 'open', 'running', 'blocked', 'idle', 'ended-anim', 'unread', 'provider-status-icon');
+    badge.classList.remove('open', 'running', 'blocked', 'idle', 'ended-anim', 'unread');
+    // Keep a busy badge's class and SVG in place so polling cannot restart its spin.
+    if (kind !== 'working') badge.classList.remove('working');
+    if (!['working', 'open', 'unknown-open', 'idle'].includes(kind)) badge.classList.remove('provider-status-icon');
     if (kind === 'working') {
-      badge.classList.add('ecg', 'green');
-      badge.textContent = ecgFrames[ecgTick];
+      badge.classList.add('working');
+      paintProviderStatusIcon(badge, provider);
       badge.title = '正在执行任务';
     } else if (kind === 'open') {
       badge.classList.add('open');
@@ -130,7 +130,7 @@ export function createAgentController(deps) {
       if (state.unreadSessions.has(id)) {
         if (badge.classList.contains('ended-anim')) continue;
         if (!badge.classList.contains('unread')) {
-          badge.classList.remove('ecg', 'open', 'running', 'blocked', 'idle', 'provider-status-icon');
+          badge.classList.remove('working', 'open', 'running', 'blocked', 'idle', 'provider-status-icon');
           badge.classList.add('unread');
           badge.textContent = '●';
           describeBadge(badge, '已完成 · 未读（点击查看）');
@@ -150,7 +150,7 @@ export function createAgentController(deps) {
     const item = listRoot?.querySelector(`.session-item[data-id="${id}"]`);
     const badge = item?.querySelector('.badge');
     if (badge && !badge.classList.contains('ended-anim')) {
-      badge.classList.remove('provider-status-icon');
+      badge.classList.remove('working', 'provider-status-icon');
       badge.classList.add('ended-anim');
       badge.textContent = '─';
       describeBadge(badge, wasWorking ? '任务完成' : '会话结束');
@@ -249,21 +249,13 @@ export function createAgentController(deps) {
   function start() {
     if (started) return;
     started = true;
-    ecgTimer = setIntervalFn(() => {
-      ecgTick = (ecgTick + 1) % ecgFrames.length;
-      listRoot?.querySelectorAll('.badge.ecg').forEach((badge) => {
-        if (!badge.classList.contains('ended-anim')) badge.textContent = ecgFrames[ecgTick];
-      });
-    }, 120);
     refreshTimer = setIntervalFn(() => { refreshAgents(); }, 30000);
   }
 
   function stop() {
     if (!started) return;
     started = false;
-    clearIntervalFn(ecgTimer);
     clearIntervalFn(refreshTimer);
-    ecgTimer = null;
     refreshTimer = null;
   }
 
