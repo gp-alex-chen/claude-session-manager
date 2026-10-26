@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"reflect"
 	"sync"
 	"time"
 
@@ -36,20 +35,27 @@ type programJob struct {
 }
 type programRunner func(context.Context, state.NotificationConfig, []byte) ProgramResult
 type ProgramService struct {
-	mu           sync.Mutex
-	ctx          context.Context
-	cancel       context.CancelFunc
-	done         chan struct{}
-	wake         chan struct{}
-	config       state.NotificationConfig
-	detector     *eventDetector
-	queue        []programJob
-	generation   uint64
-	activeCancel context.CancelFunc
-	closed       bool
-	status       ProgramStatus
-	runner       programRunner
-	onResult     func(ProgramResult)
+	mu               sync.Mutex
+	configMu         sync.Mutex
+	runMu            sync.Mutex
+	ctx              context.Context
+	cancel           context.CancelFunc
+	done             chan struct{}
+	wake             chan struct{}
+	config           state.NotificationConfig
+	detector         *eventDetector
+	queue            []programJob
+	attention        AttentionState
+	attentionKnown   bool
+	pendingAttention *programJob
+	paused           bool
+	cleanupFinished  bool
+	generation       uint64
+	activeCancel     context.CancelFunc
+	closed           bool
+	status           ProgramStatus
+	runner           programRunner
+	onResult         func(ProgramResult)
 }
 
 func NewProgramService(ctx context.Context, cfg state.NotificationConfig) *ProgramService {
@@ -67,19 +73,8 @@ func cloneProgramConfig(c state.NotificationConfig) state.NotificationConfig {
 	c.Events = append([]string{}, c.Events...)
 	return c
 }
-func (s *ProgramService) Configure(c state.NotificationConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if reflect.DeepEqual(s.config, c) {
-		return
-	}
-	s.generation++
-	s.config = cloneProgramConfig(c)
-	s.queue = nil
-	s.status.Pending = 0
-	if s.activeCancel != nil {
-		s.activeCancel()
-	}
+func (s *ProgramService) Configure(c state.NotificationConfig) error {
+	return s.configure(c)
 }
 func (s *ProgramService) Status() ProgramStatus {
 	s.mu.Lock()
@@ -127,11 +122,14 @@ func (s *ProgramService) Test(kind string) error {
 		e.State = "done"
 		e.WaitingFor = ""
 	}
+	if kind == "attention_changed" {
+		e = attentionEvent(s.attention, true, "test")
+	}
 	e.Test = true
 	return s.enqueueLocked(e)
 }
 func (s *ProgramService) enqueueLocked(e ProgramEvent) error {
-	if s.closed || s.ctx.Err() != nil {
+	if s.closed || s.paused || s.ctx.Err() != nil {
 		return errors.New("通知服务已停止")
 	}
 	if len(s.queue) >= programQueueLimit {
@@ -139,7 +137,7 @@ func (s *ProgramService) enqueueLocked(e ProgramEvent) error {
 		return errors.New("通知队列已满，本次事件未发送")
 	}
 	s.queue = append(s.queue, programJob{e, cloneProgramConfig(s.config), s.generation})
-	s.status.Pending = len(s.queue)
+	s.updatePendingLocked()
 	select {
 	case s.wake <- struct{}{}:
 	default:
@@ -148,6 +146,8 @@ func (s *ProgramService) enqueueLocked(e ProgramEvent) error {
 }
 func (s *ProgramService) work() {
 	defer close(s.done)
+	preferAttention := true
+	lastAttentionActive := false
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -155,14 +155,30 @@ func (s *ProgramService) work() {
 		case <-s.wake:
 		}
 		for {
+			s.runMu.Lock()
 			s.mu.Lock()
-			if s.closed || s.ctx.Err() != nil || len(s.queue) == 0 {
+			if s.closed || s.paused || s.ctx.Err() != nil || (len(s.queue) == 0 && s.pendingAttention == nil) {
 				s.mu.Unlock()
+				s.runMu.Unlock()
 				break
 			}
-			job := s.queue[0]
-			s.queue = s.queue[1:]
-			s.status.Pending = len(s.queue)
+			var job programJob
+			if s.pendingAttention != nil && (preferAttention || len(s.queue) == 0 || (lastAttentionActive && !s.pendingAttention.event.Attention.Active)) {
+				job = *s.pendingAttention
+				s.pendingAttention = nil
+				lastAttentionActive = job.event.Attention.Active
+				preferAttention = false
+			} else {
+				job = s.queue[0]
+				s.queue = s.queue[1:]
+				preferAttention = true
+			}
+			s.updatePendingLocked()
+			if job.generation != s.generation {
+				s.mu.Unlock()
+				s.runMu.Unlock()
+				continue
+			}
 			s.status.Running = true
 			ctx, cancel := context.WithTimeout(s.ctx, time.Duration(job.config.TimeoutSeconds)*time.Second)
 			s.activeCancel = cancel
@@ -181,6 +197,7 @@ func (s *ProgramService) work() {
 				s.status.Last = &result
 			}
 			s.mu.Unlock()
+			s.runMu.Unlock()
 			if s.onResult != nil {
 				s.onResult(result)
 			}
@@ -191,6 +208,7 @@ func (s *ProgramService) Stop() {
 	s.mu.Lock()
 	s.closed = true
 	s.queue = nil
+	s.pendingAttention = nil
 	s.status.Pending = 0
 	s.cancel()
 	if s.activeCancel != nil {
@@ -199,6 +217,5 @@ func (s *ProgramService) Stop() {
 	s.mu.Unlock()
 }
 func (s *ProgramService) Close() {
-	s.Stop()
-	<-s.done
+	s.closeWithAttention()
 }

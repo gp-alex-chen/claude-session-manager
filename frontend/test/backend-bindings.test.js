@@ -9,7 +9,7 @@ const binding = fs.readFileSync(path.join(frontendDir, 'wailsjs/go/app/App.js'),
 const backend = fs.readFileSync(path.join(frontendDir, 'src/api/backend.js'), 'utf8');
 const expected = [
   'GetAgents', 'GetOpenSessions', 'GetShell', 'ShellInstalled', 'SetShell',
-  'NotifyBeep', 'SetCompletionBadge', 'SetTaskbarStatus', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
+  'NotifyBeep', 'SetCompletionBadge', 'SetTaskbarStatus', 'SetNotificationAttention', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
   'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'StartNewAgent', 'ListAgentProviders', 'OpenFolder', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',
@@ -69,6 +69,11 @@ test('quota wrapper forwards provider and refresh intent unchanged', () => {
 test('taskbar wrapper forwards count, attention and force as one snapshot', () => {
   assert.match(binding,
     /export function SetTaskbarStatus\(count, attention, force\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['SetTaskbarStatus'\]\(count, attention, force\);\s*\}/);
+});
+
+test('notification wrapper forwards the complete unread and waiting snapshot', () => {
+  assert.match(binding,
+    /export function SetNotificationAttention\(count, waiting, force\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['SetNotificationAttention'\]\(count, waiting, force\);\s*\}/);
 });
 
 test('notification wrappers forward complete config and selected event without shell parsing', () => {

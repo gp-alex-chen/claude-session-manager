@@ -27,7 +27,7 @@ func (a *App) SetNotificationConfig(c state.NotificationConfig) error {
 	service := a.notificationProgram
 	a.lifecycleMu.Unlock()
 	if service != nil {
-		service.Configure(c)
+		return service.Configure(c)
 	}
 	return nil
 }
@@ -40,6 +40,16 @@ func (a *App) GetNotificationStatus() notify.ProgramStatus {
 		return notify.ProgramStatus{}
 	}
 	return service.Status()
+}
+
+// SetNotificationAttention includes all unread endings, including ordinary
+// session exits, independently of the taskbar's successful-task-only count.
+func (a *App) SetNotificationAttention(count int, waiting, force bool) {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	if a.notificationProgram != nil {
+		a.notificationProgram.SetAttention(count, waiting, force)
+	}
 }
 
 func (a *App) TestNotification(event string) error {

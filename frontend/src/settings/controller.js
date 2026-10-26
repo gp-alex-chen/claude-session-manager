@@ -31,7 +31,7 @@ export function createSettingsController(deps) {
   let buildGeneration = 0;
   let activeCategory = 'appearance';
   const categoryHandlers = new Map();
-  const notificationSettings = createNotificationSettings({ backend, el });
+  const notificationSettings = createNotificationSettings({ backend, el, onSaved: deps.onNotificationSaved });
 
   function isOpen() {
     return !settingsMenu.hidden;

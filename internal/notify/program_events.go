@@ -9,26 +9,31 @@ import (
 )
 
 type ProgramEvent struct {
-	SchemaVersion int    `json:"schema_version"`
-	EventID       string `json:"event_id"`
-	Event         string `json:"event"`
-	OccurredAt    string `json:"occurred_at"`
-	Provider      string `json:"provider"`
-	SessionID     string `json:"session_id"`
-	RuntimeToken  string `json:"runtime_token,omitempty"`
-	SessionName   string `json:"session_name"`
-	ProjectPath   string `json:"project_path"`
-	State         string `json:"state"`
-	WaitingFor    string `json:"waiting_for,omitempty"`
-	TurnID        string `json:"turn_id,omitempty"`
-	Test          bool   `json:"test"`
+	SchemaVersion int             `json:"schema_version"`
+	EventID       string          `json:"event_id"`
+	Event         string          `json:"event"`
+	OccurredAt    string          `json:"occurred_at"`
+	Provider      string          `json:"provider"`
+	SessionID     string          `json:"session_id"`
+	RuntimeToken  string          `json:"runtime_token,omitempty"`
+	SessionName   string          `json:"session_name"`
+	ProjectPath   string          `json:"project_path"`
+	State         string          `json:"state"`
+	WaitingFor    string          `json:"waiting_for,omitempty"`
+	TurnID        string          `json:"turn_id,omitempty"`
+	Test          bool            `json:"test"`
+	Attention     *AttentionState `json:"attention,omitempty"`
+	Force         bool            `json:"force,omitempty"`
+	Reason        string          `json:"reason,omitempty"`
 }
 
 func newProgramEvent(kind, provider string, a agent.AgentInfo) ProgramEvent {
 	var id [16]byte
 	_, _ = rand.Read(id[:])
-	return ProgramEvent{1, hex.EncodeToString(id[:]), kind, time.Now().UTC().Format(time.RFC3339Nano),
-		provider, a.SessionID, a.RuntimeToken, a.Name, a.Cwd, a.State, a.WaitingFor, a.TurnID, false}
+	return ProgramEvent{SchemaVersion: 1, EventID: hex.EncodeToString(id[:]), Event: kind,
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano), Provider: provider,
+		SessionID: a.SessionID, RuntimeToken: a.RuntimeToken, SessionName: a.Name,
+		ProjectPath: a.Cwd, State: a.State, WaitingFor: a.WaitingFor, TurnID: a.TurnID}
 }
 
 type eventObservation struct {

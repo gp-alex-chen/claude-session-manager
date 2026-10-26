@@ -2,9 +2,10 @@ const EVENTS = [
   ['input_requested', '等待回答'],
   ['permission_requested', '等待权限审批'],
   ['task_completed', '任务完成'],
+  ['attention_changed', '待处理状态变化（含全部清除）'],
 ];
 
-export function createNotificationSettings({ backend, el, setIntervalFn = setInterval, clearIntervalFn = clearInterval }) {
+export function createNotificationSettings({ backend, el, onSaved, setIntervalFn = setInterval, clearIntervalFn = clearInterval }) {
   let generation = 0;
   let timer = null;
   const stop = () => { generation++; if (timer !== null) clearIntervalFn(timer); timer = null; };
@@ -29,7 +30,7 @@ export function createNotificationSettings({ backend, el, setIntervalFn = setInt
     };
     panel.appendChild(el('h3', 'settings-section-title', '自定义通知程序'));
     panel.appendChild(el('p', 'settings-section-description',
-      '检测到等待回答、权限审批或任务完成时，在后台调用你的程序。通过标准输入传入 UTF-8 JSON，包含会话名称、项目路径和状态；不包含对话或审批正文。'));
+      '在后台调用你的程序，通过标准输入传入 UTF-8 JSON。单次事件包含会话信息；待处理状态汇总所有等待和未读完成，可用于控制外设灯。均不包含对话或审批正文。'));
     const enabled = field('enabled', '启用自动通知', 'input', 'checkbox');
     const program = field('program', '程序路径或命令名'); program.placeholder = 'python.exe 或 D:\\tools\\notify.exe';
     const args = field('args', '启动参数（JSON 数组）', 'textarea'); args.placeholder = '["D:\\\\scripts\\\\notify.py"]';
@@ -46,7 +47,7 @@ export function createNotificationSettings({ backend, el, setIntervalFn = setInt
     actions.append(save, test); panel.appendChild(actions);
     const message = el('p', 'settings-note', '正在加载配置…'); message.dataset.field = 'message'; message.setAttribute('role', 'status'); panel.appendChild(message);
     const result = el('pre', 'notification-result', '尚无调用记录'); result.dataset.field = 'result'; result.setAttribute('aria-live', 'polite'); panel.appendChild(result);
-    panel.appendChild(el('p', 'settings-note', '测试使用当前保存的配置，即使未启用自动通知也可执行。调用串行排队，最多等待 32 条；失败不自动重试。修改配置会取消当前调用并清空等待队列。调用结果只保留在内存，不写入应用日志。'));
+    panel.appendChild(el('p', 'settings-note', '测试使用已保存配置，带 test 标记。普通事件最多排队 32 条；待处理状态单独保留最新一条，全部清除也会通知。禁用或更换程序时向原程序发送清除状态，正常退出也会尽力清除。调用结果只在内存保留，不写应用日志。'));
     const updateButtons = () => { save.disabled = test.disabled = !ready || busy; };
     updateButtons();
     const read = () => {
@@ -64,7 +65,7 @@ export function createNotificationSettings({ backend, el, setIntervalFn = setInt
       try {
         const status = await backend.GetNotificationStatus();
         if (!live()) return;
-        const lines = [`${status.running ? '正在执行' : '空闲'} · 排队 ${status.pending || 0}/32 · 队列满丢弃 ${status.dropped || 0} 条`];
+        const lines = [`${status.running ? '正在执行' : '空闲'} · 排队 ${status.pending || 0} 条（普通事件上限 32，最新状态 1） · 队列满丢弃 ${status.dropped || 0} 条`];
         const last = status.last;
         if (last) {
           lines.push(`${last.test ? '测试 · ' : ''}${EVENTS.find(([key]) => key === last.event)?.[1] || last.event} · ${last.success ? '成功' : '失败'} · 退出码 ${last.exitCode}`);
@@ -83,11 +84,20 @@ export function createNotificationSettings({ backend, el, setIntervalFn = setInt
         const selectedTest = testEvent.value;
         await backend.SetNotificationConfig(config);
         if (!live()) return;
+        onSaved?.();
         if (testing) await backend.TestNotification(selectedTest);
         if (!live()) return;
         message.textContent = testing ? '测试事件已排队，执行结果见下方。' : '配置已保存。';
         await refresh();
-      } catch (error) { if (live()) message.textContent = '操作失败：' + error; }
+      } catch (error) {
+        if (live()) {
+          if (String(error).includes('配置已保存，但旧通知程序清除失败：')) {
+            onSaved?.();
+            message.textContent = String(error);
+            await refresh();
+          } else message.textContent = '操作失败：' + error;
+        }
+      }
       finally { busy = false; if (live()) updateButtons(); }
     }
     save.addEventListener('click', () => submit(false)); test.addEventListener('click', () => submit(true));

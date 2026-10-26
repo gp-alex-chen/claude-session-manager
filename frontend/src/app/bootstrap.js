@@ -60,6 +60,7 @@ export function createApplication(deps) {
   let agentController;
   const completionController = createCompletionController({ state, documentRef, windowRef,
     SetTaskbarStatus: backend.SetTaskbarStatus,
+    SetNotificationAttention: backend.SetNotificationAttention,
     getAttention: () => agentController?.hasTaskbarAttention?.() ?? false,
     onRead: () => agentController.renderUnreadMarks() });
   const termOptions = createTermOptionsFn();
@@ -266,6 +267,7 @@ export function createApplication(deps) {
       TestNotification: backend.TestNotification,
     },
     terminalController,
+    onNotificationSaved: () => completionController.sync(true),
     themes,
     settingsButton: nodes['btn-settings'],
     settingsMenu: nodes['settings-menu'],

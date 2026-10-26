@@ -1,12 +1,15 @@
-export function createCompletionController({ state, SetTaskbarStatus, getAttention = () => false, documentRef, windowRef, onRead }) {
+export function createCompletionController({ state, SetTaskbarStatus, SetNotificationAttention, getAttention = () => false, documentRef, windowRef, onRead }) {
   const completed = new Set();
   let started = false;
   let desired = 0;
   let desiredAttention = false;
+  let desiredUnread = 0;
   let revision = 0;
   let applied = 0;
   let lastCount = null;
   let lastAttention = null;
+  let lastNotificationCount = null;
+  let lastNotificationWaiting = null;
   let forceNext = false;
   let writing = false;
   const foreground = () => documentRef?.visibilityState !== 'hidden' && (documentRef?.hasFocus?.() ?? true);
@@ -22,13 +25,22 @@ export function createCompletionController({ state, SetTaskbarStatus, getAttenti
         const current = revision;
         const count = desired;
         const attention = desiredAttention;
+        const unread = desiredUnread;
         const force = forceNext;
         forceNext = false;
+        if (unread !== lastNotificationCount || attention !== lastNotificationWaiting || force) {
+          try {
+            await SetNotificationAttention?.(unread, attention, force);
+            lastNotificationCount = unread;
+            lastNotificationWaiting = attention;
+          } catch { lastNotificationCount = null; lastNotificationWaiting = null; }
+        }
         if (count !== lastCount || attention !== lastAttention || force) {
-          try { await SetTaskbarStatus?.(count, attention, force); }
-          catch { lastCount = null; lastAttention = null; return; }
-          lastCount = count;
-          lastAttention = attention;
+          try {
+            await SetTaskbarStatus?.(count, attention, force);
+            lastCount = count;
+            lastAttention = attention;
+          } catch { lastCount = null; lastAttention = null; }
         }
         applied = current;
       }
@@ -37,6 +49,7 @@ export function createCompletionController({ state, SetTaskbarStatus, getAttenti
   function sync(force = false) {
     desired = completed.size;
     desiredAttention = started && Boolean(getAttention());
+    desiredUnread = started ? new Set([...completed, ...state.unreadSessions].map(identity)).size : 0;
     forceNext ||= force;
     revision++;
     void write();

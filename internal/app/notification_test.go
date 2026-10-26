@@ -17,6 +17,7 @@ func TestNotificationShutdownPersistStartupRestoreAndGetterDoesNotDeliver(t *tes
 	a, _, logs, dir := testApp(t)
 	cfg := state.DefaultNotificationConfig()
 	cfg.Enabled = true
+	cfg.Events = append(cfg.Events, "attention_changed")
 	cfg.Program = filepath.Join(dir, "missing-program.exe")
 	cfg.Args = []string{"中文 参数"}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,5 +87,21 @@ func TestNotificationInvalidSaveAndCorruptionCannotEnableExecution(t *testing.T)
 	}
 	if err := a.SetNotificationConfig(cfg); err == nil {
 		t.Fatal("overwrote corrupt file")
+	}
+}
+
+func TestNotificationSnapshotDeliversAttentionWithoutNativeBadge(t *testing.T) {
+	a, _, logs, dir := testApp(t)
+	cfg := state.DefaultNotificationConfig()
+	cfg.Enabled, cfg.Program, cfg.Events = true, filepath.Join(dir, "missing.exe"), []string{"attention_changed"}
+	a.notificationProgram = notify.NewProgramService(context.Background(), cfg)
+	defer a.notificationProgram.Close()
+	a.SetNotificationAttention(2, true, false)
+	status := a.GetNotificationStatus()
+	if status.Pending == 0 && !status.Running && (status.Last == nil || status.Last.Event != "attention_changed") {
+		t.Fatalf("snapshot not delivered: %#v", status)
+	}
+	if len(*logs) != 0 {
+		t.Fatalf("unexpected application logs: %v", *logs)
 	}
 }

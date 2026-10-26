@@ -111,6 +111,8 @@ docs/releases/                  按 tag 保存的中文更新说明
 
 自定义通知程序位于「设置 → 通知」，可在等待回答、权限审批或任务完成时调用 Python、Go exe 等程序，通过标准输入传入 UTF-8 JSON。支持事件勾选、工作目录、超时和测试调用；默认关闭，调用结果不写日志。接入本地服务器的示例见 [自定义通知程序](docs/custom-notifications.md)。
 
+「待处理状态变化（含全部清除）」会汇总等待回答、权限审批和任务完成/会话结束未读；全部处理后也会通知程序清除状态。可使用标准库 Python 脚本接入外设灯，见 [Magic Bay Light 通知接入](docs/magic-bay-notifications.md)。
+
 ```powershell
 cd frontend
 npm ci

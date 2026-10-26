@@ -22,7 +22,7 @@ func DefaultNotificationConfig() NotificationConfig {
 }
 
 func NotificationEventValid(event string) bool {
-	return event == "input_requested" || event == "permission_requested" || event == "task_completed"
+	return event == "input_requested" || event == "permission_requested" || event == "task_completed" || event == "attention_changed"
 }
 
 func NormalizeNotificationConfig(c NotificationConfig) (NotificationConfig, error) {
@@ -34,7 +34,7 @@ func NormalizeNotificationConfig(c NotificationConfig) (NotificationConfig, erro
 	if c.Enabled && c.Program == "" {
 		return c, errors.New("请填写通知程序路径")
 	}
-	if len(c.Args) > 128 || len(c.Events) > 3 {
+	if len(c.Args) > 128 || len(c.Events) > 4 {
 		return c, errors.New("通知参数或事件数量过多")
 	}
 	if c.WorkingDir != "" && !filepath.IsAbs(c.WorkingDir) {

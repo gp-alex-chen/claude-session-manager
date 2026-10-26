@@ -83,6 +83,23 @@ test('attention remains while focused and restores the completion count after al
   f.completion.stop();
 });
 
+test('aggregate stays active until the last wait and last unread completion are both cleared', async () => {
+  const f = fixture(); f.add('input'); f.add('approval', 'codex');
+  const waiting = [
+    { sessionId: 'input', state: 'blocked', waitingFor: 'userInput' },
+    { sessionId: 'approval', provider: 'codex', state: 'blocked', waitingFor: 'approval' },
+  ];
+  const active = () => { const [count, waiting] = f.writes.at(-1); return count > 0 || waiting; };
+  f.agents.applyAgents(waiting); f.completion.complete('done-a'); f.completion.complete('done-b');
+  await flush(); assert.equal(active(), true);
+  f.agents.applyAgents(waiting.slice(1)); f.completion.dismiss('done-a');
+  await flush(); assert.equal(active(), true);
+  f.state.activeToken = 'done-b'; f.completion.activate('done-b');
+  await flush(); assert.deepEqual(f.writes.at(-1).slice(0, 2), [0, true]);
+  f.agents.applyAgents([]); await flush(); assert.equal(active(), false);
+  f.completion.stop();
+});
+
 test('closing a mapped Codex runtime suppresses stale blocked snapshots and reopening restores attention', async () => {
   const f = fixture();
   f.add('codex:saved', 'codex', 'new-codex-one');

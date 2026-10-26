@@ -44,3 +44,4 @@ export function AddProject(dir) { return window['go']['app']['App']['AddProject'
 export function DeleteProject(dir) { return window['go']['app']['App']['DeleteProject'](dir); }
 export function SetCompletionBadge(count, force) { return window['go']['app']['App']['SetCompletionBadge'](count, force); }
 export function SetTaskbarStatus(count, attention, force) { return window['go']['app']['App']['SetTaskbarStatus'](count, attention, force); }
+export function SetNotificationAttention(count, waiting, force) { return window['go']['app']['App']['SetNotificationAttention'](count, waiting, force); }

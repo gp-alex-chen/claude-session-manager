@@ -15,7 +15,7 @@ class Node {
 }
 const config = () => ({ enabled: false, program: 'python.exe', args: ['script with spaces.py', '中文'], workingDir: '', timeoutSeconds: 10,
   events: ['input_requested', 'permission_requested', 'task_completed'] });
-function fixture(overrides = {}) {
+function fixture(overrides = {}, onSaved) {
   const root = new Node('section'); const calls = []; const intervals = new Map(); let id = 0;
   const backend = {
     GetNotificationConfig: async () => config(),
@@ -24,7 +24,7 @@ function fixture(overrides = {}) {
     GetNotificationStatus: async () => ({ running: false, pending: 0, dropped: 0, last: null }),
     ...overrides,
   };
-  const view = createNotificationSettings({ backend, el: (...args) => new Node(...args),
+  const view = createNotificationSettings({ backend, onSaved, el: (...args) => new Node(...args),
     setIntervalFn: fn => { intervals.set(++id, fn); return id; }, clearIntervalFn: id => intervals.delete(id) });
   const find = key => { const visit = n => n.dataset.field === key ? n : n.children.map(visit).find(Boolean); return visit(root); };
   return { root, calls, intervals, view, find };
@@ -38,6 +38,19 @@ test('notification settings preserve argument boundaries and save before testing
   await f.find('test').click();
   assert.deepEqual(f.calls, [['save', { ...config(), enabled: true }], ['test', 'permission_requested']]);
   f.view.stop(); assert.equal(f.intervals.size, 0);
+});
+
+test('aggregate attention is opt-in and saving reconciles the current UI state before testing', async () => {
+  const order = [];
+  const f = fixture({ SetNotificationConfig: async c => order.push(['save', c.events]),
+    TestNotification: async e => order.push(['test', e]) }, () => order.push(['sync']));
+  await f.view.mount(f.root);
+  assert.equal(f.find('attention_changed')?.checked, false);
+  f.find('attention_changed').checked = true;
+  f.find('testEvent').value = 'attention_changed';
+  await f.find('test').click();
+  assert.deepEqual(order, [['save', [...config().events, 'attention_changed']], ['sync'], ['test', 'attention_changed']]);
+  f.view.stop();
 });
 
 test('failed config reads cannot overwrite saved data or execute a program', async () => {
@@ -87,4 +100,15 @@ test('closing while saving prevents a late test execution', async () => {
   const pending = f.find('test').click(); f.view.stop(); resolve(); await pending;
   assert.deepEqual(f.calls, []);
   assert.equal(f.intervals.size, 0);
+});
+
+test('a saved configuration with a cleanup warning still reconciles and displays the warning', async () => {
+  let synced = 0;
+  const f = fixture({ SetNotificationConfig: async () => { throw Error('配置已保存，但旧通知程序清除失败：fixture'); } }, () => { synced++; });
+  await f.view.mount(f.root); await f.find('test').click();
+  assert.equal(synced, 1);
+  assert.match(f.find('message').textContent, /配置已保存，但旧通知程序清除失败/);
+  assert.doesNotMatch(f.find('message').textContent, /操作失败/);
+  assert.deepEqual(f.calls, []);
+  f.view.stop();
 });

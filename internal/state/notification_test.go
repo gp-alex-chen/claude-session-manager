@@ -57,3 +57,24 @@ func TestCorruptNotificationConfigIsNotOverwritten(t *testing.T) {
 		t.Fatal("corrupt data replaced")
 	}
 }
+
+func TestAttentionSubscriptionIsOptInAndSurvivesRestart(t *testing.T) {
+	store := NewStore(t.TempDir())
+	cfg := DefaultNotificationConfig()
+	if len(cfg.Events) != 3 {
+		t.Fatal("new event silently enabled for old scripts")
+	}
+	cfg.Enabled, cfg.Program = true, "fixture.exe"
+	cfg.Events = append(cfg.Events, "attention_changed")
+	if err := store.SaveNotificationConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewStore(store.dir).NotificationConfig()
+	if err != nil || !reflect.DeepEqual(cfg, got) {
+		t.Fatalf("restore: %#v %v", got, err)
+	}
+	cfg.Events = append(cfg.Events, "attention_changed")
+	if err := store.SaveNotificationConfig(cfg); err == nil {
+		t.Fatal("duplicate event accepted")
+	}
+}
