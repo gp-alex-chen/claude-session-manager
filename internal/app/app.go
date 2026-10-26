@@ -395,7 +395,12 @@ func (a *App) renderAgentCommand(agentID provider.ID, spec provider.LaunchSpec) 
 	// Preserve legacy Claude startup; new providers fail before a PTY is
 	// created when their executable is unavailable.
 	if agentID != provider.Claude {
-		if _, err := a.lookPath(spec.Command); err != nil {
+		if agentID == provider.Codex && spec.Executable != "" {
+			st, err := os.Stat(spec.Executable)
+			if !filepath.IsAbs(spec.Executable) || err != nil || st.IsDir() {
+				return "", errors.New("已解析的 Codex 程序不可用，请检查安装或重新打开终端")
+			}
+		} else if _, err := a.lookPath(spec.Command); err != nil {
 			return "", fmt.Errorf("未检测到 %s CLI，请先安装并加入 PATH", agentID)
 		}
 	}

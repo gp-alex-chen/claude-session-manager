@@ -61,9 +61,27 @@ func openCodexRPCProcess(ctx context.Context, bin string, env []string) (io.Read
 // Native PATH installs and the layouts shipped by the official npm launcher
 // are supported; unknown shims fail explicitly rather than guessing commands.
 func ResolveCodexExecutable(lookPath func(string) (string, error)) (string, error) {
+	return resolveCodexExecutable(lookPath, os.Getenv)
+}
+
+func resolveCodexExecutable(lookPath func(string) (string, error), getenv func(string) string) (string, error) {
 	path, err := lookPath("codex")
 	if err != nil {
-		return "", fmt.Errorf("未检测到 Codex CLI，请先安装并加入 PATH: %w", err)
+		// The official standalone installer updates User PATH. A GUI that
+		// was already running can retain an older process environment.
+		candidates := []string{}
+		if dir := getenv("CODEX_INSTALL_DIR"); filepath.IsAbs(dir) {
+			candidates = append(candidates, filepath.Join(dir, "codex.exe"))
+		}
+		if dir := getenv("LOCALAPPDATA"); filepath.IsAbs(dir) {
+			candidates = append(candidates, filepath.Join(dir, "Programs", "OpenAI", "Codex", "bin", "codex.exe"))
+		}
+		for _, candidate := range candidates {
+			if st, statErr := os.Stat(candidate); statErr == nil && !st.IsDir() {
+				return candidate, nil
+			}
+		}
+		return "", fmt.Errorf("未检测到 Codex CLI，已检查当前 PATH 和官方安装目录；安装后请从已更新环境的窗口重新启动 TheOne；自定义安装请确认 CODEX_INSTALL_DIR 或 PATH: %w", err)
 	}
 	if strings.EqualFold(filepath.Ext(path), ".exe") {
 		return path, nil

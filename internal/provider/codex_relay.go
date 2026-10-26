@@ -86,7 +86,7 @@ func codexRelayFactoryWithStderr(lookPath func(string) (string, error), env []st
 			return LaunchSpec{}, err
 		}
 		// Keep the capability out of argv, logs and persistent files.
-		return LaunchSpec{Command: "codex", Args: []string{"--remote", relay.url, "--remote-auth-token-env", codexTokenEnv}, Env: []string{codexTokenEnv + "=" + relay.token}, Close: func() { cancel(); relay.Close() }}, nil
+		return LaunchSpec{Command: "codex", Executable: bin, Args: []string{"--remote", relay.url, "--remote-auth-token-env", codexTokenEnv}, Env: append([]string{codexTokenEnv + "=" + relay.token}, codexExecutableEnvironment(bin, cmd.Env)...), Close: func() { cancel(); relay.Close() }}, nil
 	}
 }
 

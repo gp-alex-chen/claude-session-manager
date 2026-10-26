@@ -226,3 +226,7 @@ git diff --check
 CI 对 PR/main 只做 validate；`v*-wails` tag 或手动触发才运行 Windows 交叉构建。artifact 名称为 `TheOne-windows`，包含 `TheOne.exe`。tag 发布 GitHub Release 时额外复制同内容的 `claude-terminal.exe` 兼容资产，确保已经发布的旧版更新器仍能找到下载；新版本更新器查询 `TheOne.exe`。手动触发只保留 artifact。发布前把中文说明写入 `docs/releases/<tag>.md` 并随代码提交；CI 从该文件填充 Release 正文，文件缺失或为空时发布失败。正式版说明可用标题、无序列表、粗体、行内代码和 HTTPS 链接；应用会以安全的 DOM 节点展示这些格式，其他 Markdown 会作为普通文字显示。
 
 ConPTY 会结束更新前的会话进程，但 open-sessions 清单会供新版恢复。Claude 的 `/theme auto` 可能因 conhost 背景查询误判亮色，需要在 Claude 内手动 `/theme light`。未读状态是内存态。pwsh 必须是 PowerShell 7 的 `pwsh`，不可用时回退 cmd。
+
+## Codex 安装路径与环境兼容
+
+CLI 查找先尊重当前进程 PATH，缺失时检查绝对路径形式的 `CODEX_INSTALL_DIR` 和官方 `%LOCALAPPDATA%/Programs/OpenAI/Codex/bin/codex.exe`。Windows 安装器更新用户 PATH 后，已运行的 TheOne 可能仍保留旧快照；不全盘扫描、不修改全局环境。已解析程序目录只加入该 Codex 终端的 PATH，其余继承路径继续保留；App 不再用旧 PATH 重复否决已解析的程序。此修复不刷新全部环境变量，其他自定义变量变更仍需要从环境已更新的启动器重新启动 TheOne。

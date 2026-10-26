@@ -75,7 +75,7 @@
 - Go 1.25、Node.js 22/npm。
 - Claude CLI 在 `PATH` 中；真实 agents/ConPTY 集成测试也需要它。
 - Claude 订阅额度使用官方 Agent SDK `0.3.293` 的实验性结构化额度控制接口，需要 Node.js 18+ 与兼容的原生 CLI（验证版本 `2.1.295`）。不兼容、未登录或 API key 等不提供订阅额度的登录方式会显示不可用。Codex 额度使用 app-server `account/read` / `account/rateLimits/read`，不读取认证文件或私有 HTTP 接口。
-- Codex 支持验证于 CLI `0.161.0`，依赖 `app-server`、`--remote` 和 `--remote-auth-token-env`；支持 PATH 原生 exe 与官方 npm 安装布局。Codex 终端复用用户自己的登录、模型和权限配置，应用不自动绕过审批。每个终端连接到本应用管理的独立 app-server，本地转发器只观察官方状态/用量事件，所有交互和审批仍由原生 TUI 处理。历史读取使用另一独立 stdio app-server，仅查询元数据。
+- Codex 支持验证于 CLI `0.161.0`，依赖 `app-server`、`--remote` 和 `--remote-auth-token-env`；支持 PATH 原生 exe 与官方 npm 安装布局；旧进程 PATH 缺少 Codex 时，补查官方 Windows 安装目录及 `CODEX_INSTALL_DIR`，并将已解析程序的目录加入该 Codex 终端的 PATH。Codex 终端复用用户自己的登录、模型和权限配置，应用不自动绕过审批。每个终端连接到本应用管理的独立 app-server，本地转发器只观察官方状态/用量事件，所有交互和审批仍由原生 TUI 处理。历史读取使用另一独立 stdio app-server，仅查询元数据。
 - 普通构建不要求安装 Wails CLI：仓库提交了 `frontend/wailsjs` 的兼容 wrapper，后端可直接用 `go build`。
 
 ## 目录

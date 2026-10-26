@@ -4,7 +4,6 @@ package provider
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -45,11 +44,11 @@ func TestCodexNativeRemoteTUIIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer spec.Close()
-			command := fmt.Sprintf(`"%s" %s`, bin, strings.Join(spec.Args, " "))
+			command := "cmd /d /c codex " + strings.Join(spec.Args, " ")
 			tuiEnv := []string{}
 			for _, value := range env {
 				key, _, _ := strings.Cut(value, "=")
-				if !strings.EqualFold(key, "TERM") && !strings.EqualFold(key, "NO_COLOR") {
+				if !strings.EqualFold(key, "TERM") && !strings.EqualFold(key, "NO_COLOR") && !strings.EqualFold(key, "PATH") {
 					tuiEnv = append(tuiEnv, value)
 				}
 			}

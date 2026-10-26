@@ -102,11 +102,14 @@ type OpenRequest struct {
 	RuntimeToken string
 }
 type LaunchSpec struct {
-	Command  string
-	Args     []string
-	Identity *SessionRef
-	Env      []string
-	Close    func()
+	Command string
+	// Executable pins a provider-verified binary. Its directory is prepended
+	// to this terminal's PATH; the shell command can remain a simple name.
+	Executable string
+	Args       []string
+	Identity   *SessionRef
+	Env        []string
+	Close      func()
 }
 
 type AgentProvider interface {
