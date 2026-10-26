@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -86,7 +87,7 @@ func codexRelayFactoryWithStderr(lookPath func(string) (string, error), env []st
 			return LaunchSpec{}, err
 		}
 		// Keep the capability out of argv, logs and persistent files.
-		return LaunchSpec{Command: "codex", Executable: bin, Args: []string{"--remote", relay.url, "--remote-auth-token-env", codexTokenEnv}, Env: append([]string{codexTokenEnv + "=" + relay.token}, codexExecutableEnvironment(bin, cmd.Env)...), Close: func() { cancel(); relay.Close() }}, nil
+		return LaunchSpec{Command: "codex", Executable: bin, Args: []string{"--remote", relay.url, "--remote-auth-token-env", codexTokenEnv}, Env: append([]string{codexTokenEnv + "=" + relay.token}, codexExecutableEnvironment(bin, cmd.Env)...), Close: func() { cancel(); relay.Close() }, rpc: relay}, nil
 	}
 }
 
@@ -97,10 +98,20 @@ type codexRelay struct {
 	clientObserver, serverObserver func([]byte)
 	disconnect                     func()
 	mu                             sync.Mutex
+	writeGate                      chan struct{}
+	rpcSequence                    uint64
+	rpcPrefix                      string
+	rpcPending                     map[string]chan relayReply
+	nativeIDs                      map[string]json.RawMessage
 	socket                         *websocket.Conn
 	used, closed                   bool
 	once                           sync.Once
 	done                           chan struct{}
+	ready                          chan struct{}
+	transformClient                func([]byte) ([]byte, error)
+	consumeServer                  func([]byte) bool
+	closeTransport                 func()
+	clientWriteMu                  sync.Mutex
 }
 
 func newCodexRelay(ctx context.Context, conn io.ReadWriteCloser, client, server func([]byte), disconnect func()) (*codexRelay, error) {
@@ -113,6 +124,16 @@ func newCodexRelay(ctx context.Context, conn io.ReadWriteCloser, client, server 
 		return nil, err
 	}
 	r := &codexRelay{conn: conn, url: "ws://" + listener.Addr().String(), token: hex.EncodeToString(bytes), clientObserver: client, serverObserver: server, disconnect: disconnect, done: make(chan struct{})}
+	r.ready = make(chan struct{})
+	var rpcNonce [16]byte
+	if _, err := rand.Read(rpcNonce[:]); err != nil {
+		listener.Close()
+		return nil, err
+	}
+	r.rpcPrefix = "theone-" + hex.EncodeToString(rpcNonce[:]) + "-"
+	r.writeGate = make(chan struct{}, 1)
+	r.rpcPending = make(map[string]chan relayReply)
+	r.nativeIDs = make(map[string]json.RawMessage)
 	r.http = &http.Server{Handler: http.HandlerFunc(r.handle), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = r.http.Serve(listener) }()
 	go func() {
@@ -151,6 +172,7 @@ func (r *codexRelay) handle(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	r.socket = ws
+	close(r.ready)
 	r.mu.Unlock()
 	ws.SetReadLimit(codexRelayMessageLimit)
 	defer r.Close()
@@ -162,11 +184,18 @@ func (r *codexRelay) handle(w http.ResponseWriter, req *http.Request) {
 			if len(data) > codexRelayMessageLimit {
 				break
 			}
+			var consumed bool
+			data, consumed = r.serverReply(data)
+			if consumed {
+				continue
+			}
 			if r.serverObserver != nil {
 				r.serverObserver(append([]byte(nil), data...))
 			}
-			_ = ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if ws.WriteMessage(websocket.TextMessage, data) != nil {
+			if r.consumeServer != nil && r.consumeServer(append([]byte(nil), data...)) {
+				continue
+			}
+			if r.writeClient(ws, data) != nil {
 				break
 			}
 		}
@@ -181,13 +210,39 @@ func (r *codexRelay) handle(w http.ResponseWriter, req *http.Request) {
 		if kind != websocket.TextMessage || strings.ContainsAny(string(data), "\r\n") {
 			return
 		}
+		if err := r.acquireWrite(context.Background()); err != nil {
+			return
+		}
+		if r.transformClient != nil {
+			original := data
+			data, err = r.transformClient(original)
+			if err != nil {
+				r.releaseWrite()
+				var request struct{ ID json.RawMessage }
+				json.Unmarshal(original, &request)
+				failure, _ := json.Marshal(map[string]any{"id": request.ID, "error": map[string]any{"code": -32602, "message": err.Error()}})
+				if r.writeClient(ws, failure) != nil {
+					return
+				}
+				continue
+			}
+		}
 		if r.clientObserver != nil {
 			r.clientObserver(append([]byte(nil), data...))
 		}
-		if _, err = r.conn.Write(append(data, '\n')); err != nil {
+		err = r.writePacket(context.Background(), append(r.nativeRequest(data), '\n'))
+		r.releaseWrite()
+		if err != nil {
 			return
 		}
 	}
+}
+
+func (r *codexRelay) writeClient(ws *websocket.Conn, data []byte) error {
+	r.clientWriteMu.Lock()
+	defer r.clientWriteMu.Unlock()
+	_ = ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return ws.WriteMessage(websocket.TextMessage, data)
 }
 
 func (r *codexRelay) Close() {
@@ -196,6 +251,9 @@ func (r *codexRelay) Close() {
 		r.closed = true
 		ws := r.socket
 		r.mu.Unlock()
+		if r.closeTransport != nil {
+			r.closeTransport()
+		}
 		_ = r.http.Close()
 		if ws != nil {
 			_ = ws.Close()

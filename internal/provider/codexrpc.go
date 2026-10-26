@@ -17,7 +17,8 @@ import (
 )
 
 // Open is injectable so ordinary tests cannot read real Codex state or start
-// a CLI. Production owns only its short-lived metadata stdio server.
+// a CLI. The shared production provider injects a dedicated WebSocket stream;
+// the standalone constructor remains available for isolated stdio fixtures.
 type CodexRPC struct {
 	Open func(context.Context) (io.ReadWriteCloser, error)
 }

@@ -24,7 +24,7 @@ func (a *App) newProviderRegistry(withCodex bool) *provider.Registry {
 	})
 	if withCodex {
 		lookup := func(name string) (string, error) { return a.lookPath(name) }
-		_ = r.Register(provider.NewCodexLive(provider.NewCodex(provider.NewCodexRPC(lookup)), provider.NewCodexRelayFactory(lookup), a.signalProviderUpdate))
+		_ = r.Register(provider.NewSharedCodexLive(lookup, a.signalProviderUpdate, a.store))
 	}
 	return r
 }
@@ -113,6 +113,21 @@ func (a *App) sealProviderRestoration() {
 	if p, err := a.providers.Lookup(provider.Codex); err == nil {
 		if sealer, ok := p.(provider.RestorationSealer); ok {
 			sealer.SealRestoration()
+		}
+	}
+}
+
+func (a *App) beginProviderServices() {
+	if p, err := a.providers.Lookup(provider.Codex); err == nil {
+		if service, ok := p.(provider.ServiceLifecycle); ok {
+			service.BeginService()
+		}
+	}
+}
+func (a *App) closeProviderServices() {
+	if p, err := a.providers.Lookup(provider.Codex); err == nil {
+		if service, ok := p.(provider.ServiceLifecycle); ok {
+			service.CloseService()
 		}
 	}
 }

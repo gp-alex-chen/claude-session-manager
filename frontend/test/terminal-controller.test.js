@@ -5,6 +5,7 @@ import { createAppState } from '../src/state/app-state.js';
 import { createTerminalController } from '../src/terminal/controller.js';
 import { b64ToBytes, bytesToB64 } from '../src/utils.js';
 import { createTermOptions, THEMES } from '../src/themes/catalog.js';
+import { beginReferenceDrag } from '../src/sessions/reference-drag.js';
 
 class FakeClassList {
   constructor() {
@@ -154,6 +155,7 @@ function createFixture(options = {}) {
     backend: {
       TermWrite: (token, b64) => writes.push({ token, b64 }),
       TermResize: (token, cols, rows) => resizes.push({ token, cols, rows }),
+      ReferenceCodexSession: options.referenceSession,
       TermKill: (token) => {
         assert.equal(state.closedTokens.has(token), true);
         killed.push(token);
@@ -223,6 +225,52 @@ function openAndActivate(fixture, token = 'session-1') {
   fixture.controller.activate(token);
   return fixture.state.terminals.get(token);
 }
+
+function referenceDrag() {
+  const values = new Map();
+  const dataTransfer = { setData: (k, v) => values.set(k, v), getData: k => values.get(k) || '' };
+  beginReferenceDrag({ id: 'codex:01900000-0000-7000-8000-000000000001', provider: 'codex' }, { dataTransfer });
+  return { dataTransfer, preventDefault() {}, stopPropagation() {} };
+}
+
+test('dropping a session references the exact target terminal without submitting its draft', async () => {
+  const calls = [];
+  const fixture = createFixture({ referenceSession: async (...args) => {
+    calls.push(args); return { reference: 'ref_' + 'a'.repeat(32), sessionId: '01900000-0000-7000-8000-000000000001', name: 'Referenced fixture' };
+  } });
+  const session = openAndActivate(fixture, 'new-codex-target'); session.provider = 'codex';
+  session.term.textarea.value = 'Existing draft';
+  await session.host.emit('drop', referenceDrag());
+  assert.deepEqual(calls, [['new-codex-target', 'codex:01900000-0000-7000-8000-000000000001']]);
+  assert.equal(session.term.pastes.length, 1);
+  assert.equal(session.term.pastes[0], '[@Referenced fixture](thread://01900000-0000-7000-8000-000000000001) ');
+  assert.doesNotMatch(session.term.pastes[0], /[\r\n\x1b]/);
+  assert.equal(session.term.textarea.value, 'Existing draft');
+  assert.deepEqual(fixture.writes, []);
+});
+
+test('a late reference cannot paste into a closed, moved, or switched terminal', async () => {
+  for (const change of [s => { s.exited = true; }, s => { s.host.parentNode = {}; }, (s, f) => { f.state.newToReal.set(s.token, 'codex:new-identity'); }]) {
+    let resolve;
+    const fixture = createFixture({ referenceSession: () => new Promise(done => { resolve = done; }) });
+    const session = openAndActivate(fixture, 'new-codex-late'); session.provider = 'codex';
+    const pending = session.host.emit('drop', referenceDrag());
+    change(session, fixture);
+    resolve({ reference: 'ref_' + 'a'.repeat(32), name: 'Fixture' });
+    await pending;
+    assert.deepEqual(session.term.pastes, []);
+  }
+});
+
+test('unsupported terminals and failed grants never paste a misleading reference', async () => {
+  const fixture = createFixture({ referenceSession: async () => { throw Error('not authorized'); } });
+  const session = openAndActivate(fixture);
+  await session.host.emit('drop', referenceDrag());
+  session.provider = 'codex';
+  await session.host.emit('drop', referenceDrag());
+  assert.deepEqual(session.term.pastes, []);
+  assert.equal(fixture.statuses.length, 2);
+});
 
 test('closed data is ignored while unknown open data creates a terminal', () => {
   const fixture = createFixture();

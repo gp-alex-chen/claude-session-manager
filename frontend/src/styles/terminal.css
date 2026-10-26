@@ -255,6 +255,7 @@
   user-select: none;
 }
 #terminal .terminal-pane-provider[draggable="true"] { cursor: grab; }
+#terminal .term-host.is-reference-drop-target { outline: 2px dashed var(--accent); outline-offset: -4px; }
 #terminal .terminal-pane-provider.is-dragging { cursor: grabbing; opacity: .55; }
 #terminal.is-session-dragging .terminal-pane-slot.is-drop-target::after {
   border: 2px solid var(--accent);

@@ -99,10 +99,17 @@ func (a *App) applyDownloadedUpdate(downloaded string, apply func(string, bool) 
 	a.sealProviderRestoration()
 	a.codexStatusLocked(a.runtimeContext(), true)
 	a.closeAllTerms()
+	a.closeProviderServices()
 	if onReady != nil {
 		onReady()
 	}
-	return apply(downloaded, true)
+	err := apply(downloaded, true)
+	// Apply normally exits. A failed replacement leaves this instance usable
+	// so opening a terminal can lazily start a fresh shared service.
+	if err != nil {
+		a.beginProviderServices()
+	}
+	return err
 }
 
 // updater 组装本项目更新器。

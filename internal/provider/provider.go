@@ -110,6 +110,8 @@ type LaunchSpec struct {
 	Identity   *SessionRef
 	Env        []string
 	Close      func()
+	rpc        *codexRelay
+	shared     *sharedCodexInstance
 }
 
 type AgentProvider interface {
@@ -134,6 +136,12 @@ type RestorableSource interface {
 
 // RestorationSealer fixes the final identity snapshot before terminal teardown.
 type RestorationSealer interface{ SealRestoration() }
+
+// ServiceLifecycle separates application-owned services from PTY lifetimes.
+type ServiceLifecycle interface {
+	BeginService()
+	CloseService()
+}
 type UsageProvider interface {
 	Usage(context.Context, string, string) (usage.Summary, error)
 }

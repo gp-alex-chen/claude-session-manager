@@ -1,5 +1,6 @@
 import { b64ToBytes, bytesToB64 } from '../utils.js';
 import { normalizeTerminalFontSize } from './options.js';
+import { peekReferenceDrag, takeReferenceDrag, referenceText } from '../sessions/reference-drag.js';
 
 export function createTerminalController(deps) {
   const {
@@ -105,6 +106,36 @@ export function createTerminalController(deps) {
       host: hostFactory(),
     };
     session.host.classList.add('term-host');
+    session.host.addEventListener('dragover', (event) => {
+      if (!peekReferenceDrag() || session.provider !== 'codex' || session.exited || !session.visible) return;
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+      session.host.classList.toggle('is-reference-drop-target', true);
+    });
+    session.host.addEventListener('dragleave', () => session.host.classList.toggle('is-reference-drop-target', false));
+    session.host.addEventListener('drop', async (event) => {
+      if (!peekReferenceDrag()) return;
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      session.host.classList.toggle('is-reference-drop-target', false);
+      const reference = takeReferenceDrag(event);
+      if (!reference) return;
+      if (session.provider !== 'codex' || session.exited || !session.visible || !session.term) {
+        setStatus?.('目前请将引用拖入已打开的 Codex 终端', 'warn');
+        return;
+      }
+      const identity = state.newToReal.get(token) || token;
+      const parent = session.host.parentNode;
+      try {
+        const ref = await backend.ReferenceCodexSession(token, reference.id);
+        if (state.terminals.get(token) !== session || session.exited || !session.visible
+          || session.host.parentNode !== parent || (state.newToReal.get(token) || token) !== identity) return;
+        session.term.paste(referenceText(ref));
+        session.term.focus();
+        setStatus?.('会话引用已插入草稿；输入指令后发送即可读取或联系它', 'ok');
+      } catch (error) { setStatus?.('引用会话失败：' + error, 'warn'); }
+    });
     session.host.addEventListener('contextmenu', (event) => {
       void handleContextMenu(session, event);
     });

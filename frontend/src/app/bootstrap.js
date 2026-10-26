@@ -102,7 +102,8 @@ export function createApplication(deps) {
   });
   const terminalController = createTerminal({
     state,
-    backend: { TermWrite: backend.TermWrite, TermResize: backend.TermResize, TermKill: backend.TermKill },
+    backend: { TermWrite: backend.TermWrite, TermResize: backend.TermResize, TermKill: backend.TermKill,
+      ReferenceCodexSession: backend.ReferenceCodexSession },
     TerminalCtor,
     FitAddonCtor,
     termOptions,

@@ -5,12 +5,107 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/provider"
 	"github.com/gp-alex-chen/claude-session-manager/internal/terminal"
 )
+
+type lifecycleCodex struct {
+	*provider.CodexAdapter
+	mu            sync.Mutex
+	begin, closed int
+	onClose       func()
+}
+
+func (p *lifecycleCodex) BeginService() { p.mu.Lock(); p.begin++; p.mu.Unlock() }
+func (p *lifecycleCodex) CloseService() {
+	p.mu.Lock()
+	p.closed++
+	p.mu.Unlock()
+	if p.onClose != nil {
+		p.onClose()
+	}
+}
+
+func TestSharedProviderShutdownPersistStartupRestore(t *testing.T) {
+	a, store, _, dir := testApp(t)
+	p := &lifecycleCodex{CodexAdapter: provider.NewCodex(fakeCodexHistory{})}
+	a.providers = a.newProviderRegistry(false)
+	a.providers.Register(p)
+	a.lookPath = func(name string) (string, error) { return name + ".exe", nil }
+	a.terms = terminal.NewManagerWithStart(terminal.Callbacks{}, store.SaveOpen, func(string, string, int, int, []string) (terminal.Pty, error) { return newShutdownPty(), nil })
+	key := "codex:01900000-0000-7000-8000-000000000001"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.Startup(ctx)
+	if p.begin != 1 {
+		t.Fatalf("service lifecycle not begun: %d", p.begin)
+	}
+	if _, err := a.StartSession(key, dir); err != nil {
+		t.Fatal(err)
+	}
+	p.onClose = func() {
+		if a.terms.IsRunning(key) {
+			t.Error("server closed before terminal snapshot/close")
+		}
+		if got := a.GetOpenSessions(); !reflect.DeepEqual(got, []string{key}) {
+			t.Errorf("identity not persisted: %v", got)
+		}
+	}
+	a.Shutdown(context.Background())
+	if p.closed != 1 {
+		t.Fatalf("service not closed: %d", p.closed)
+	}
+	a.Startup(ctx)
+	if p.begin != 2 {
+		t.Fatal("service lifecycle not restarted")
+	}
+	if _, err := a.StartSession(a.GetOpenSessions()[0], dir); err != nil {
+		t.Fatal(err)
+	}
+	a.Shutdown(context.Background())
+	if p.closed != 2 {
+		t.Fatal("restored lifecycle not closed")
+	}
+}
+
+func TestSharedProviderUpdateClosesAfterPersistenceAndReopensOnFailure(t *testing.T) {
+	a, store, _, dir := testApp(t)
+	p := &lifecycleCodex{CodexAdapter: provider.NewCodex(fakeCodexHistory{})}
+	a.providers = a.newProviderRegistry(false)
+	a.providers.Register(p)
+	a.lookPath = func(name string) (string, error) { return name + ".exe", nil }
+	a.terms = terminal.NewManagerWithStart(terminal.Callbacks{}, store.SaveOpen, func(string, string, int, int, []string) (terminal.Pty, error) { return newShutdownPty(), nil })
+	key := "codex:01900000-0000-7000-8000-000000000001"
+	if _, err := a.StartSession(key, dir); err != nil {
+		t.Fatal(err)
+	}
+	p.onClose = func() {
+		if a.terms.IsRunning(key) {
+			t.Error("service closed before PTY")
+		}
+		if got := a.GetOpenSessions(); !reflect.DeepEqual(got, []string{key}) {
+			t.Errorf("update did not persist identity: %v", got)
+		}
+	}
+	failure := errors.New("synthetic replacement failure")
+	err := a.applyDownloadedUpdate("fixture.exe", func(string, bool) error {
+		if p.closed != 1 {
+			t.Error("apply ran before service close")
+		}
+		return failure
+	}, nil)
+	if !errors.Is(err, failure) || p.begin != 1 {
+		t.Fatalf("failed update did not reopen service lifecycle: %v %d", err, p.begin)
+	}
+	if _, err := a.StartSession(a.GetOpenSessions()[0], dir); err != nil {
+		t.Fatal(err)
+	}
+	a.Shutdown(context.Background())
+}
 
 type fakeCodexHistory struct {
 	sessions []provider.Session

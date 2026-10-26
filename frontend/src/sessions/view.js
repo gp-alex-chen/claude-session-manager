@@ -1,6 +1,7 @@
 import { leafOf } from '../utils.js';
 import { formatProjectUsage, formatProjectUsageTitle } from '../usage/format.js';
 import { paintProviderStatusIcon, renderProviderBadge } from './provider-icons.js';
+import { beginReferenceDrag, endReferenceDrag } from './reference-drag.js';
 
 export function dirIdentity(dir) {
   if (typeof dir !== 'string') return '';
@@ -240,6 +241,12 @@ function renderSessionRow({
   const badge = el('span', 'badge idle', '●');
   badge.dataset.id = session.id;
   const provider = session.provider || 'claude';
+  item.draggable = provider === 'codex' && !session.temporary;
+  if (item.draggable) {
+    item.title += '\n拖到另一个 Codex 终端：引用此会话，允许读取并按指令发送消息';
+    item.addEventListener('dragstart', event => beginReferenceDrag(session, event));
+    item.addEventListener('dragend', endReferenceDrag);
+  }
   badge.dataset.provider = provider;
   badge.dataset.temporary = String(Boolean(session.temporary));
   const providerName = state.agentProviders?.get(provider)?.name || provider[0].toUpperCase() + provider.slice(1);

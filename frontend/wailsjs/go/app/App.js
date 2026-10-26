@@ -45,3 +45,4 @@ export function DeleteProject(dir) { return window['go']['app']['App']['DeletePr
 export function SetCompletionBadge(count, force) { return window['go']['app']['App']['SetCompletionBadge'](count, force); }
 export function SetTaskbarStatus(count, attention, force) { return window['go']['app']['App']['SetTaskbarStatus'](count, attention, force); }
 export function SetNotificationAttention(count, waiting, force) { return window['go']['app']['App']['SetNotificationAttention'](count, waiting, force); }
+export function ReferenceCodexSession(token, key) { return window['go']['app']['App']['ReferenceCodexSession'](token, key); }

@@ -9,7 +9,7 @@ const binding = fs.readFileSync(path.join(frontendDir, 'wailsjs/go/app/App.js'),
 const backend = fs.readFileSync(path.join(frontendDir, 'src/api/backend.js'), 'utf8');
 const expected = [
   'GetAgents', 'GetOpenSessions', 'GetShell', 'ShellInstalled', 'SetShell',
-  'NotifyBeep', 'SetCompletionBadge', 'SetTaskbarStatus', 'SetNotificationAttention', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
+  'NotifyBeep', 'SetCompletionBadge', 'SetTaskbarStatus', 'SetNotificationAttention', 'ReferenceCodexSession', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
   'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'StartNewAgent', 'ListAgentProviders', 'OpenFolder', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',

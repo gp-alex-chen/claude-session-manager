@@ -13,17 +13,24 @@ import (
 	"github.com/gp-alex-chen/claude-session-manager/internal/usage"
 )
 
-// CodexRelayFactory starts a terminal-owned official server and a transparent
-// local transport. Observers must never answer or change a protocol message.
+// CodexRelayFactory opens a dedicated native connection and a transparent
+// terminal-owned transport. Observers never answer or change a message.
 type CodexRelayFactory func(context.Context, string, func([]byte), func([]byte), func()) (LaunchSpec, error)
 
 type CodexLive struct {
 	*CodexAdapter
-	open     CodexRelayFactory
-	changed  func()
-	mu       sync.Mutex
-	records  map[string]*codexObservation
-	sequence uint64
+	open              CodexRelayFactory
+	changed           func()
+	mu                sync.Mutex
+	records           map[string]*codexObservation
+	sequence          uint64
+	nativeTools       bool
+	nativeToolState   NativeToolState
+	nativeCatalogs    map[string]string
+	persistedCatalogs map[string]bool
+	catalogMu         sync.Mutex
+	referenceMu       sync.Mutex
+	shared            *sharedCodexOwner
 }
 
 func NewCodexLive(base *CodexAdapter, open CodexRelayFactory, changed func()) *CodexLive {
@@ -53,6 +60,18 @@ func (p *CodexLive) PrepareLaunch(ctx context.Context, req OpenRequest) (LaunchS
 		o.finished()
 		return LaunchSpec{}, err
 	}
+	o.mu.Lock()
+	o.relay = spec.rpc
+	if spec.shared != nil {
+		o.generation = spec.shared.generation
+	}
+	o.mu.Unlock()
+	if p.nativeTools && spec.rpc != nil {
+		host := newNativeReferenceRuntime(p, o, spec.rpc)
+		spec.rpc.transformClient = host.client
+		spec.rpc.consumeServer = host.server
+		spec.rpc.closeTransport = host.Close
+	}
 	if req.Ref != nil {
 		spec.Args = append(spec.Args, "resume", req.Ref.ID)
 		spec.Identity = base.Identity
@@ -71,6 +90,8 @@ func (p *CodexLive) PrepareLaunch(ctx context.Context, req OpenRequest) (LaunchS
 }
 
 func (p *CodexLive) observe(token, dir string) *codexObservation {
+	p.referenceMu.Lock()
+	defer p.referenceMu.Unlock()
 	o := &codexObservation{owner: p, token: token, dir: dir, active: true, state: "unknown", pending: make(map[string]codexIdentityRequest)}
 	p.mu.Lock()
 	p.sequence++
@@ -100,6 +121,11 @@ func (p *CodexLive) notify() {
 }
 
 func (p *CodexLive) SealRestoration() {
+	if p.shared != nil {
+		p.shared.Seal()
+	}
+	p.referenceMu.Lock()
+	defer p.referenceMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, o := range p.records {
@@ -151,7 +177,7 @@ func (p *CodexLive) RestorableSessions(ctx context.Context, force bool) ([]strin
 		}
 		o.mu.Unlock()
 	}
-	return out, err
+	return out, errors.Join(err, p.persistNativeCatalogs(out))
 }
 
 func (p *CodexLive) Status(context.Context) ([]agent.AgentInfo, error) {
@@ -221,10 +247,23 @@ type codexObservation struct {
 	early                                                            [][]byte
 	total, last                                                      *usage.Usage
 	usageWarning                                                     string
+	relay                                                            *codexRelay
+	references                                                       map[string]SessionReference
+	nativeTurns                                                      map[string]nativeTurnReservation
+	internalSend                                                     bool
+	referenceEpoch                                                   uint64
+	nativeTools                                                      bool
+	turnRevision                                                     uint64
+	generation                                                       uint64
+}
+type nativeTurnReservation struct {
+	state    string
+	revision uint64
 }
 type codexIdentityRequest struct {
-	expected string
-	sequence uint64
+	expected    string
+	sequence    uint64
+	nativeTools bool
 }
 type observedMessage struct {
 	ID     json.RawMessage `json:"id"`
@@ -238,10 +277,28 @@ func (o *codexObservation) client(data []byte) {
 	if json.Unmarshal(data, &m) != nil {
 		return
 	}
+	o.owner.referenceMu.Lock()
+	defer o.owner.referenceMu.Unlock()
+	if m.Method == "turn/start" && len(m.ID) > 0 {
+		o.mu.Lock()
+		if o.nativeTurns == nil {
+			o.nativeTurns = make(map[string]nativeTurnReservation)
+		}
+		if len(o.nativeTurns) < 128 {
+			o.nativeTurns[string(m.ID)] = nativeTurnReservation{o.state, o.turnRevision}
+			if o.state == "idle" {
+				o.state = "working"
+			}
+		}
+		o.mu.Unlock()
+	}
 	if m.Method != "thread/start" && m.Method != "thread/resume" {
 		return
 	}
 	if len(m.ID) == 0 || string(m.ID) == "null" {
+		return
+	}
+	if m.Method == "thread/start" && auxiliaryNativeThread(m.Params) {
 		return
 	}
 	var params struct{ ThreadID string }
@@ -255,7 +312,10 @@ func (o *codexObservation) client(data []byte) {
 			return
 		}
 		o.identitySequence++
-		o.pending[string(m.ID)] = codexIdentityRequest{params.ThreadID, o.identitySequence}
+		o.referenceEpoch++
+		o.references = nil
+		o.nativeTools = false
+		o.pending[string(m.ID)] = codexIdentityRequest{params.ThreadID, o.identitySequence, hasNativeReferenceTools(m.Params)}
 	}
 	o.mu.Unlock()
 }
@@ -264,13 +324,27 @@ func (o *codexObservation) server(data []byte) {
 	if json.Unmarshal(data, &m) != nil {
 		return
 	}
+	var identity struct{ Thread struct{ ID string } }
+	json.Unmarshal(m.Result, &identity)
+	knownCatalog := o.owner.nativeCatalogKnown(identity.Thread.ID)
+	registeredID := ""
+	o.owner.referenceMu.Lock()
 	o.mu.Lock()
 	changed := false
 	if o.closing {
 		o.mu.Unlock()
+		o.owner.referenceMu.Unlock()
 		return
 	}
 	request, pending := o.pending[string(m.ID)]
+	if m.Method == "" {
+		if reservation, ok := o.nativeTurns[string(m.ID)]; ok {
+			delete(o.nativeTurns, string(m.ID))
+			if len(m.Result) == 0 && o.turnRevision == reservation.revision {
+				o.state = reservation.state
+			}
+		}
+	}
 	expected := request.expected
 	if len(m.ID) > 0 && m.Method == "" && pending {
 		delete(o.pending, string(m.ID))
@@ -287,6 +361,8 @@ func (o *codexObservation) server(data []byte) {
 		if json.Unmarshal(m.Result, &result) == nil && !result.Thread.Ephemeral && request.sequence >= o.appliedIdentitySequence && validateRef(SessionRef{Codex, result.Thread.ID}) == nil && result.Thread.ParentThreadID == nil && (expected == "" || expected == result.Thread.ID) {
 			o.appliedIdentitySequence = request.sequence
 			if o.id != result.Thread.ID {
+				o.references = nil
+				o.nativeTurns = nil
 				o.saved = false
 				o.total = nil
 				o.last = nil
@@ -294,7 +370,14 @@ func (o *codexObservation) server(data []byte) {
 				o.turnStatus = ""
 				o.usageWarning = ""
 			}
+			o.nativeTools = request.nativeTools || knownCatalog
+			if request.nativeTools {
+				registeredID = result.Thread.ID
+			}
 			o.id = result.Thread.ID
+			if result.Thread.Cwd != "" {
+				o.dir = result.Thread.Cwd
+			}
 			if expected != "" && !result.Thread.Ephemeral {
 				o.saved = true
 			}
@@ -316,7 +399,14 @@ func (o *codexObservation) server(data []byte) {
 		}
 		changed = o.applyEvent(m)
 	}
+	if changed && (pending || m.Method == "thread/status/changed" || m.Method == "turn/started" || m.Method == "turn/completed") {
+		o.turnRevision++
+	}
 	o.mu.Unlock()
+	o.owner.referenceMu.Unlock()
+	if registeredID != "" {
+		o.owner.rememberNativeCatalog(registeredID)
+	}
 	if o.takeSaveHint() {
 		o.owner.invalidateHistory()
 	}
@@ -468,8 +558,11 @@ func (t codexTokens) convert() (usage.Usage, bool) {
 	return usage.Usage{InputTokens: t.InputTokens - t.CachedInputTokens - t.CacheWriteInputTokens, CacheReadInputTokens: t.CachedInputTokens, CacheCreationInputTokens: t.CacheWriteInputTokens, OutputTokens: t.OutputTokens, ThinkingTokens: t.ReasoningOutputTokens}, true
 }
 func (o *codexObservation) disconnected() {
+	o.owner.referenceMu.Lock()
+	defer o.owner.referenceMu.Unlock()
 	o.mu.Lock()
 	o.connected = false
+	o.references = nil
 	o.state = "unknown"
 	o.status = "unknown"
 	o.waiting = ""
@@ -478,9 +571,12 @@ func (o *codexObservation) disconnected() {
 	o.owner.notify()
 }
 func (o *codexObservation) finished() {
+	o.owner.referenceMu.Lock()
+	defer o.owner.referenceMu.Unlock()
 	o.mu.Lock()
 	o.active = false
 	o.connected = false
+	o.references = nil
 	o.mu.Unlock()
 	o.owner.notify()
 }

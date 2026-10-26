@@ -664,7 +664,7 @@ func TestFrontendBindingMethodsRemainPresent(t *testing.T) {
 		"LoadPreferences", "SetPreference",
 		"GetNotificationConfig", "SetNotificationConfig", "GetNotificationStatus", "TestNotification", "SetNotificationAttention",
 		"ListSessionsForProviders", "ListHiddenSessionsForProviders",
-		"GetOpenSessionRefs", "SetCompletionBadge", "SetTaskbarStatus",
+		"GetOpenSessionRefs", "SetCompletionBadge", "SetTaskbarStatus", "ReferenceCodexSession",
 	}
 	for _, name := range want {
 		if _, ok := typ.MethodByName(name); !ok {

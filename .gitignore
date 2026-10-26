@@ -22,5 +22,6 @@ projects.json
 preferences.json
 notification.json
 last-session.json
+codex-native-tools.json
 # Legacy state name retained for old installations.
 *.json.tmp-*

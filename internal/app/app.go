@@ -152,6 +152,7 @@ func (a *App) startup(ctx context.Context) {
 	a.lifecycleMu.Lock()
 	current := a.lifecycleID == lifecycleID && a.watcher == watcher
 	if current {
+		a.beginProviderServices()
 		a.notificationProgram = notify.NewProgramService(ctx, notificationConfig)
 		if a.completionBadge != nil {
 			a.completionBadge.Close()
@@ -209,6 +210,7 @@ func (a *App) shutdown(context.Context) {
 		watcher.Stop()
 	}
 	a.closeAllTerms()
+	a.closeProviderServices()
 	if cancel != nil {
 		cancel()
 	}
