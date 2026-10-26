@@ -12,6 +12,33 @@ const splitBlock = (source, selector) => {
   return match ? match[1] : '';
 };
 
+test('account quota sits immediately after settings in the sidebar footer', () => {
+  const html = fs.readFileSync(path.join(sourceDir, 'index.html'), 'utf8');
+  const footer = html.match(/<div id="sidebar-footer">([\s\S]*?)<\/aside>/)?.[1] || '';
+  assert.match(footer, /id="btn-settings"[^>]*>[\s\S]*?<\/button>\s*<div id="account-quota" hidden><\/div>/);
+  assert.equal([...html.matchAll(/id="account-quota"/g)].length, 1);
+  const toolbar = html.match(/<div id="workspace-toolbar">([\s\S]*?)<div id="terminal">/)?.[1] || '';
+  assert.doesNotMatch(toolbar, /id="account-quota"/);
+});
+
+test('footer quota details open upwards from the sidebar left edge', () => {
+  const footer = splitBlock(read('sidebar.css'), '#sidebar-footer');
+  assert.match(footer, /position:\s*relative/);
+  assert.match(footer, /flex:\s*0 0 auto/);
+  assert.match(footer, /flex-wrap:\s*wrap/);
+  const quota = read('quota.css');
+  assert.match(splitBlock(quota, '#account-quota'), /position:\s*static/);
+  const details = splitBlock(quota, '\\.quota-details');
+  assert.match(details, /bottom:\s*calc\(100% \+ 8px\)/);
+  assert.match(details, /left:\s*10px/);
+  assert.doesNotMatch(details, /(?:^|;)\s*(?:top|right):/);
+});
+
+test('footer balances settings on the left with quota on the right', () => {
+  assert.match(splitBlock(read('quota.css'), '#account-quota'), /margin-left:\s*auto/);
+  assert.match(splitBlock(read('sidebar.css'), '\\.update-notice'), /flex-basis:\s*100%/);
+});
+
 test('style entry imports tokens first, base second, and terminal last', () => {
   const entry = read('style.css');
   const imports = [...entry.matchAll(/@import\s+['"]([^'"]+)['"]/g)].map((match) => match[1]);

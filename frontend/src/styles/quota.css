@@ -1,4 +1,4 @@
-#account-quota { position: relative; flex: 0 0 auto; }
+#account-quota { position: static; flex: 0 0 auto; margin-left: auto; }
 #account-quota[hidden] { display: none; }
 .quota-ring-button { display: flex; align-items: center; gap: 6px; padding: 0 3px; color: var(--text-dim); background: transparent; border: 0; border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
 .quota-agent-label { font-size: 11px; }
@@ -14,7 +14,7 @@
 .quota-pace-marker { stroke: var(--text); }
 .quota-unknown { fill: var(--text-faint); }
 .quota-stale .quota-meter { opacity: .6; }
-.quota-details { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: min(270px, calc(100vw - 28px)); max-height: calc(100vh - 90px); overflow: auto; padding: 12px; color: var(--text); background: var(--menu-bg); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 10px 24px var(--shadow-lg); }
+.quota-details { position: absolute; bottom: calc(100% + 8px); left: 10px; z-index: 30; width: min(270px, calc(100vw - 28px)); max-height: calc(100vh - 90px); overflow: auto; padding: 12px; color: var(--text); background: var(--menu-bg); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 10px 24px var(--shadow-lg); }
 .quota-details[hidden] { display: none; }
 .quota-details-title { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
 .quota-detail-row { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; font-size: 12px; }
