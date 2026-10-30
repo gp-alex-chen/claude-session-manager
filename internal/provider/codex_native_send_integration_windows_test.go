@@ -25,11 +25,14 @@ type nativePreviewTerminal struct {
 }
 
 func (t *nativePreviewTerminal) Close() { t.pty.Close(); t.spec.Close() }
-func startNativePreviewTerminal(t *testing.T, ctx context.Context, live *CodexLive, env []string, req OpenRequest, changed chan<- struct{}) *nativePreviewTerminal {
+func startNativePreviewTerminal(t *testing.T, ctx context.Context, live *CodexLive, env []string, req OpenRequest, changed chan<- struct{}, configure ...func(*LaunchSpec)) *nativePreviewTerminal {
 	t.Helper()
 	spec, err := live.PrepareLaunch(ctx, req)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, configureSpec := range configure {
+		configureSpec(&spec)
 	}
 	childEnv := []string{}
 	for _, entry := range env {

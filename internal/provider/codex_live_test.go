@@ -73,6 +73,65 @@ func TestCodexEphemeralTitleThreadCannotReplaceMainIdentity(t *testing.T) {
 	}
 }
 
+func TestCodexAuxiliaryTurnCannotKeepCompletedMainWorking(t *testing.T) {
+	for _, outcome := range []string{"completed", "failed", "interrupted"} {
+		t.Run(outcome, func(t *testing.T) {
+			live := NewCodexLive(NewCodex(nil), nil, nil)
+			o := seedTelemetry(t, live, "main-with-title")
+			o.server([]byte(`{"method":"turn/started","params":{"threadId":"` + telemetryID + `","turn":{"id":"main-turn"}}}`))
+			o.server([]byte(`{"method":"turn/completed","params":{"threadId":"` + telemetryID + `","turn":{"id":"main-turn","status":"` + outcome + `"}}}`))
+			before, _ := live.Status(context.Background())
+			const titleID = "01900000-0000-7000-8000-000000000002"
+			o.client([]byte(`{"id":"title-start","method":"thread/start","params":{"ephemeral":true,"threadSource":"thread_title"}}`))
+			o.server([]byte(`{"id":"title-start","result":{"thread":{"id":"` + titleID + `","ephemeral":true,"status":{"type":"idle"}}}}`))
+			o.client([]byte(`{"id":"title-turn","method":"turn/start","params":{"threadId":"` + titleID + `"}}`))
+			// The title is still running: it must never mark the user's
+			// completed/failed/interrupted task as working, even temporarily.
+			after, _ := live.Status(context.Background())
+			if after[0].State != before[0].State || after[0].Status != before[0].Status || after[0].TurnStatus != outcome || len(o.nativeTurns) != 0 {
+				t.Fatalf("auxiliary turn changed main status: before=%+v after=%+v pending=%d", before[0], after[0], len(o.nativeTurns))
+			}
+			o.server([]byte(`{"id":"title-turn","result":{"turn":{"id":"title-turn"}}}`))
+			o.server([]byte(`{"method":"turn/completed","params":{"threadId":"` + titleID + `","turn":{"id":"title-turn","status":"completed"}}}`))
+			after, _ = live.Status(context.Background())
+			if after[0].State != before[0].State || after[0].TurnID != "main-turn" || after[0].TurnStatus != outcome {
+				t.Fatal("auxiliary completion changed main task", after)
+			}
+		})
+	}
+}
+
+func TestCodexOnlyBoundUserTurnReservesBusyState(t *testing.T) {
+	for _, tc := range []struct {
+		name, params string
+		own          bool
+	}{
+		{"bound", `{"threadId":"` + telemetryID + `"}`, true},
+		{"foreign", `{"threadId":"01900000-0000-7000-8000-000000000002"}`, false},
+		{"missing", `{}`, false},
+		{"malformed", `{"threadId":23}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			live := NewCodexLive(NewCodex(nil), nil, nil)
+			o := seedTelemetry(t, live, "bound-turn")
+			o.client([]byte(`{"id":"request","method":"turn/start","params":` + tc.params + `}`))
+			status, _ := live.Status(context.Background())
+			if tc.own {
+				if status[0].State != "working" || len(o.nativeTurns) != 1 {
+					t.Fatal("own turn did not reserve busy state", status)
+				}
+			} else if status[0].State != "idle" || len(o.nativeTurns) != 0 {
+				t.Fatal("unrelated request reserved user state", status)
+			}
+			o.server([]byte(`{"id":"request","error":{"message":"fixture failure"}}`))
+			status, _ = live.Status(context.Background())
+			if status[0].State != "idle" || len(o.nativeTurns) != 0 {
+				t.Fatal("rejected request left the terminal busy", status)
+			}
+		})
+	}
+}
+
 const telemetryID = "01900000-0000-7000-8000-000000000001"
 
 func seedTelemetry(t *testing.T, live *CodexLive, token string) *codexObservation {

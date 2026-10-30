@@ -279,8 +279,19 @@ func (o *codexObservation) client(data []byte) {
 	}
 	o.owner.referenceMu.Lock()
 	defer o.owner.referenceMu.Unlock()
-	if m.Method == "turn/start" && len(m.ID) > 0 {
+	if m.Method == "turn/start" && len(m.ID) > 0 && string(m.ID) != "null" {
+		var params struct{ ThreadID string }
+		if json.Unmarshal(m.Params, &params) != nil {
+			return
+		}
 		o.mu.Lock()
+		// The same native TUI also starts turns for auxiliary threads (for
+		// example title generation). Only this terminal's bound user thread
+		// may reserve a busy state or block an incoming session message.
+		if o.id == "" || params.ThreadID != o.id || !o.active || !o.connected || o.closing {
+			o.mu.Unlock()
+			return
+		}
 		if o.nativeTurns == nil {
 			o.nativeTurns = make(map[string]nativeTurnReservation)
 		}

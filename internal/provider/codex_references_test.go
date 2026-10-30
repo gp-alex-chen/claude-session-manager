@@ -197,7 +197,7 @@ func TestReferenceConcurrentSendsReserveOnlyOneTargetTurn(t *testing.T) {
 
 func TestNativeFailedTurnReservationIgnoresUsageOnlyUpdates(t *testing.T) {
 	_, _, target := referenceFixture(t)
-	target.client([]byte(`{"id":41,"method":"turn/start","params":{}}`))
+	target.client([]byte(`{"id":41,"method":"turn/start","params":{"threadId":"` + target.id + `"}}`))
 	target.server([]byte(`{"method":"thread/tokenUsage/updated","params":{"threadId":"` + target.id + `","tokenUsage":{"total":{"totalTokens":12,"inputTokens":10,"outputTokens":2},"last":{"totalTokens":12,"inputTokens":10,"outputTokens":2}}}}`))
 	target.server([]byte(`{"id":41,"error":{"message":"synthetic failure"}}`))
 	target.mu.Lock()
@@ -246,7 +246,7 @@ func TestReferenceSendRejectsBusyPendingDuplicateAndDisconnectedTargets(t *testi
 		}
 	}
 	target.state = "idle"
-	target.client([]byte(`{"id":91,"method":"turn/start","params":{}}`))
+	target.client([]byte(`{"id":91,"method":"turn/start","params":{"threadId":"` + target.id + `"}}`))
 	if _, err := p.referenceSend(context.Background(), source, ref.Reference, "hello"); err == nil {
 		t.Fatal("native pending turn accepted")
 	}
