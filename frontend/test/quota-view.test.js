@@ -41,8 +41,8 @@ function fixture() {
   const intervals = [];
   let time = now;
   let nextTimer = 0;
-  let refreshes = 0;
-  const view = createQuotaView({ root, documentRef, nowFn: () => time, onRefresh: () => refreshes++,
+  let refreshes = 0; const sources = [];
+  const view = createQuotaView({ root, documentRef, nowFn: () => time, onRefresh: () => refreshes++, onSourceChange: value => sources.push(value),
     setIntervalFn: (callback, ms) => { intervals.push(ms); timers.set(++nextTimer, callback); return nextTimer; },
     clearIntervalFn: id => timers.delete(id),
   });
@@ -50,7 +50,7 @@ function fixture() {
   const panel = root.children[1];
   const chart = () => button.children[1].children[0];
   const byClass = name => chart().children.filter(node => node.getAttribute('class') === name);
-  return { root, documentRef, view, button, panel, timers, intervals, chart, byClass,
+  return { root, documentRef, view, button, panel, timers, intervals, chart, byClass, sources,
     advance: ms => { time += ms; for (const callback of [...timers.values()]) callback(); },
     refreshes: () => refreshes,
   };
@@ -157,7 +157,7 @@ test('local minute ticks update pace without reading quota or changing actual re
   assert.equal(f.panel.hidden, false);
   f.advance(60_000);
   assert.equal(f.panel.hidden, false);
-  f.panel.children[1].dispatch('click');
+  f.panel.children.find(node => node.className === 'quota-refresh').dispatch('click');
   assert.equal(f.refreshes(), 1);
   f.advance(147 * 60_000);
   assert.equal(f.byClass('quota-pace-marker').length, 0);
@@ -190,4 +190,29 @@ test('hiding, API mode and stopping release pace timers across provider changes 
   f.view.render(input([windowAt(300, 0.5)]));
   assert.equal(f.timers.size, 1);
   f.view.stop();
+});
+
+
+test('quota popup exposes persistent source selector independent of refresh and current provider', () => {
+  const f = fixture(); f.view.start();
+  f.view.render({ ...input([]), source: 'codex' });
+  f.button.dispatch('click');
+  const field = f.panel.children.find(node => node.className === 'quota-source-field');
+  assert.ok(field, 'popup must include a source selector');
+  const select = field.children.find(node => node.tag === 'select');
+  assert.deepEqual(select.children.map(node => [node.value, node.textContent]), [
+    ['auto', '自动跟随会话'], ['codex', 'Codex / ChatGPT'], ['claude', 'Claude'],
+  ]);
+  assert.equal(select.value, 'codex');
+  select.value = 'claude'; select.dispatch('change');
+  assert.deepEqual(f.sources, ['claude']); assert.equal(f.refreshes(), 0);
+  f.view.render({ ...input([]), source: 'claude', provider: 'claude', loading: true });
+  assert.equal(f.panel.hidden, false);
+  assert.equal(select.value, 'claude'); assert.equal(select.disabled, undefined);
+  assert.match(textOf(f.button), /Claude/);
+  assert.match(textOf(f.panel), /当前登录账户/);
+  f.view.stop(); assert.equal(select.listeners.size, 0);
+  f.view.start(); f.view.render({ ...input([]), source: 'auto' });
+  select.value = 'codex'; select.dispatch('change');
+  assert.deepEqual(f.sources, ['claude', 'codex']); f.view.stop();
 });

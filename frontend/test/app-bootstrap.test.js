@@ -182,6 +182,7 @@ function makeFixture(options = {}) {
     },
   };
   const backend = new Proxy({}, { get: (_, key) => key === 'LoadPreferences' ? (options.LoadPreferences || (async () => ({})))
+    : key === 'SetPreference' ? options.SetPreference || (() => {})
     : key === 'SetTaskbarStatus' ? options.SetTaskbarStatus || (() => {})
     : key === 'GetAccountQuota' ? options.GetAccountQuota || (() => {}) : () => {} });
   const app = createApplication({
@@ -449,4 +450,51 @@ test('bootstrap sends waiting snapshots through the combined binding and resyncs
   for (let i = 0; i < 8; i++) await Promise.resolve();
   assert.deepEqual(writes.at(-1).slice(0, 2), [0, false]);
   f.app.stop();
+});
+
+
+test('quota popup selection is wired through application persistence and a fresh startup', async () => {
+  const saved = {};
+  const queries = [];
+  const options = {
+    LoadPreferences: async () => ({ ...saved }),
+    SetPreference: async (key, value) => { saved[key] = value; },
+    GetAccountQuota: async provider => { queries.push(provider); return { provider, status: 'available', windows: [] }; },
+  };
+  const first = makeFixture(options);
+  try {
+    await first.app.start();
+    first.app.state.terminals.set('claude-1', { provider: 'claude' });
+    first.app.state.activeToken = 'claude-1';
+    first.calls.factories.terminal.onActivate('claude-1');
+    const root = first.elements.get('account-quota');
+    const [button, panel] = root.children;
+    button.listeners.get('click')();
+    const field = panel.children.find(node => node.className === 'quota-source-field');
+    const select = field.children.find(node => node.className === 'quota-source-select');
+    select.value = 'codex'; select.listeners.get('change')();
+    assert.equal(panel.hidden, false, 'selection must keep the popup open');
+    assert.equal(button.children[0].textContent, 'Codex');
+    first.app.state.activeToken = null;
+    first.calls.factories.terminal.onActivate(null);
+    assert.equal(root.hidden, false);
+  } finally { first.app.stop(); }
+  await first.app.flushPreferences();
+  assert.equal(saved['quota-source'], 'codex');
+  assert.deepEqual(queries, ['claude', 'codex']);
+  const restarted = makeFixture(options);
+  try {
+    await restarted.app.start();
+    const root = restarted.elements.get('account-quota');
+    assert.equal(restarted.app.state.activeToken, null);
+    assert.equal(root.hidden, false);
+    assert.equal(root.children[0].children[0].textContent, 'Codex');
+    assert.equal(queries.at(-1), 'codex');
+    const select = root.children[1].children.find(node => node.className === 'quota-source-field').children[1];
+    assert.equal(select.value, 'codex');
+    select.value = 'auto'; select.listeners.get('change')();
+    assert.equal(root.hidden, true);
+  } finally { restarted.app.stop(); }
+  await restarted.app.flushPreferences();
+  assert.equal(saved['quota-source'], 'auto');
 });

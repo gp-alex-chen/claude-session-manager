@@ -1,4 +1,5 @@
 const QUOTA_REFRESH_MS = 15 * 60_000;
+const QUOTA_SOURCES = new Set(['auto', 'codex', 'claude']);
 
 export function activeQuotaProvider(state) {
   const token = state.activeToken;
@@ -8,11 +9,12 @@ export function activeQuotaProvider(state) {
     || state.sessionProviders.get(state.newToReal.get(token)) || 'claude';
 }
 
-export function createQuotaController({ state, view, GetAccountQuota,
+export function createQuotaController({ state, view, GetAccountQuota, storage,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval, nowFn = () => Date.now() }) {
   const cache = new Map();
   const pending = new Map();
   let started = false; let timer = null; let generation = 0; let provider = null;
+  let source = 'auto';
   const apiPaused = () => {
     const snapshot=cache.get(provider)?.snapshot;
     return snapshot?.authMode==='api' && snapshot?.status==='unsupported';
@@ -24,7 +26,7 @@ export function createQuotaController({ state, view, GetAccountQuota,
   }
   function notify() {
     const entry = cache.get(provider);
-    view.render({ provider, snapshot: entry?.snapshot || null,
+    view.render({ provider, source, snapshot: entry?.snapshot || null,
       loading: !!pending.get(provider), error: entry?.error || '' });
   }
   async function refresh(force = false) {
@@ -53,20 +55,34 @@ export function createQuotaController({ state, view, GetAccountQuota,
       }
     }
   }
-  function sync() {
+  function sync({ keepOpen = false } = {}) {
     if (!started) return;
-    const next = activeQuotaProvider(state);
-    if (next !== provider) { provider = next; view.close(); }
+    const next = source === 'auto' ? activeQuotaProvider(state) : source;
+    if (next !== provider) {
+      provider = next;
+      if (!keepOpen) view.close();
+    }
     syncTimer();
     notify();
     if (started && provider) void refresh();
   }
-  function start() { if (started) return; started = true; generation++; view.start?.(); sync(); }
+  function setSource(value) {
+    if (!started || !QUOTA_SOURCES.has(value)) return;
+    source = value;
+    storage?.setItem('quota-source', source);
+    sync({ keepOpen: true });
+  }
+  function start() {
+    if (started) return;
+    const saved = storage?.getItem('quota-source');
+    source = QUOTA_SOURCES.has(saved) ? saved : 'auto';
+    started = true; generation++; view.start?.(); sync();
+  }
   function stop() {
     if (!started) return;
     started = false; generation++; pending.clear(); cache.clear();
     if (timer !== null) clearIntervalFn(timer); timer = null;
     view.stop?.();
   }
-  return { start, stop, sync, refresh };
+  return { start, stop, sync, refresh, setSource };
 }

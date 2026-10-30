@@ -190,8 +190,9 @@ export function createApplication(deps) {
   });
   usageView.render(state);
   const quotaView = createQuotaView({ root: nodes['account-quota'], documentRef,
-    onRefresh: () => quotaController?.refresh(true) });
-  quotaController = createQuotaController({ state, view: quotaView, GetAccountQuota: backend.GetAccountQuota });
+    onRefresh: () => quotaController?.refresh(true),
+    onSourceChange: (source) => quotaController?.setSource(source) });
+  quotaController = createQuotaController({ state, view: quotaView, storage: preferences, GetAccountQuota: backend.GetAccountQuota });
   sessionController = createSession({
     state,
     backend: {

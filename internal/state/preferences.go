@@ -16,8 +16,8 @@ var preferenceKeys = map[string]bool{
 	"ui-theme": true, "term-theme": true, "term-font-size": true,
 	"terminal-layout-mode": true, "terminal-layout-split-ratios": true,
 	"update-last-check-date":  true,
-	"session-provider-filter": true,
-	"sidebar-width":           true, "sidebar-collapsed": true,
+	"session-provider-filter": true, "quota-source": true,
+	"sidebar-width": true, "sidebar-collapsed": true,
 }
 
 // Validate renderer settings before storing them in the shared JSON document.
@@ -34,6 +34,8 @@ func normalizePreference(key, value string) (string, bool) {
 		return strconv.Itoa(int(math.Max(220, math.Min(360, math.Floor(n+0.5))))), true
 	case "sidebar-collapsed":
 		return value, value == "true" || value == "false"
+	case "quota-source":
+		return value, value == "auto" || value == "codex" || value == "claude"
 	case "session-provider-filter":
 		var ids []string
 		if json.Unmarshal([]byte(value), &ids) != nil || len(ids) == 0 || len(ids) > 32 {

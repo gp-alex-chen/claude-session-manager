@@ -2,7 +2,7 @@
 export const PREFERENCE_KEYS = [
   'ui-theme', 'term-theme', 'term-font-size', 'terminal-layout-mode',
   'terminal-layout-split-ratios', 'update-last-check-date',
-  'session-provider-filter',
+  'session-provider-filter', 'quota-source',
   'sidebar-width', 'sidebar-collapsed',
 ];
 

@@ -28,7 +28,7 @@ function resetText(window) {
   }) + ' 重置' : '重置时间未知';
 }
 
-export function createQuotaView({ root, documentRef, onRefresh, nowFn = () => Date.now(),
+export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, nowFn = () => Date.now(),
   setIntervalFn = setInterval, clearIntervalFn = clearInterval }) {
   const el = (tag, className, text) => {
     const node = documentRef.createElement(tag);
@@ -47,15 +47,23 @@ export function createQuotaView({ root, documentRef, onRefresh, nowFn = () => Da
   const meter = el('span', 'quota-meter'); meter.setAttribute('aria-hidden', 'true');
   button.append(label, meter);
   const panel = el('section', 'quota-details'); panel.id = 'account-quota-details'; panel.hidden = true;
-  panel.setAttribute('aria-label', '当前 Agent 订阅额度');
+  panel.setAttribute('aria-label', '订阅额度');
+  const sourceField = el('label', 'quota-source-field');
+  const sourceSelect = el('select', 'quota-source-select');
+  for (const [value, text] of [['auto', '自动跟随会话'], ['codex', 'Codex / ChatGPT'], ['claude', 'Claude']]) {
+    const option = el('option', '', text); option.value = value; sourceSelect.append(option);
+  }
+  sourceField.append(el('span', '', '额度来源'), sourceSelect);
+  const sourceNote = el('p', 'quota-source-note', '读取本机所选 CLI 当前登录账户的订阅额度。');
   const content = el('div');
   const refresh = el('button', 'quota-refresh', '刷新额度'); refresh.type = 'button';
-  panel.append(content, refresh); root.append(button, panel); root.hidden = true;
+  panel.append(sourceField, sourceNote, content, refresh); root.append(button, panel); root.hidden = true;
   function close() { panel.hidden = true; button.setAttribute('aria-expanded', 'false'); }
   const toggle = () => { panel.hidden = !panel.hidden; button.setAttribute('aria-expanded', String(!panel.hidden)); };
   const outside = (event) => { if (!root.contains?.(event.target)) close(); };
   const escape = (event) => { if (event.key === 'Escape' && !panel.hidden) { close(); button.focus?.(); } };
   const refreshClick = () => onRefresh?.();
+  const sourceChange = () => onSourceChange?.(sourceSelect.value);
   let started = false;
   let paceTimer = null;
   let lastRender = null;
@@ -72,7 +80,8 @@ export function createQuotaView({ root, documentRef, onRefresh, nowFn = () => Da
 
   function render(input) {
     lastRender = input;
-    const { provider, snapshot, loading, error } = input;
+    const { provider, source = 'auto', snapshot, loading, error } = input;
+    sourceSelect.value = source;
     root.hidden = !provider;
     if (!provider) { syncPaceTimer(false); close(); return; }
     const name = provider === 'codex' ? 'Codex' : provider === 'claude' ? 'Claude' : provider;
@@ -135,6 +144,7 @@ export function createQuotaView({ root, documentRef, onRefresh, nowFn = () => Da
   function start() {
     if (started) return; started = true;
     button.addEventListener('click', toggle); refresh.addEventListener('click', refreshClick);
+    sourceSelect.addEventListener('change', sourceChange);
     documentRef.addEventListener?.('pointerdown', outside); documentRef.addEventListener?.('keydown', escape);
     if (lastRender) render(lastRender);
   }
@@ -142,6 +152,7 @@ export function createQuotaView({ root, documentRef, onRefresh, nowFn = () => Da
     if (!started) return; started = false; close(); root.hidden = true;
     syncPaceTimer(false); lastRender = null;
     button.removeEventListener?.('click', toggle); refresh.removeEventListener?.('click', refreshClick);
+    sourceSelect.removeEventListener?.('change', sourceChange);
     documentRef.removeEventListener?.('pointerdown', outside); documentRef.removeEventListener?.('keydown', escape);
   }
   return { render, close, start, stop };

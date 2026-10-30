@@ -35,7 +35,7 @@ main.go
 
 搜索和「已打开」是 session controller 内的临时导航状态，只筛选缓存的历史与临时行，不额外请求历史、不改写 provider 基线，也不减少 pane controller 的运行会话选项。搜索匹配会话名/项目目录，结果强制展开但不改写用户的折叠集合；未匹配的历史仍保留身份和名称，用于恢复与状态通知。归档仍使用原有 hidden 语义，独立 dialog 具有背景 inert、焦点循环、Escape/遮罩关闭和来源按钮焦点恢复，搜索不改变来源筛选后的归档总数。
 
-账户额度圆环位于侧栏底栏，设置按钮靠左，Agent 名称和圆环靠右；详情从底栏左边缘向上展开，更新提示另起一行。侧栏收起时圆环随之隐藏。账户额度是独立可选的 `QuotaProvider.AccountQuota(ctx)` 能力，由 `GetAccountQuota(provider, force)` 暴露；不能混入会话/项目的 `UsageProvider` Token 统计。Go 缓存按 provider 合并并发查询，Claude/Codex 的自动刷新与缓存间隔统一为 15 分钟，失败后的自动重试也是 15 分钟；手动刷新最小间隔仍为 30 秒，前端计时器在当前 Agent 查询完成后重新计时；失败最多保留 1 小时的旧数据并标记 `stale/readAt`，确认非订阅登录或已退出登录时清除旧窗口。缓存只在内存中。前端 `quota/controller.js` 以存活的 `state.activeToken` 对应 terminal.provider 为准，跟随聚焦窗格，临时 Codex token 同样适用；无活动窗格时隐藏圆环并停掉轮询，迟到响应只能填充对应 provider 的缓存。圆环彩色弧线使用已用百分比作为 dash 长度，不使用 dash offset，从 12 点方向顺时针增长；灰色轨道表示未使用额度，数字仍显示剩余百分比；均匀使用参考值为 `(resetsAt - now) / windowMinutes` 对应的剩余时间比例，参考刻度位于已流逝比例的位置，对应均匀使用时彩色弧线应到的位置，悬停和详情显示应已用百分比。缺少有效时长/重置时间或窗口已过期时隐藏刻度；每分钟仅在前端更新刻度和参考说明，不额外请求额度，隐藏、API 模式或 view stop 时清理本地计时器。
+账户额度圆环位于侧栏底栏，设置按钮靠左，Agent 名称和圆环靠右；详情从底栏左边缘向上展开，更新提示另起一行。侧栏收起时圆环随之隐藏。账户额度是独立可选的 `QuotaProvider.AccountQuota(ctx)` 能力，由 `GetAccountQuota(provider, force)` 暴露；不能混入会话/项目的 `UsageProvider` Token 统计。Go 缓存按 provider 合并并发查询，Claude/Codex 的自动刷新与缓存间隔统一为 15 分钟，失败后的自动重试也是 15 分钟；手动刷新最小间隔仍为 30 秒，前端计时器在当前 Agent 查询完成后重新计时；失败最多保留 1 小时的旧数据并标记 `stale/readAt`，确认非订阅登录或已退出登录时清除旧窗口。缓存只在内存中。前端 `quota/controller.js` 使用 `quota-source` 偏好（`auto/codex/claude`），由现有 `SetPreference` 写入 `preferences.json` 并在启动读取后恢复；缺省或未知值按 `auto` 处理，不自动改写。`auto` 以存活的 `state.activeToken` 对应 terminal.provider 为准，跟随聚焦窗格，临时 Codex token 同样适用；无活动窗格时隐藏圆环并停掉轮询。固定 `codex/claude` 与会话焦点独立，无活动窗格也显示并查询；选择器在详情顶部，选择后立即生效并自动保存，保留弹窗展开和刷新入口。显示名称、详情、刷新与轮询始终使用所选来源，错误或未登录不会切换来源；迟到响应只能填充对应 provider 的缓存。这里只选择本机 CLI 当前登录账户的额度，不识别转换程序内其他账户。圆环彩色弧线使用已用百分比作为 dash 长度，不使用 dash offset，从 12 点方向顺时针增长；灰色轨道表示未使用额度，数字仍显示剩余百分比；均匀使用参考值为 `(resetsAt - now) / windowMinutes` 对应的剩余时间比例，参考刻度位于已流逝比例的位置，对应均匀使用时彩色弧线应到的位置，悬停和详情显示应已用百分比。缺少有效时长/重置时间或窗口已过期时隐藏刻度；每分钟仅在前端更新刻度和参考说明，不额外请求额度，隐藏、API 模式或 view stop 时清理本地计时器。
 
 Codex 额度查询复用本实例共享原生 app-server 的短生命周期连接，仅发送 initialize、account/read（不主动刷新令牌）和 account/rateLimits/read；优先多 bucket 响应中的 codex 窗口，缺失时兼容 legacy，额外 bucket 保留 scope 并只出现在详情中。按照 `windowDurationMins` 识别 300/10080 分钟，不猜 primary/secondary 的时长。Claude 使用独立内嵌 SDK quota helper 和用户安装的原生 CLI，只发送 get_usage control，异步输入不 yield 任何用户消息；禁用持久化、项目 settings、用户/项目 hooks 和 MCP，不使用会跳过订阅 OAuth 的 `--bare`，不直接读取认证文件。SDK 固定 0.3.293，实验性接口/响应不兼容时返回不可用，无 slash prompt 或私有 HTTP fallback；helper 源码在 `frontend/src/native/claude-quota*.js`，构建脚本同步生成 `claude_quota_helper.cjs` 及 `docs/claude-quota-third-party-notices.txt`。
 
@@ -61,7 +61,7 @@ Claude `settings.disableAllHooks` 禁止用户/项目/插件 hooks 和 status li
 - `sessions/` 处理项目入口、会话列表目录分组、折叠、归档、恢复和新会话 FIFO 配对；`pairing.js` 和 `view.js` 保持纯逻辑/DOM 边界。
 - `settings/` 管理 UI theme、terminal theme、Shell 和设置菜单异步构建。
 - `updates/` 管理检查/可用/应用状态机、进度和更新菜单。
-- `quota/` 管理当前 Agent 的账户额度圆环、刷新缓存与详情提示。
+- `quota/` 管理可选择来源的账户额度圆环、刷新缓存与详情提示。
 - `state/` 是共享业务 state 的唯一来源；controller 不复制 active token、pending 或各类 Map/Set。
 - `styles/` 按 tokens、base、sidebar、menus、quota、terminal 分层；`style.css` 仅负责导入。
 - `frontend/wailsjs/` 是提交到仓库的 Wails-compatible wrapper，`frontend/src/api/backend.js` 是前端唯一绑定边界。

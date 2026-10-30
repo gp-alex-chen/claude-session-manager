@@ -129,3 +129,25 @@ func TestPreferenceValidationAndCorruptFilePreservation(t *testing.T) {
 		t.Fatal("corrupt source changed")
 	}
 }
+
+func TestQuotaSourcePreferenceSurvivesRestartAndRejectsInvalidValues(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.SetPreference("ui-theme", "dark"); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{"codex", "claude", "auto"} {
+		if err := store.SetPreference("quota-source", source); err != nil {
+			t.Fatal(err)
+		}
+		for _, invalid := range []string{"", "unknown", "CODEX", " codex", "null"} {
+			if err := store.SetPreference("quota-source", invalid); err == nil {
+				t.Fatalf("accepted invalid source %q", invalid)
+			}
+		}
+		got, err := NewStore(dir).Preferences()
+		if err != nil || got["quota-source"] != source || got["ui-theme"] != "dark" {
+			t.Fatalf("restart lost preferences: %v %v", got, err)
+		}
+	}
+}

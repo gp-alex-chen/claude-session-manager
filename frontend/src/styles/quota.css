@@ -22,3 +22,7 @@
 .quota-read-time { display: block; margin-top: 6px; }
 .quota-refresh { margin-top: 9px; padding: 4px 8px; color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: 11px; cursor: pointer; }
 .quota-ring-button:focus-visible, .quota-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.quota-source-field { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; }
+.quota-source-select { flex: 1; min-width: 0; padding: 5px 6px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
+.quota-source-note { margin: 0 0 10px; color: var(--text-faint); font-size: 11px; line-height: 1.5; }
+.quota-source-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
