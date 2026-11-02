@@ -16,7 +16,7 @@ const expected = [
   'LoadPreferences', 'SetPreference',
   'GetNotificationConfig', 'SetNotificationConfig', 'GetNotificationStatus', 'TestNotification',
   'ListSessionsForProviders', 'ListHiddenSessionsForProviders',
-  'GetOpenSessionRefs', 'GetAccountQuota',
+  'GetOpenSessionRefs', 'GetAccountQuota', 'GetCodexResetCredits', 'ConsumeCodexResetCredit',
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
@@ -122,4 +122,10 @@ test('directory project wrappers forward arguments unchanged', () => {
     binding,
     /export function SetProjectFavorite\(dir, favorite\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['SetProjectFavorite'\]\(dir, favorite\);\s*\}/,
   );
+});
+
+
+test('reset credit binding forwards offer and selected card unchanged', () => {
+ assert.match(binding, /export function ConsumeCodexResetCredit\(offerToken, creditId\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['ConsumeCodexResetCredit'\]\(offerToken, creditId\);\s*\}/);
+ assert.match(binding, /export function GetCodexResetCredits\(\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetCodexResetCredits'\]\(\);\s*\}/);
 });

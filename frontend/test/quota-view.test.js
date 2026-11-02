@@ -41,8 +41,8 @@ function fixture() {
   const intervals = [];
   let time = now;
   let nextTimer = 0;
-  let refreshes = 0; const sources = [];
-  const view = createQuotaView({ root, documentRef, nowFn: () => time, onRefresh: () => refreshes++, onSourceChange: value => sources.push(value),
+  let refreshes = 0; const sources = []; const uses = [];
+  const view = createQuotaView({ root, documentRef, nowFn: () => time, onRefresh: () => refreshes++, onSourceChange: value => sources.push(value), onConsume: (token, id) => uses.push([token, id]),
     setIntervalFn: (callback, ms) => { intervals.push(ms); timers.set(++nextTimer, callback); return nextTimer; },
     clearIntervalFn: id => timers.delete(id),
   });
@@ -50,7 +50,7 @@ function fixture() {
   const panel = root.children[1];
   const chart = () => button.children[1].children[0];
   const byClass = name => chart().children.filter(node => node.getAttribute('class') === name);
-  return { root, documentRef, view, button, panel, timers, intervals, chart, byClass, sources,
+  return { root, documentRef, view, button, panel, timers, intervals, chart, byClass, sources, uses,
     advance: ms => { time += ms; for (const callback of [...timers.values()]) callback(); },
     refreshes: () => refreshes,
   };
@@ -215,4 +215,37 @@ test('quota popup exposes persistent source selector independent of refresh and 
   f.view.start(); f.view.render({ ...input([]), source: 'auto' });
   select.value = 'codex'; select.dispatch('change');
   assert.deepEqual(f.sources, ['claude', 'codex']); f.view.stop();
+});
+
+
+const findNodes = (node, name) => [ ...(node.className === name ? [node] : []), ...node.children.flatMap(child => findNodes(child, name)) ];
+test('reset cards show authoritative count and require explicit confirmation before consuming', () => {
+ const f = fixture(); f.view.start();
+ const summary = { availableCount: 3, credits: [
+  { id: 'card-one', status: 'available', resetType: 'codexRateLimits', grantedAt: now/1000, expiresAt: now/1000 + 3600, title: '<b>Fixture card</b>', description: 'Fixture description' },
+  { id: 'unknown', status: 'available', resetType: 'unknown', expiresAt: null },
+ ] };
+ const value = { ...input([]), resetDetails: { snapshot: { resetCredits: summary }, offerToken: 'fixture-token' } };
+ f.view.render(value); f.button.dispatch('click');
+ assert.match(textOf(f.panel), /可用 3 张/); assert.match(textOf(f.panel), /部分/); assert.match(textOf(f.panel), /到期/);
+ assert.match(textOf(f.panel), /<b>Fixture card<\/b>/);
+ const buttons = findNodes(f.panel, 'quota-credit-use'); assert.equal(buttons.length, 1);
+ buttons[0].dispatch('click'); assert.deepEqual(f.uses, []);
+ findNodes(f.panel, 'quota-credit-cancel')[0].dispatch('click'); assert.deepEqual(f.uses, []);
+ findNodes(f.panel, 'quota-credit-use')[0].dispatch('click');
+ findNodes(f.panel, 'quota-credit-confirm')[0].dispatch('click');
+ assert.deepEqual(f.uses, [['fixture-token', 'card-one']]);
+ f.view.render({ ...value, provider: 'claude' }); assert.equal(findNodes(f.panel, 'quota-credit-use').length, 0); f.view.stop();
+});
+test('reset card unknown metadata stays distinct from no cards and pending uses only reconcile action', () => {
+ const f = fixture(); f.view.start();
+ f.view.render({ ...input([]), resetDetails: { snapshot: { resetCredits: null }, message: '尚未提供' } });
+ assert.match(textOf(f.panel), /尚未提供/); assert.doesNotMatch(textOf(f.panel), /可用 0 张/);
+ f.view.render({ ...input([]), resetDetails: { snapshot: { resetCredits: { availableCount: 2, credits: null } }, offerToken: 'count-only' } });
+ assert.match(textOf(f.panel), /未提供卡片详情/);
+ findNodes(f.panel, 'quota-credit-use')[0].dispatch('click'); assert.match(textOf(f.panel), /服务端选择/);
+ f.view.close(); assert.equal(findNodes(f.panel, 'quota-credit-confirm').length, 0);
+ f.view.render({ ...input([]), resetDetails: { snapshot: { resetCredits: { availableCount: 0, credits: [] } }, offerToken: 'pending', pending: true, pendingCreditId: 'original' } });
+ assert.equal(findNodes(f.panel, 'quota-credit-use').length, 0);
+ findNodes(f.panel, 'quota-credit-retry')[0].dispatch('click'); assert.deepEqual(f.uses, [['pending', 'original']]); f.view.stop();
 });

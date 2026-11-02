@@ -58,6 +58,8 @@ type App struct {
 	usageScanner        *usage.Scanner
 	providers           *provider.Registry
 	quotaCache          *provider.QuotaCache
+	resetCredits        *provider.ResetCreditService
+	resetCreditsEpoch   uint64
 	completionBadge     *notify.TaskbarBadge
 	notificationProgram *notify.ProgramService
 	sessionCatalog      *session.Catalog

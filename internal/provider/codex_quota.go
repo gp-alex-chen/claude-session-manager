@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,9 @@ type codexQuotaWindow struct {
 }
 
 func (c *CodexRPC) AccountQuota(parent context.Context) (QuotaSnapshot, error) {
+	return c.accountQuota(parent, false)
+}
+func (c *CodexRPC) accountQuota(parent context.Context, details bool) (QuotaSnapshot, error) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	conn, err := c.Open(ctx)
@@ -38,8 +42,17 @@ func (c *CodexRPC) AccountQuota(parent context.Context) (QuotaSnapshot, error) {
 	if _, err = conn.Write([]byte("{\"method\":\"initialized\"}\n")); err != nil {
 		return QuotaSnapshot{}, err
 	}
+	return c.readAccountQuota(r, details)
+}
+
+func (c *CodexRPC) readAccountQuota(r *rpcSession, details bool) (QuotaSnapshot, error) {
+	var err error
 	var responseAccount struct {
-		Account json.RawMessage `json:"account"`
+		Account          json.RawMessage `json:"account"`
+		WorkspaceRouting *struct {
+			ChatGPTAccountID string `json:"chatgptAccountId"`
+			BackendOrigin    string `json:"backendOrigin"`
+		} `json:"workspaceRouting"`
 	}
 	if err = r.call("account/read", map[string]bool{"refreshToken": false}, &responseAccount); err != nil {
 		return QuotaSnapshot{}, err
@@ -72,11 +85,30 @@ func (c *CodexRPC) AccountQuota(parent context.Context) (QuotaSnapshot, error) {
 	q.AuthMode = "subscription"
 	q.Plan = account.PlanType
 	var response struct {
-		Legacy  *codexQuotaBucket            `json:"rateLimits"`
-		Buckets map[string]*codexQuotaBucket `json:"rateLimitsByLimitId"`
+		Legacy       *codexQuotaBucket            `json:"rateLimits"`
+		Buckets      map[string]*codexQuotaBucket `json:"rateLimitsByLimitId"`
+		ResetCredits *ResetCreditsSummary         `json:"rateLimitResetCredits"`
+		AccountID    string                       `json:"accountId"`
 	}
-	if err = r.call("account/rateLimits/read", map[string]any{"excludeResetCreditDetails": true}, &response); err != nil {
+	if err = r.call("account/rateLimits/read", map[string]any{"excludeResetCreditDetails": !details}, &response); err != nil {
 		return q, err
+	}
+	q.ResetCredits = response.ResetCredits
+	if q.ResetCredits != nil && q.ResetCredits.AvailableCount < 0 {
+		return q, errors.New("无效的重置卡数量")
+	}
+	// Keep account binding private and in memory; never return account IDs to the renderer.
+	accountID, origin := response.AccountID, ""
+	consistent := true
+	if routing := responseAccount.WorkspaceRouting; routing != nil {
+		origin = routing.BackendOrigin
+		if routing.ChatGPTAccountID != "" {
+			consistent = accountID == "" || accountID == routing.ChatGPTAccountID
+			accountID = routing.ChatGPTAccountID
+		}
+	}
+	if accountID != "" && consistent {
+		q.AccountKey = fmt.Sprintf("%x", sha256.Sum256([]byte(accountID+"\x00"+origin)))
 	}
 	buckets := response.Buckets
 	if len(buckets) == 0 && response.Legacy != nil {
@@ -125,7 +157,7 @@ func (c *CodexRPC) AccountQuota(parent context.Context) (QuotaSnapshot, error) {
 			q.Windows = append(q.Windows, row)
 		}
 	}
-	if len(q.Windows) == 0 {
+	if len(q.Windows) == 0 && (!details || q.ResetCredits == nil) {
 		return q, errors.New("Codex 未返回可读取的订阅额度")
 	}
 	return q, nil

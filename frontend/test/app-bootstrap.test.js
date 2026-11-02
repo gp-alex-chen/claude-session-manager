@@ -184,6 +184,8 @@ function makeFixture(options = {}) {
   const backend = new Proxy({}, { get: (_, key) => key === 'LoadPreferences' ? (options.LoadPreferences || (async () => ({})))
     : key === 'SetPreference' ? options.SetPreference || (() => {})
     : key === 'SetTaskbarStatus' ? options.SetTaskbarStatus || (() => {})
+    : key === 'GetCodexResetCredits' ? options.GetCodexResetCredits || (async () => ({ snapshot: options.GetAccountQuota ? await options.GetAccountQuota('codex', false) : { provider: 'codex', status: 'unsupported', windows: [] }, offerToken: '' }))
+    : key === 'ConsumeCodexResetCredit' ? options.ConsumeCodexResetCredit || (() => {})
     : key === 'GetAccountQuota' ? options.GetAccountQuota || (() => {}) : () => {} });
   const app = createApplication({
     documentRef,
@@ -497,4 +499,53 @@ test('quota popup selection is wired through application persistence and a fresh
   } finally { restarted.app.stop(); }
   await restarted.app.flushPreferences();
   assert.equal(saved['quota-source'], 'auto');
+});
+
+
+test('Codex reset card popup confirms once and applies the returned account quota', async () => {
+ let uses = 0;
+ const quota = { provider: 'codex', status: 'available', windows: [{ usedPercent: 90, windowMinutes: 300 }], resetCredits: { availableCount: 1, credits: [{ id: 'fixture-card', title: 'Fixture card', resetType: 'codexRateLimits', status: 'available', expiresAt: null }] } };
+ const f = makeFixture({ LoadPreferences: async () => ({ 'quota-source': 'codex' }), GetAccountQuota: async () => quota,
+  GetCodexResetCredits: async () => ({ snapshot: quota, offerToken: 'fixture-offer' }),
+  ConsumeCodexResetCredit: async (token, id) => { assert.equal(token, 'fixture-offer'); assert.equal(id, 'fixture-card'); uses++;
+   return { outcome: 'reset', message: 'fixture success', snapshot: { ...quota, windows: [{ usedPercent: 0, windowMinutes: 300 }], resetCredits: { availableCount: 0, credits: [] } } };
+  },
+ });
+ const find = (node, name) => node.className === name ? node : node.children.map(child => find(child, name)).find(Boolean);
+ try {
+  await f.app.start();
+  const root = f.elements.get('account-quota'); root.children[0].listeners.get('click')();
+  await Promise.resolve(); await Promise.resolve();
+  find(root, 'quota-credit-view').listeners.get('click')();
+  await Promise.resolve(); await Promise.resolve();
+  find(root, 'quota-credit-use').listeners.get('click')(); assert.equal(uses, 0);
+  find(root, 'quota-credit-confirm').listeners.get('click')();
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(uses, 1); assert.equal(find(root, 'quota-credit-count').textContent, '可用 0 张');
+  assert.equal(find(root, 'quota-credit-use'), undefined);
+ } finally { f.app.stop(); }
+});
+
+
+test('opening quota popup and changing sources never reads reset cards until View is clicked', async () => {
+ let reads = 0;
+ const f = makeFixture({ LoadPreferences: async () => ({ 'quota-source': 'codex' }),
+  GetAccountQuota: async provider => ({ provider, status: 'available', windows: [] }),
+  GetCodexResetCredits: async () => { reads++; return { snapshot: { provider: 'codex', status: 'available', windows: [], resetCredits: { availableCount: 0, credits: [] } }, offerToken: '' }; },
+ });
+ const find = (node, name) => node.className === name ? node : node.children.map(child => find(child, name)).find(Boolean);
+ try {
+  await f.app.start(); const root = f.elements.get('account-quota');
+  root.children[0].listeners.get('click')(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(reads, 0);
+  const select = find(root, 'quota-source-select');
+  select.value = 'claude'; select.listeners.get('change')();
+  select.value = 'codex'; select.listeners.get('change')();
+  await Promise.resolve(); await Promise.resolve(); assert.equal(reads, 0);
+  find(root, 'quota-credit-view').listeners.get('click')();
+  await Promise.resolve(); await Promise.resolve(); assert.equal(reads, 1);
+  await f.app.controllers.quota.refresh(true); assert.equal(reads, 1);
+  root.children[0].listeners.get('click')(); root.children[0].listeners.get('click')();
+  await Promise.resolve(); assert.equal(reads, 1);
+ } finally { f.app.stop(); }
 });

@@ -26,3 +26,12 @@
 .quota-source-select { flex: 1; min-width: 0; padding: 5px 6px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
 .quota-source-note { margin: 0 0 10px; color: var(--text-faint); font-size: 11px; line-height: 1.5; }
 .quota-source-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.quota-reset-credits { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.quota-credit { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; overflow-wrap: anywhere; }
+.quota-credit small { color: var(--text-faint); font-size: 11px; }
+.quota-credit-count { font-size: 12px; }
+.quota-credit-confirmation { padding: 8px; border: 1px solid var(--accent); border-radius: var(--radius-sm); font-size: 12px; }
+.quota-credit-view, .quota-credit-use, .quota-credit-retry, .quota-credit-confirm, .quota-credit-cancel { padding: 5px 8px; margin: 3px 4px 3px 0; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: 11px; cursor: pointer; }
+.quota-credit-confirm { color: var(--accent); }
+.quota-credit-view:disabled, .quota-credit-confirm:disabled, .quota-credit-use:disabled, .quota-credit-retry:disabled { opacity: .5; cursor: default; }
+.quota-credit-view:focus-visible, .quota-credit-use:focus-visible, .quota-credit-retry:focus-visible, .quota-credit-confirm:focus-visible, .quota-credit-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

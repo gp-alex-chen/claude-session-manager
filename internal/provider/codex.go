@@ -96,3 +96,16 @@ func (p *CodexAdapter) Rename(ctx context.Context, id, name string) error {
 	p.lastErr = nil
 	return nil
 }
+
+func (p *CodexAdapter) ReadResetCredits(ctx context.Context) (QuotaSnapshot, error) {
+	if provider, ok := p.History.(ResetCreditProvider); ok {
+		return provider.ReadResetCredits(ctx)
+	}
+	return QuotaSnapshot{}, errors.New("当前 Codex 不支持重置卡")
+}
+func (p *CodexAdapter) RedeemResetCredit(ctx context.Context, account, credit, key string, retry bool) (ResetCreditRedemption, error) {
+	if provider, ok := p.History.(ResetCreditProvider); ok {
+		return provider.RedeemResetCredit(ctx, account, credit, key, retry)
+	}
+	return ResetCreditRedemption{}, errors.New("当前 Codex 不支持使用重置卡")
+}

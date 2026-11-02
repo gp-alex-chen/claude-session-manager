@@ -191,8 +191,11 @@ export function createApplication(deps) {
   usageView.render(state);
   const quotaView = createQuotaView({ root: nodes['account-quota'], documentRef,
     onRefresh: () => quotaController?.refresh(true),
-    onSourceChange: (source) => quotaController?.setSource(source) });
-  quotaController = createQuotaController({ state, view: quotaView, storage: preferences, GetAccountQuota: backend.GetAccountQuota });
+    onSourceChange: (source) => quotaController?.setSource(source),
+    onViewResetCredits: () => quotaController?.viewResetCredits(),
+    onConsume: (token, creditId) => quotaController?.consumeResetCredit(token, creditId) });
+  quotaController = createQuotaController({ state, view: quotaView, storage: preferences, GetAccountQuota: backend.GetAccountQuota,
+    GetCodexResetCredits: backend.GetCodexResetCredits, ConsumeCodexResetCredit: backend.ConsumeCodexResetCredit });
   sessionController = createSession({
     state,
     backend: {

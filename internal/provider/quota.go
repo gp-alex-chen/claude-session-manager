@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 )
@@ -16,15 +18,31 @@ type QuotaWindow struct {
 	ResetsAt      int64   `json:"resetsAt,omitempty"`
 	Scope         string  `json:"scope,omitempty"`
 }
+type ResetCredit struct {
+	ID          string `json:"id"`
+	ResetType   string `json:"resetType"`
+	Status      string `json:"status"`
+	GrantedAt   int64  `json:"grantedAt"`
+	ExpiresAt   *int64 `json:"expiresAt"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+type ResetCreditsSummary struct {
+	AvailableCount int64         `json:"availableCount"`
+	Credits        []ResetCredit `json:"credits"`
+}
+
 type QuotaSnapshot struct {
-	Provider ID            `json:"provider"`
-	Status   string        `json:"status"`
-	AuthMode string        `json:"authMode,omitempty"`
-	Plan     string        `json:"plan,omitempty"`
-	Windows  []QuotaWindow `json:"windows"`
-	ReadAt   time.Time     `json:"readAt"`
-	Stale    bool          `json:"stale"`
-	Message  string        `json:"message,omitempty"`
+	Provider     ID                   `json:"provider"`
+	ResetCredits *ResetCreditsSummary `json:"resetCredits,omitempty"`
+	AccountKey   string               `json:"-"`
+	Status       string               `json:"status"`
+	AuthMode     string               `json:"authMode,omitempty"`
+	Plan         string               `json:"plan,omitempty"`
+	Windows      []QuotaWindow        `json:"windows"`
+	ReadAt       time.Time            `json:"readAt"`
+	Stale        bool                 `json:"stale"`
+	Message      string               `json:"message,omitempty"`
 }
 type QuotaProvider interface {
 	AccountQuota(context.Context) (QuotaSnapshot, error)
@@ -58,16 +76,23 @@ func NewQuotaCache(read func(context.Context, ID) (QuotaSnapshot, error)) *Quota
 }
 func cloneQuota(q QuotaSnapshot) QuotaSnapshot {
 	q.Windows = append([]QuotaWindow{}, q.Windows...)
+	if q.ResetCredits != nil {
+		summary := *q.ResetCredits
+		if summary.Credits != nil {
+			summary.Credits = append([]ResetCredit{}, summary.Credits...)
+		}
+		for i := range summary.Credits {
+			if summary.Credits[i].ExpiresAt != nil {
+				expiry := *summary.Credits[i].ExpiresAt
+				summary.Credits[i].ExpiresAt = &expiry
+			}
+		}
+		q.ResetCredits = &summary
+	}
 	return q
 }
 func (c *QuotaCache) Read(ctx context.Context, id ID, force bool) QuotaSnapshot {
-	c.mu.Lock()
-	e := c.entries[id]
-	if e == nil {
-		e = &quotaEntry{}
-		c.entries[id] = e
-	}
-	c.mu.Unlock()
+	e := c.entry(id)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := c.now()
@@ -110,4 +135,63 @@ func (c *QuotaCache) Read(ctx context.Context, id ID, force bool) QuotaSnapshot 
 	}
 	e.value = cloneQuota(q)
 	return cloneQuota(q)
+}
+
+func (c *QuotaCache) entry(id ID) *quotaEntry {
+	c.mu.Lock()
+	e := c.entries[id]
+	if e == nil {
+		e = &quotaEntry{}
+		c.entries[id] = e
+	}
+	c.mu.Unlock()
+	return e
+}
+
+// Serialize an explicit details read or mutation with ordinary reads. Bypass
+// polling TTLs and replace the cache before another reader may use old values.
+func (c *QuotaCache) Refresh(ctx context.Context, id ID, read func(context.Context) (QuotaSnapshot, error)) (QuotaSnapshot, error) {
+	e := c.entry(id)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx.Err() != nil {
+		return QuotaSnapshot{}, ctx.Err()
+	}
+	q, err := read(ctx)
+	if err != nil {
+		e.attempted = time.Time{}
+		e.value.Stale = true
+		e.value.ResetCredits = nil
+		e.value.Message = "状态可能已改变，请刷新额度"
+		return cloneQuota(e.value), err
+	}
+	if q.Status == "" {
+		return QuotaSnapshot{}, errors.New("missing quota status")
+	}
+	q.Provider = id
+	q.ReadAt = c.now()
+	q.Stale = false
+	if q.Windows == nil {
+		q.Windows = []QuotaWindow{}
+	}
+	e.value = cloneQuota(q)
+	e.attempted = c.now()
+	return cloneQuota(q), nil
+}
+
+// A missing count must never be displayed as a known zero balance.
+func (s *ResetCreditsSummary) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		AvailableCount *int64        `json:"availableCount"`
+		Credits        []ResetCredit `json:"credits"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.AvailableCount == nil || *wire.AvailableCount < 0 {
+		return errors.New("invalid reset credit count")
+	}
+	s.AvailableCount = *wire.AvailableCount
+	s.Credits = wire.Credits
+	return nil
 }

@@ -28,7 +28,7 @@ function resetText(window) {
   }) + ' 重置' : '重置时间未知';
 }
 
-export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, nowFn = () => Date.now(),
+export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, onViewResetCredits, onConsume, nowFn = () => Date.now(),
   setIntervalFn = setInterval, clearIntervalFn = clearInterval }) {
   const el = (tag, className, text) => {
     const node = documentRef.createElement(tag);
@@ -56,10 +56,12 @@ export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, 
   sourceField.append(el('span', '', '额度来源'), sourceSelect);
   const sourceNote = el('p', 'quota-source-note', '读取本机所选 CLI 当前登录账户的订阅额度。');
   const content = el('div');
+  const resets = el('div', 'quota-reset-credits'); resets.setAttribute('aria-live', 'polite');
+  let confirmation = null; let resetIdentity = ''; let renderedProvider = null;
   const refresh = el('button', 'quota-refresh', '刷新额度'); refresh.type = 'button';
-  panel.append(sourceField, sourceNote, content, refresh); root.append(button, panel); root.hidden = true;
-  function close() { panel.hidden = true; button.setAttribute('aria-expanded', 'false'); }
-  const toggle = () => { panel.hidden = !panel.hidden; button.setAttribute('aria-expanded', String(!panel.hidden)); };
+  panel.append(sourceField, sourceNote, content, resets, refresh); root.append(button, panel); root.hidden = true;
+  function close() { panel.hidden = true; button.setAttribute('aria-expanded', 'false'); confirmation = null; resets.replaceChildren(); }
+  const toggle = () => { if (!panel.hidden) { close(); return; } panel.hidden = false; button.setAttribute('aria-expanded', 'true'); if (lastRender) render(lastRender); };
   const outside = (event) => { if (!root.contains?.(event.target)) close(); };
   const escape = (event) => { if (event.key === 'Escape' && !panel.hidden) { close(); button.focus?.(); } };
   const refreshClick = () => onRefresh?.();
@@ -81,6 +83,8 @@ export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, 
   function render(input) {
     lastRender = input;
     const { provider, source = 'auto', snapshot, loading, error } = input;
+    if (renderedProvider !== provider) confirmation = null;
+    renderedProvider = provider;
     sourceSelect.value = source;
     root.hidden = !provider;
     if (!provider) { syncPaceTimer(false); close(); return; }
@@ -139,7 +143,74 @@ export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, 
     if (snapshot?.readAt && !String(snapshot.readAt).startsWith('0001')) rows.push(el('small', 'quota-read-time',
       `${stale ? '上次读取' : '读取于'} ${new Date(snapshot.readAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`));
     content.replaceChildren(title, ...rows);
-    refresh.disabled = loading; refresh.textContent = loading ? '查询中…' : '刷新额度';
+    refresh.disabled = loading || (provider === 'codex' && (input.resetLoading || input.resetUsing)); refresh.textContent = loading || input.resetLoading ? '查询中…' : '刷新额度';
+    renderResets(input);
+  }
+  function renderResets(input) {
+    resets.replaceChildren();
+    resets.hidden = input.provider !== 'codex';
+    if (resets.hidden) return;
+    const detail = input.resetDetails;
+    const token = detail?.offerToken || '';
+    if (resetIdentity !== token || input.resetLoading || input.resetUsing) confirmation = null;
+    resetIdentity = token;
+    const summary = Object.hasOwn(input.snapshot || {}, 'resetCredits')
+      ? input.snapshot.resetCredits : detail?.snapshot?.resetCredits;
+    const rows = [el('div', 'quota-details-title', '重置卡')];
+    const action = (text, className, callback) => {
+      const node = el('button', className, text); node.type = 'button';
+      node.disabled = !!input.resetLoading || !!input.resetUsing;
+      node.addEventListener('click', callback); return node;
+    };
+    rows.push(action(input.resetLoading ? '读取中…' : '查看重置卡', 'quota-credit-view', () => onViewResetCredits?.()));
+    if (input.resetMessage) rows.push(el('p', 'quota-message', input.resetMessage));
+    if (detail?.message) rows.push(el('p', 'quota-message', detail.message));
+    if (input.resetUsing) rows.push(el('p', 'quota-message', '正在处理，请勿重复操作…'));
+    else if (input.resetLoading) rows.push(el('p', 'quota-message', '正在读取重置卡…'));
+    if (!detail) {
+      if (!input.resetLoading) rows.push(el('p', 'quota-message', '点击查看，读取当前可用重置卡。'));
+      resets.replaceChildren(...rows); return;
+    }
+    if (Number.isInteger(summary?.availableCount) && summary.availableCount >= 0) {
+      rows.push(el('p', 'quota-credit-count', `可用 ${summary.availableCount} 张`));
+    } else if (!input.resetLoading) rows.push(el('p', 'quota-message', '当前账户或 CLI 尚未提供重置卡信息。'));
+    if (detail?.pending) {
+      rows.push(action('核对上次使用结果', 'quota-credit-retry', () => onConsume?.(token, detail.pendingCreditId || '')));
+    } else if (summary) {
+      const credits = Array.isArray(summary.credits) ? summary.credits : [];
+      for (const credit of credits) {
+        const row = el('div', 'quota-credit');
+        row.append(el('strong', '', credit.title || '重置卡'));
+        row.append(el('small', '', credit.resetType === 'codexRateLimits' ? 'Codex 额度重置' : '未知重置类型'));
+        if (credit.description) row.append(el('p', 'quota-message', credit.description));
+        const expiry = credit.expiresAt;
+        row.append(el('small', '', expiry == null ? '无到期时间' : `到期：${new Date(expiry * 1000).toLocaleString('zh-CN')}`));
+        const eligible = credit.status === 'available' && credit.resetType === 'codexRateLimits'
+          && (expiry == null || (Number.isFinite(expiry) && expiry * 1000 > nowFn()));
+        if (eligible && token && !input.resetUsing) row.append(action('使用这张', 'quota-credit-use', () => {
+          confirmation = { token, id: credit.id, text: credit.title || 'Codex 额度重置卡' }; render(lastRender);
+        }));
+        else if (!eligible) row.append(el('small', '', '当前不可使用'));
+        rows.push(row);
+      }
+      if (summary.availableCount > credits.length && credits.length) rows.push(el('p', 'quota-message', '仅展示服务返回的部分卡片，可用总数以账户返回值为准。'));
+      if (summary.availableCount > 0 && !credits.length && !detail?.pending) {
+        rows.push(el('p', 'quota-message', summary.credits == null ? '当前未提供卡片详情。' : '服务未返回可展示的卡片详情。'));
+        if (token && !input.resetUsing) rows.push(action('使用下一张', 'quota-credit-use', () => {
+          confirmation = { token, id: '', text: '由服务端选择下一张；当前未提供该卡类型和到期信息' }; render(lastRender);
+        }));
+      }
+    }
+    if (confirmation && token === confirmation.token && !input.resetLoading && !input.resetUsing) {
+      const chosen = confirmation;
+      const box = el('div', 'quota-credit-confirmation');
+      box.append(el('p', '', `确认使用 1 张重置卡？${chosen.text}。将请求重置符合条件的额度窗口。`));
+      box.append(action('确认使用', 'quota-credit-confirm', () => {
+        confirmation = null; onConsume?.(chosen.token, chosen.id); render(lastRender);
+      }), action('取消', 'quota-credit-cancel', () => { confirmation = null; render(lastRender); }));
+      rows.push(box);
+    }
+    resets.replaceChildren(...rows);
   }
   function start() {
     if (started) return; started = true;

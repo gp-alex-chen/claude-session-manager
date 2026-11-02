@@ -4,7 +4,7 @@ import { createAppState } from '../src/state/app-state.js';
 import { createQuotaController, activeQuotaProvider } from '../src/quota/controller.js';
 import { ringWindows, remainingPercent } from '../src/quota/view.js';
 
-function fixture(nowFn, storage) {
+function fixture(nowFn, storage, extra = {}) {
   const state = createAppState();
   state.terminals.set('new-codex-1', { provider: 'codex' });
   state.terminals.set('claude-1', { provider: 'claude' });
@@ -12,7 +12,7 @@ function fixture(nowFn, storage) {
   const requests=[];const rendered=[];
   const view={render:(value)=>rendered.push(value), close:()=>{}, start:()=>{}, stop:()=>{}};
   const controller=createQuotaController({state,view,nowFn,storage,GetAccountQuota:(provider,force)=>new Promise(resolve=>requests.push({provider,force,resolve})),
-    setIntervalFn:(callback,ms)=>{tick=callback;intervals.push(ms);timers++;return timers;},clearIntervalFn:()=>{stopped++;}});
+    setIntervalFn:(callback,ms)=>{tick=callback;intervals.push(ms);timers++;return timers;},clearIntervalFn:()=>{stopped++;}, ...extra});
   return {state,controller,requests,rendered,intervals,tick:()=>tick?.(),timers:()=>timers,stopped:()=>stopped,activeTimers:()=>timers-stopped};
 }
 test('quota follows focused provider, deduplicates and ignores another provider late result',async()=>{
@@ -145,4 +145,74 @@ test('missing or invalid saved quota sources fall back to automatic without rewr
     assert.equal(f.requests[0].provider, 'claude');
     assert.deepEqual(writes, []); f.controller.stop();
   }
+});
+
+
+test('reset details and mutation supersede old quota reads without automatic redemption', async () => {
+  const detail = { snapshot: { provider: 'codex', status: 'available', windows: [{ usedPercent: 90 }], resetCredits: { availableCount: 1, credits: [] } }, offerToken: 'fixture-offer' };
+  let finish; let uses = 0;
+  const f = fixture(undefined, undefined, {
+    GetCodexResetCredits: async () => detail,
+    ConsumeCodexResetCredit: () => { uses++; return new Promise(resolve => { finish = resolve; }); },
+  });
+  f.state.activeToken = 'new-codex-1'; f.controller.start();
+  await f.controller.viewResetCredits(); assert.equal(uses, 0);
+  const first = f.controller.consumeResetCredit('fixture-offer', '');
+  const duplicate = f.controller.consumeResetCredit('fixture-offer', '');
+  assert.equal(uses, 1);
+  f.requests[0].resolve({ provider: 'codex', status: 'available', windows: [{ usedPercent: 99 }] });
+  await Promise.resolve(); await Promise.resolve();
+  finish({ outcome: 'reset', message: 'done', snapshot: { provider: 'codex', status: 'available', windows: [{ usedPercent: 0 }], resetCredits: { availableCount: 0, credits: [] } } });
+  await first; await duplicate;
+  assert.equal(f.rendered.at(-1).snapshot.windows[0].usedPercent, 0);
+  assert.equal(f.rendered.at(-1).resetDetails.offerToken, '');
+  assert.equal(f.rendered.at(-1).resetMessage, 'done'); f.controller.stop();
+});
+
+test('uncertain reset retries only the same offer and card after reopening details', async () => {
+  let unknown = false; const calls = [];
+  const f = fixture(undefined, undefined, {
+    GetCodexResetCredits: async () => ({ snapshot: { provider: 'codex', status: 'available', windows: [], resetCredits: { availableCount: unknown ? 0 : 1, credits: [] } }, offerToken: 'same-offer', pending: unknown, pendingCreditId: 'same-card' }),
+    ConsumeCodexResetCredit: async (token, id) => { calls.push([token, id]); unknown = true; return { outcome: calls.length === 1 ? 'unknown' : 'alreadyRedeemed', message: 'fixture result' }; },
+  });
+  f.state.activeToken = 'new-codex-1'; f.controller.start(); await f.controller.viewResetCredits();
+  await f.controller.consumeResetCredit('same-offer', 'same-card');
+  await f.controller.viewResetCredits();
+  assert.equal(f.rendered.at(-1).resetDetails.pending, true);
+  assert.equal(calls.length, 1);
+  await f.controller.consumeResetCredit('same-offer', 'same-card');
+  assert.deepEqual(calls, [['same-offer', 'same-card'], ['same-offer', 'same-card']]); f.controller.stop();
+});
+
+
+test('late superseded quota response clears its loading flag without replacing card details', async () => {
+ const f = fixture(undefined, undefined, { GetCodexResetCredits: async () => ({ snapshot: { provider: 'codex', status: 'available', windows: [{ usedPercent: 12 }] }, offerToken: 'fresh-offer' }) });
+ f.state.activeToken = 'new-codex-1'; f.controller.start(); await f.controller.viewResetCredits();
+ assert.equal(f.rendered.at(-1).loading, true);
+ f.requests[0].resolve({ provider: 'codex', status: 'available', windows: [{ usedPercent: 90 }] });
+ await Promise.resolve(); await Promise.resolve();
+ assert.equal(f.rendered.at(-1).loading, false);
+ assert.equal(f.rendered.at(-1).snapshot.windows[0].usedPercent, 12); f.controller.stop();
+});
+
+
+test('polling and focus syncs never fetch card details without explicit View', async () => {
+ let now = 0; let reads = 0;
+ const f = fixture(() => now, undefined, { GetCodexResetCredits: async () => {
+  reads++; return { snapshot: { provider: 'codex', status: 'available', windows: [], resetCredits: { availableCount: 1, credits: [] } }, offerToken: 'manual-offer' };
+ } });
+ f.state.activeToken = 'new-codex-1'; f.controller.start();
+ assert.equal(reads, 0);
+ await f.controller.viewResetCredits(); assert.equal(reads, 1);
+ f.requests[0].resolve({ provider: 'codex', status: 'available', windows: [] });
+ await Promise.resolve(); await Promise.resolve();
+ now = 900_001; f.controller.sync();
+ assert.equal(reads, 1); assert.equal(f.requests.length, 2);
+ f.requests[1].resolve({ provider: 'codex', status: 'signed_out', windows: [] });
+ await Promise.resolve(); await Promise.resolve();
+ assert.equal(f.rendered.at(-1).resetDetails, null);
+ assert.equal(f.rendered.at(-1).snapshot.status, 'signed_out');
+ const manual = f.controller.refresh(true);
+ f.requests.at(-1).resolve({ provider: 'codex', status: 'signed_out', windows: [] }); await manual;
+ assert.equal(reads, 1); f.controller.stop();
 });

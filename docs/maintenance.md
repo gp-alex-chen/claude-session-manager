@@ -41,6 +41,12 @@ Codex 额度查询复用本实例共享原生 app-server 的短生命周期连�
 
 额度 helper 有内部 15 秒 watchdog、Go 20 秒外层截止、SDK graceful cleanup，并在 Windows Job Object 下运行。启动 gate 在分配 Job 后才放行，关闭 Job 时清理全部后代；shutdown 取消应用生命周期中的查询。`go test -tags integration ./internal/provider -run TestQuotaHelperWindowsProcessLifecycleIntegration -v` 使用真实 Node/SDK 和假 CLI 验证成功、取消及强制杀 helper 时无孤儿进程，不访问真实用户账户。
 
+Codex 重置卡通过官方 `account/rateLimits/read` 的 `rateLimitResetCredits` 读取。背景额度查询继续设置 `excludeResetCreditDetails:true`，保留可空摘要；仅用户点击「查看重置卡」或确认使用后的必要读取设置 false；详情展开、切换来源、普通额度刷新与轮询均不触发明细读取。普通额度读取成功后移除旧的非 pending 卡片详情与 offer，用户需要时再次点击查看。`availableCount` 为服务端总数，`credits:null` 表示只有计数，空数组表示没有返回明细，明细可能被截断；缺少摘要不当作零张。界面仅给 available、codexRateLimits、未到期卡提供使用按钮，未知类型/状态不推测。标题和描述以 textContent 渲染。Go DTO 深拷贝包含到期时间指针的卡列表。
+
+新增 `GetCodexResetCredits()` 和 `ConsumeCodexResetCredit(offerToken, creditId)` 绑定。`ResetCreditService` 在内存中保存随机 offer token，绑定服务返回的 accountId/workspaceRouting 账户和来源指纹；不返回或持久化账户标识、邮箱、卡片明细或幂等键。缺稳定账户标识时仍展示，禁用消费。首次消费重新核对账户与卡片，调用官方 `account/rateLimitResetCredit/consume`；显式确认后生成一次 UUID 并固定 creditId，不能自动降级为另一张。unknown 结果保留原 UUID；人工核对同一请求时不要求原卡仍在可用列表，alreadyRedeemed 视为幂等成功。相同账户存在未知请求时重新读详情返回原 token，不另发新消费。确定 outcome 与刷新结果分离，刷新失败不能将已成功消费改为未知；已完成 token 回放只读最新额度，绝不回放旧快照或再次消费。noCredit/nothingToReset 按官方结果显示。
+
+详情读取、消费与消费后读取共用 `QuotaCache` 的 provider 锁，显式读取绕过普通缓存节流；消费失败或刷新失败标记旧读数不新鲜并移除旧卡信息。前端以 provider revision 防止旧查询回写，旧请求完成仍清理 loading；在使用中禁用消费按钮，不自动重试。关闭弹层、切换来源和停止界面都会取消未确认的动作。结果未知的核对能力仅限本次应用生命周期；应用重启使旧 token 失效，不自动恢复或重试，重新查询并由用户再次确认。公开协议的读取与消费不是原子操作，不能完全排除外部客户端恰在最后核对与消费之间切换账户；验证和测试不消耗真实卡片。
+
 Claude `settings.disableAllHooks` 禁止用户/项目/插件 hooks 和 status line，但管理员托管策略中的 hooks 仍受 CLI 自身规则约束。设置 `CLAUDE_QUOTA_NATIVE_INTEGRATION=1` 后运行 `TestClaudeNativeQuotaControlIntegration`，可用已安装 CLI、临时 HOME/config、假 API key 和 loopback HTTP 验证原生控制接口不会调用模型；此测试不验证真实订阅账户的返回值。
 
 `QuotaSnapshot.authMode` 显式标识已确认的 API/订阅模式。Codex 只在 account.type 为 apiKey 时确认 API；Claude 使用 SDK 初始化的 accountInfo 元数据确认已知 API key 来源或云 API backend，未知来源、未登录及单独 rate_limits_available=false 不作为 API 证据。已确认 API 返回 unsupported 并保留提示；Go 对非 force 查询直接返回缓存，前端停止该 provider 的轮询，焦点切换不重复启动 helper。手动 force 查询仍遵循 30 秒最小间隔；刷新失败保留停查状态，成功识别订阅或其他登录状态后退出 API 停查。暂停状态只在内存中，重启应用会重新识别；当前短生命周期查询不监听登录变化，切换登录后需点击手动刷新。

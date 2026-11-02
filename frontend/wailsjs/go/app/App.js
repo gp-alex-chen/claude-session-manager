@@ -46,3 +46,5 @@ export function SetCompletionBadge(count, force) { return window['go']['app']['A
 export function SetTaskbarStatus(count, attention, force) { return window['go']['app']['App']['SetTaskbarStatus'](count, attention, force); }
 export function SetNotificationAttention(count, waiting, force) { return window['go']['app']['App']['SetNotificationAttention'](count, waiting, force); }
 export function ReferenceCodexSession(token, key) { return window['go']['app']['App']['ReferenceCodexSession'](token, key); }
+export function GetCodexResetCredits() { return window['go']['app']['App']['GetCodexResetCredits'](); }
+export function ConsumeCodexResetCredit(offerToken, creditId) { return window['go']['app']['App']['ConsumeCodexResetCredit'](offerToken, creditId); }
