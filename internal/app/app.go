@@ -40,32 +40,44 @@ type pendingAdoption struct {
 }
 
 type App struct {
-	launchMu            sync.Mutex
-	renameMu            sync.Mutex
-	lifecycleMu         sync.Mutex
-	notificationMu      sync.Mutex
-	adoptionMu          sync.Mutex
-	ctx                 context.Context
-	cancelLifecycle     context.CancelFunc
-	terms               *terminal.Manager
-	store               *state.Store
-	watcher             *agent.Watcher
-	lifecycleID         uint64
-	lookPath            func(string) (string, error)
-	debugLog            func(string)
-	startPTYFn          func(string, string, string) error
-	chooseDirFn         func(context.Context, runtime.OpenDialogOptions) (string, error)
-	usageScanner        *usage.Scanner
-	providers           *provider.Registry
-	quotaCache          *provider.QuotaCache
-	resetCredits        *provider.ResetCreditService
-	resetCreditsEpoch   uint64
-	completionBadge     *notify.TaskbarBadge
-	notificationProgram *notify.ProgramService
-	sessionCatalog      *session.Catalog
-	pendingAdoptions    map[string]*pendingAdoption
-	cancelledAdoptions  map[string]struct{}
-	statusChanged       chan struct{}
+	launchMu               sync.Mutex
+	restoreMu              sync.Mutex
+	restoreBatches         map[string]*sessionRestoreBatch
+	startupSavedIDs        []string
+	startupSavedReady      bool
+	startupSavedGeneration uint64
+	startupSavedError      error
+	startupClosedIDs       map[string]bool
+	startupStartedIDs      map[string]bool
+	agentLaunchMu          sync.Mutex
+	agentLaunches          map[string]*pendingAgentLaunch
+	renameMu               sync.Mutex
+	lifecycleMu            sync.Mutex
+	notificationMu         sync.Mutex
+	adoptionMu             sync.Mutex
+	ctx                    context.Context
+	cancelLifecycle        context.CancelFunc
+	terms                  *terminal.Manager
+	store                  *state.Store
+	watcher                *agent.Watcher
+	lifecycleID            uint64
+	stopping               bool
+	stoppingDone           chan struct{}
+	lookPath               func(string) (string, error)
+	debugLog               func(string)
+	startPTYFn             func(string, string, string) error
+	chooseDirFn            func(context.Context, runtime.OpenDialogOptions) (string, error)
+	usageScanner           *usage.Scanner
+	providers              *provider.Registry
+	quotaCache             *provider.QuotaCache
+	resetCredits           *provider.ResetCreditService
+	resetCreditsEpoch      uint64
+	completionBadge        *notify.TaskbarBadge
+	notificationProgram    *notify.ProgramService
+	sessionCatalog         *session.Catalog
+	pendingAdoptions       map[string]*pendingAdoption
+	cancelledAdoptions     map[string]struct{}
+	statusChanged          chan struct{}
 }
 
 func NewApp() *App {
@@ -124,6 +136,7 @@ func (a *App) startup(ctx context.Context) {
 	}, func(list []agent.AgentInfo) { a.observeNotificationSource(ctx, "claude", list) })
 	// Register the candidate before stopping the old watcher. Stop may wait on
 	// its fetch loop, so it must never run while lifecycleMu is held.
+	a.launchMu.Lock()
 	a.lifecycleMu.Lock()
 	old := a.watcher
 	oldCancel := a.cancelLifecycle
@@ -132,9 +145,17 @@ func (a *App) startup(ctx context.Context) {
 	a.lifecycleID++
 	lifecycleID := a.lifecycleID
 	a.ctx = ctx
+	a.stopping = false
+	_, startupRefsErr := a.captureStartupRestoreReferencesLocked()
+	a.stoppingDone = nil
 	a.cancelLifecycle = cancel
 	a.watcher = watcher
 	a.lifecycleMu.Unlock()
+	a.launchMu.Unlock()
+	a.invalidateSessionRestoreGenerations(lifecycleID, true, false)
+	if startupRefsErr != nil {
+		a.log("读取启动恢复清单失败: " + startupRefsErr.Error())
+	}
 	if oldCancel != nil {
 		oldCancel()
 	}
@@ -176,6 +197,13 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 func (a *App) shutdown(context.Context) {
+	generation, done, owner := a.claimShutdownStop()
+	if !owner {
+		return
+	}
+	defer a.completeStop(generation, done, false)
+	a.cancelAgentLaunches(generation)
+	refs := a.antigravityRestoreReferences()
 	a.launchMu.Lock()
 	var notifications *notify.ProgramService
 	defer func() {
@@ -184,6 +212,12 @@ func (a *App) shutdown(context.Context) {
 			notifications.Close()
 		}
 	}()
+	a.lifecycleMu.Lock()
+	current := a.lifecycleID == generation && a.stopping
+	a.lifecycleMu.Unlock()
+	if !current {
+		return
+	}
 	// Stop delivery before shutdown snapshots or terminal exits can be observed.
 	a.lifecycleMu.Lock()
 	notifications = a.notificationProgram
@@ -211,7 +245,9 @@ func (a *App) shutdown(context.Context) {
 	if watcher != nil {
 		watcher.Stop()
 	}
-	a.closeAllTerms()
+	if err := a.closeAllTermsWithNativeReferences(refs, generation); err != nil {
+		a.log("保存退出恢复清单失败: " + err.Error())
+	}
 	a.closeProviderServices()
 	if cancel != nil {
 		cancel()
@@ -253,6 +289,11 @@ func (a *App) filteredProviderSessions(hidden bool, ids []string) (ProviderSessi
 	return a.listProviderSessions(hidden, out), nil
 }
 func (a *App) listProviderSessions(wantHidden bool, ids []provider.ID) ProviderSessionsResult {
+	list, succeeded, warnings := a.providers.QuerySessions(a.runtimeContext(), ids)
+	return a.formatProviderSessions(wantHidden, list, succeeded, warnings)
+}
+
+func (a *App) formatProviderSessions(wantHidden bool, list []provider.Session, succeeded []provider.ID, warnings []error) ProviderSessionsResult {
 	result := ProviderSessionsResult{Sessions: []SessionInfo{}, SucceededProviders: []string{}, Warnings: []string{}}
 	st, err := a.store.Load()
 	if err != nil {
@@ -260,7 +301,6 @@ func (a *App) listProviderSessions(wantHidden bool, ids []provider.ID) ProviderS
 	}
 	hidden, aliases := st.HiddenSet(), st.Aliases
 	out := []SessionInfo{}
-	list, succeeded, warnings := a.providers.QuerySessions(a.runtimeContext(), ids)
 	for _, id := range succeeded {
 		result.SucceededProviders = append(result.SucceededProviders, string(id))
 	}
@@ -283,7 +323,11 @@ func (a *App) listProviderSessions(wantHidden bool, ids []provider.ID) ProviderS
 		if n := aliases[key]; n != "" && !nativeRename {
 			name = n
 		}
-		out = append(out, SessionInfo{ID: key, Dir: s.Dir, Name: name, Time: s.Time.Format("01-02 15:04"), Provider: string(s.Ref.Provider), RawID: s.Ref.ID})
+		when := "时间未知"
+		if !s.Time.IsZero() {
+			when = s.Time.Format("01-02 15:04")
+		}
+		out = append(out, SessionInfo{ID: key, Dir: s.Dir, Name: name, Time: when, Provider: string(s.Ref.Provider), RawID: s.Ref.ID})
 	}
 	result.Sessions = out
 	return result
@@ -314,9 +358,10 @@ func (a *App) StartSession(id, dir string) (string, error) {
 		return "", err
 	}
 	if a.terms.IsRunning(id) {
-		if !a.terms.IsSession(id, id) {
-			return "", errors.New("此终端已切换到其他 Codex 会话，请先关闭该终端再恢复原会话")
+		if !a.agentRuntimeMatches(id, ref) {
+			return "", errors.New("此终端已切换会话或身份不明确，请先关闭该终端再恢复原会话")
 		}
+		a.noteStartupSessionStarted(id)
 		return id, nil
 	}
 	if err := a.startAgentPTY(id, ref.Provider, &ref, dir); err != nil {
@@ -360,9 +405,7 @@ func (a *App) TermWrite(token, b64 string) {
 func (a *App) TermResize(token string, cols, rows int) { a.terms.Resize(token, cols, rows) }
 func (a *App) TermKill(token string) {
 	a.cancelPendingAdoption(token)
-	if a.terms != nil {
-		a.terms.Kill(token)
-	}
+	a.killAgentRuntime(token)
 }
 func (a *App) NotifyBeep() { notify.Beep() }
 func (a *App) persistOpenSessions() error {
@@ -399,14 +442,21 @@ func (a *App) renderAgentCommand(agentID provider.ID, spec provider.LaunchSpec) 
 	// Preserve legacy Claude startup; new providers fail before a PTY is
 	// created when their executable is unavailable.
 	if agentID != provider.Claude {
-		if agentID == provider.Codex && spec.Executable != "" {
+		if spec.Executable != "" {
 			st, err := os.Stat(spec.Executable)
 			if !filepath.IsAbs(spec.Executable) || err != nil || st.IsDir() {
-				return "", errors.New("已解析的 Codex 程序不可用，请检查安装或重新打开终端")
+				return "", fmt.Errorf("已解析的 %s 程序不可用，请检查安装或重新打开终端", agentID)
 			}
 		} else if _, err := a.lookPath(spec.Command); err != nil {
 			return "", fmt.Errorf("未检测到 %s CLI，请先安装并加入 PATH", agentID)
 		}
+	}
+	if agentID == provider.Antigravity {
+		shell := a.GetShell()
+		if shell == "pwsh" && !a.shellAvailable("pwsh") {
+			shell = "cmd"
+		}
+		return provider.AntigravityShellCommand(shell, spec)
 	}
 	command := spec.Command
 	if len(spec.Args) > 0 {

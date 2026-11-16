@@ -57,6 +57,8 @@ export function createSessionController(deps) {
   let hiddenRequestGeneration = 0;
   let newLaunchInFlight = false;
   let filterReady = false;
+  let initializationRun = null;
+  const activeRestoreTokens = new Set();
   let searchQuery = '';
   let openedOnly = false;
   let archivedSessions = [];
@@ -75,7 +77,10 @@ export function createSessionController(deps) {
       if (token.startsWith('new-') && provider !== 'claude' && !state.newToReal.has(token)) continue;
       ids.add(provider);
     }
-    for (const item of state.pendingNew) if (!item.provider || item.provider === 'claude') ids.add('claude');
+    for (const item of state.pendingNew) {
+      if (!item.provider || item.provider === 'claude') ids.add('claude');
+      else if (item.provider === 'antigravity' && item.observedID) ids.add('antigravity');
+    }
     for (const id of restoringIDs) ids.add(providerForID(id));
     return [...ids].sort();
   }
@@ -151,12 +156,22 @@ export function createSessionController(deps) {
   }
 
   function showTerminal(token, options = {}) {
-    if (options.show === false) {
+    const { backgroundRestore, restoreToken, ...display } = options;
+    if (backgroundRestore && paneController) {
+      const ids = paneController.getPaneFillOrder?.() || paneController.getVisiblePaneIds?.() || [];
+      const vacant = id => !state.panes.find(pane => pane.id === id)?.token
+        || state.panes.find(pane => pane.id === id)?.token === token;
+      const target = display.paneId && ids.includes(display.paneId) && vacant(display.paneId)
+        ? display.paneId : ids.find(vacant);
+      if (!target || display.show === false) { paneController.refresh?.(); return true; }
+      display.paneId = target;
+    }
+    if (display.show === false) {
       paneController?.refresh?.();
       return true;
     }
-    if (paneController?.showSession) return paneController.showSession(token, options);
-    if (options.focus !== false) terminalController.activate(token);
+    if (paneController?.showSession) return paneController.showSession(token, display);
+    if (display.focus !== false) terminalController.activate(token);
     return true;
   }
 
@@ -194,19 +209,35 @@ export function createSessionController(deps) {
     if (existing) terminalController.disposeSession(token);
     terminalController.openTab(token, sessionInfo.name);
     const opened = state.terminals.get(token);
+    const launchLifecycle = adoptionGeneration;
+    state.closedTokens.delete(token);
+    state.closedTokens.delete(sessionInfo.id);
     if (opened) {
       opened.dir = sessionInfo.dir;
       opened.provider = sessionInfo.provider || 'claude';
     }
     try {
-      await backend.StartSession(sessionInfo.id, sessionInfo.dir);
-      setStatus('已恢复: ' + sessionInfo.name, 'ok');
+      if (options.restoreToken && typeof backend.RestoreSession === 'function') {
+        setStatus('正在恢复: ' + sessionInfo.name, 'ok');
+        await backend.RestoreSession(options.restoreToken, sessionInfo.id);
+      } else await backend.StartSession(sessionInfo.id, sessionInfo.dir);
+      if (state.terminals.get(token) !== opened || opened?.exited || state.closedTokens.has(token) || launchLifecycle !== adoptionGeneration) {
+        if (!state.terminals.has(token) || state.terminals.get(token) === opened) {
+          await Promise.resolve(backend.TermKill?.(token)).catch(() => {});
+        }
+        return false;
+      }
+      if (sessionInfo.provider === 'antigravity') nativeSessions.set(token, { ...sessionInfo });
+      setStatus(sessionInfo.provider === 'antigravity'
+        ? 'Antigravity 终端已打开，等待原生会话确认；退出时核对并保存，下次启动自动打开'
+        : '已恢复: ' + sessionInfo.name, 'ok');
       state.unreadSessions.delete(sessionInfo.id);
       agentController.renderUnreadMarks();
       showTerminal(token, showOptions);
       renderNavigation();
       return true;
     } catch (error) {
+      if (state.terminals.get(token) !== opened || state.closedTokens.has(token) || launchLifecycle !== adoptionGeneration) return false;
       setStatus('恢复失败: ' + error, 'warn');
       terminalController.disposeSession(token);
       return false;
@@ -281,8 +312,21 @@ export function createSessionController(deps) {
     }
   }
 
-  // Backend has already validated and persisted this native thread identity.
-  // Runtime tokens remain unchanged for PTY data, resize, kill and usage.
+  function syncAntigravityHistoryTitle(pending) {
+    if (!pending || pending.provider !== 'antigravity' || pending.statusLineTitle) return false;
+    const terminal = state.terminals.get(pending.token);
+    if (!terminal || terminal.exited || state.closedTokens.has(pending.token)) return false;
+    const history = lastLoaded.find(item => item.provider === 'antigravity' && item.id === pending.observedID
+      && dirIdentity(item.dir) === dirIdentity(pending.dir));
+    if (!history?.name || (pending.name === history.name && terminal.labelText === history.name)) return false;
+    pending.name = history.name;
+    terminal.labelText = history.name;
+    state.sessionNames.set(pending.token, history.name);
+    return true;
+  }
+
+  // Antigravity observations update display metadata without adoption. Only
+  // Codex's confirmed branch below promotes its persisted native identity.
   function handleAgentIdentities(list) {
     if (!identitiesEnabled) return;
     latestAgentIdentities = Array.isArray(list) ? list : [];
@@ -291,6 +335,30 @@ export function createSessionController(deps) {
       const token = info?.runtimeToken;
       const id = info?.sessionId;
       const terminal = state.terminals.get(token);
+      if (info?.provider === 'antigravity' && terminal && !terminal.exited && !state.closedTokens.has(token)) {
+        const pending = state.pendingNew.find(item => item.token === token && item.provider === 'antigravity');
+        if (pending && id && pending.observedID !== id) {
+          pending.observedID = id;
+          delete pending.statusLineTitle;
+          changed = true;
+        }
+        if (pending && info.name) pending.statusLineTitle = info.name;
+        if (info.name && nativeSessions.has(token)) {
+          nativeSessions.set(token, { ...nativeSessions.get(token), name: info.name });
+        }
+        if (info.name && terminal.labelText !== info.name) {
+          if (pending) pending.name = info.name;
+          else if (id === token) {
+            const history = lastLoaded.find(item => item.id === token && item.provider === 'antigravity');
+            if (history) history.name = info.name;
+          }
+          terminal.labelText = info.name;
+          state.sessionNames.set(token, info.name);
+          changed = true;
+        }
+        if (!info.name && syncAntigravityHistoryTitle(pending)) changed = true;
+        continue;
+      }
       if (info?.provider !== 'codex' || !id?.startsWith('codex:')
         || !terminal || terminal.exited || state.closedTokens.has(token)) continue;
       if (!info.restorable) {
@@ -366,21 +434,52 @@ export function createSessionController(deps) {
     return flushPendingAdoptions();
   }
 
-  async function readHistory(ids) {
-    const response = typeof backend.ListSessionsForProviders === 'function'
-      ? await backend.ListSessionsForProviders(ids) : await backend.ListSessions();
-    // The array form only serves the legacy boundary used by older callers.
+  function historyResponse(response, ids) {
     if (Array.isArray(response)) return { sessions: response, succeededProviders: ids, warnings: [] };
     if (!response || !Array.isArray(response.sessions) || !Array.isArray(response.succeededProviders)) throw new Error('会话来源查询返回无效结果');
     return response;
   }
 
-  async function commitHistory(result, request, selection) {
-    if (request !== requestGeneration || selection !== filterGeneration) return false;
+  async function readHistory(ids, restoreBatches = null, onResult = null) {
+    // Older wrappers retain their combined request contract. The current
+    // boundary supports isolated requests with a single frontend run owner.
+    if (typeof backend.BeginSessionRestore !== 'function' || typeof backend.ListSessionsForProviders !== 'function') {
+      const response = typeof backend.ListSessionsForProviders === 'function'
+        ? await backend.ListSessionsForProviders(ids) : await backend.ListSessions();
+      const result = historyResponse(response, ids);
+      await onResult?.(result);
+      return result;
+    }
+    const settled = await Promise.allSettled(ids.map(async id => {
+      let result;
+      try {
+        if (restoreBatches && id === 'antigravity') {
+          const batch = await backend.BeginSessionRestore(id);
+          if (typeof batch?.token !== 'string' || !batch.token) throw new Error('启动恢复返回无效凭据');
+          restoreBatches.set(id, batch.token);
+          activeRestoreTokens.add(batch.token);
+          result = historyResponse(batch.history, [id]);
+        } else result = historyResponse(await backend.ListSessionsForProviders([id]), [id]);
+        result = { sessions: result.sessions.filter(row => (row.provider || 'claude') === id),
+          succeededProviders: result.succeededProviders.filter(provider => provider === id), warnings: result.warnings || [] };
+      } catch (error) {
+        result = { sessions: [], succeededProviders: [], warnings: [id + ': ' + error] };
+      }
+      await onResult?.(result);
+      return result;
+    }));
+    const rejected = settled.find(item => item.status === 'rejected');
+    if (rejected) throw rejected.reason;
+    const parts = settled.map(item => item.value);
+    return { sessions: parts.flatMap(item => item.sessions), succeededProviders: parts.flatMap(item => item.succeededProviders), warnings: parts.flatMap(item => item.warnings || []) };
+  }
+
+  async function commitHistory(result, request, selection, isCurrent = () => true) {
+    if (!isCurrent() || request !== requestGeneration || selection !== filterGeneration) return false;
     if (result.succeededProviders.includes('claude')) {
       await pairNewSessions(result.sessions.filter((item) => (item.provider || 'claude') === 'claude'));
     }
-    if (request !== requestGeneration || selection !== filterGeneration) return false;
+    if (!isCurrent() || request !== requestGeneration || selection !== filterGeneration) return false;
     for (const id of result.succeededProviders) {
       historyByProvider.set(id, result.sessions.filter((item) => (item.provider || 'claude') === id));
     }
@@ -393,30 +492,44 @@ export function createSessionController(deps) {
       ...lastLoaded.filter((item) => !updated.has(item.provider || 'claude'))];
   }
 
-  async function loadSessions({ quiet = false, skipUnchanged = false } = {}) {
+  // A UI refresh may supersede rendering, but startup still needs the exact
+  // response it requested to match persisted IDs. Keep those two results apart.
+  async function loadHistorySnapshot({ quiet = false, skipUnchanged = false, isCurrent = () => true, restoreBatches = null, onHistory = null } = {}) {
     const request = ++requestGeneration;
     const selection = filterGeneration;
+    let result = null;
     try {
-      const result = await readHistory(historyProviders());
-      if (!(await commitHistory(result, request, selection))) return null;
-      const list = mergedHistory(result);
-      sessionsLoaded = true;
-      if (!skipUnchanged || listSig(list) !== lastListSignature) renderSessions(list);
-      if (result.warnings?.length) {
-        if (!quiet) setStatus('读取会话失败: ' + result.warnings.join('; '), 'warn');
-        return false;
-      }
-      return true;
+      result = await readHistory(historyProviders(), restoreBatches, async partial => {
+        if (!isCurrent()) return;
+        if (await commitHistory(partial, request, selection, isCurrent)) {
+          if (!isCurrent()) return;
+          const list = mergedHistory(partial);
+          sessionsLoaded = true;
+          if (!skipUnchanged || listSig(list) !== lastListSignature) renderSessions(list);
+          if (!quiet && partial.warnings?.length) setStatus('读取会话失败: ' + partial.warnings.join('; '), 'warn');
+        }
+        // A filter may supersede rendering without revoking startup's local
+        // response. Other providers keep querying while this one restores.
+        if (isCurrent()) await onHistory?.(partial);
+      });
+      if (!isCurrent()) return { status: null, result: null };
+      if (request !== requestGeneration || selection !== filterGeneration) return { status: null, result };
+      return { status: !result.warnings?.length, result };
     } catch (error) {
-      if (request !== requestGeneration || selection !== filterGeneration) return null;
+      if (!isCurrent()) return { status: null, result: null };
+      if (request !== requestGeneration || selection !== filterGeneration) return { status: null, result };
       if (quiet) throw error;
-      if (!quiet) setStatus('加载会话失败: ' + error, 'warn');
-      return false;
+      setStatus('加载会话失败: ' + error, 'warn');
+      return { status: false, result };
     }
   }
 
+  async function loadSessions(options) {
+    return (await loadHistorySnapshot(options)).status;
+  }
+
   async function autoRefreshSessions() {
-    if (!filterReady || newLaunchInFlight || refreshInFlight) return;
+    if (!filterReady || initializationRun || newLaunchInFlight || refreshInFlight) return;
     refreshInFlight = true;
     try { await loadSessions({ quiet: true, skipUnchanged: true }); }
     finally { refreshInFlight = false; }
@@ -429,6 +542,7 @@ export function createSessionController(deps) {
       state.sessionNames.set(session.id, session.name);
       state.sessionDirs.set(session.id, session.dir);
       state.sessionProviders.set(session.id, session.provider || 'claude');
+      if (session.provider === 'antigravity' && nativeSessions.has(session.id)) nativeSessions.set(session.id, { ...session });
       const token = state.realToNew.get(session.id);
       if (token && nativeSessions.has(token)) {
         nativeSessions.set(token, { ...session });
@@ -437,11 +551,16 @@ export function createSessionController(deps) {
         state.sessionNames.set(token, session.name);
       }
     }
+    let antigravityTitleChanged = false;
+    for (const pending of state.pendingNew) {
+      if (syncAntigravityHistoryTitle(pending)) antigravityTitleChanged = true;
+    }
     renderNavigation();
     onProjects?.(visibleHistory(list));
     refreshHidden(true);
     agentController.refreshAgents();
     paneController?.setSessionOptions?.(navigationSessions());
+    if (antigravityTitleChanged) paneController?.refresh?.();
   }
 
   function navigationSessions() {
@@ -449,13 +568,15 @@ export function createSessionController(deps) {
       if (!state.terminals.has(token) || state.terminals.get(token)?.exited) nativeSessions.delete(token);
     }
     const pendingTokens = new Set(state.pendingNew.filter(item => item.provider === 'codex').map(item => item.token));
+    const observedAntigravity = new Set(state.pendingNew.filter(item => item.provider === 'antigravity').map(item => item.observedID).filter(Boolean));
     const historyIDs = new Set(lastLoaded.filter(item => !pendingTokens.has(item.id)).map(item => item.id));
     const native = [...nativeSessions.values()].filter(item => !historyIDs.has(item.id));
     const temporarySessions = state.pendingNew
       .filter((item) => item.provider && item.provider !== 'claude')
       .map((item) => ({ id: item.token, dir: item.dir, name: item.name, provider: item.provider,
-        temporary: true, time: item.identityKnown ? '等待 Codex 保存会话 · 暂不恢复' : '正在建立 Codex 会话' }));
-    return [...visibleHistory(lastLoaded).filter(item => !pendingTokens.has(item.id)), ...native, ...temporarySessions];
+        temporary: true, time: item.provider === 'antigravity' ? '退出时确认保存 · 下次启动恢复'
+          : item.identityKnown ? '等待 Codex 保存会话 · 暂不恢复' : '正在建立 Codex 会话' }));
+    return [...visibleHistory(lastLoaded).filter(item => !pendingTokens.has(item.id) && !observedAntigravity.has(item.id)), ...native, ...temporarySessions];
   }
 
   function isOpened(session) {
@@ -547,8 +668,11 @@ export function createSessionController(deps) {
       if (provider !== 'claude') renderSessions(lastLoaded);
       else renderNavigation();
       showTerminal(token, targetPaneId ? { paneId: targetPaneId } : {});
-      setStatus(provider === 'claude' ? '已启动新会话: ' + leafOf(dir)
-        : providerName + ' 新终端已打开，确认会话身份后自动加入恢复清单', 'ok');
+      setStatus(provider === 'antigravity' ? 'Antigravity 终端已打开；退出时确认保存后，下次启动自动打开'
+        : provider === 'claude' ? '已启动新会话: ' + leafOf(dir)
+        : state.agentProviders.get(provider)?.newSessionRestorable === false
+          ? providerName + ' 临时终端已打开，重启不自动恢复'
+          : providerName + ' 新终端已打开，确认会话身份后自动加入恢复清单', 'ok');
     } catch (error) {
       if (lifecycle === adoptionGeneration) setStatus('新建失败: ' + error, 'warn');
     } finally {
@@ -556,17 +680,18 @@ export function createSessionController(deps) {
     }
   }
 
-  async function loadAgentProviders() {
+  async function loadAgentProviders(isCurrent) {
     if (typeof backend.ListAgentProviders !== 'function') return;
     try {
       const list = await backend.ListAgentProviders();
+      if (!isCurrent()) return;
       if (!Array.isArray(list) || !list.length) throw new Error('agent 列表为空');
       const valid = list.filter((item) => item?.id && item?.name);
       if (!valid.length) throw new Error('agent 列表为空');
       providers = valid;
       state.agentProviders = new Map(providers.map((item) => [item.id, item]));
     } catch (error) {
-      setStatus('加载 agent 列表失败: ' + error, 'warn');
+      if (isCurrent()) setStatus('加载 agent 列表失败: ' + error, 'warn');
     }
   }
 
@@ -854,67 +979,96 @@ export function createSessionController(deps) {
   }
 
   async function initialize() {
+    const run = {};
+    const restoreBatches = new Map();
+    initializationRun = run;
+    restoringIDs.clear();
     const lifecycle = adoptionGeneration;
-    await loadAgentProviders();
-    if (lifecycle !== adoptionGeneration) return;
-    restoreProviderFilter();
-    filterReady = true;
-    await loadProjects();
-    await loadProjectFavorites();
-    await agentController.refreshAgents();
-    if (lifecycle !== adoptionGeneration) return;
-    let open;
+    const isCurrent = () => initializationRun === run && lifecycle === adoptionGeneration;
     try {
-      if (typeof backend.GetOpenSessionRefs === 'function') {
-        const refs = await backend.GetOpenSessionRefs();
-        if (lifecycle !== adoptionGeneration) return;
-        open = [];
-        for (const ref of Array.isArray(refs) ? refs : []) {
-          if (!state.agentProviders.has(ref.provider)) continue;
-          state.sessionProviders.set(ref.id, ref.provider);
-          open.push(ref.id);
-        }
-      } else open = await backend.GetOpenSessions();
-    } catch (error) {
-      if (lifecycle !== adoptionGeneration) return;
-      open = [];
-      setStatus('读取待恢复会话失败: ' + error, 'warn');
-    }
-    if (lifecycle !== adoptionGeneration) return;
-    open = Array.isArray(open) ? open : [];
-    for (const id of open) restoringIDs.add(id);
-    await loadSessions();
-    if (lifecycle !== adoptionGeneration) { restoringIDs.clear(); return; }
-    const paneIds = paneController?.getPaneFillOrder?.()
-      || paneController?.getVisiblePaneIds?.()
-      || [];
-    let restoreIndex = 0;
-    let restored = false;
-    for (const id of open) {
-      if (lifecycle !== adoptionGeneration) break;
-      const session = lastLoaded.find((item) => item.id === id);
-      if (!session) continue;
+      await loadAgentProviders(isCurrent);
+      if (!isCurrent()) return;
+      restoreProviderFilter();
+      filterReady = true;
+      await loadProjects();
+      if (!isCurrent()) return;
+      await loadProjectFavorites();
+      if (!isCurrent()) return;
+      await agentController.refreshAgents();
+      if (!isCurrent()) return;
+      let open;
       try {
-        const restoreOptions = {
-          paneId: paneIds[restoreIndex],
-          focus: !paneController,
-        };
-        if (paneController && !restoreOptions.paneId) restoreOptions.show = false;
-        const ok = await openFromList(session, restoreOptions);
-        if (ok && paneIds[restoreIndex]) {
-          restoreIndex += 1;
-          restored = true;
-        }
+        if (typeof backend.GetOpenSessionRefs === 'function') {
+          const refs = await backend.GetOpenSessionRefs();
+          if (!isCurrent()) return;
+          open = [];
+          for (const ref of Array.isArray(refs) ? refs : []) {
+            if (!state.agentProviders.has(ref.provider)) continue;
+            state.sessionProviders.set(ref.id, ref.provider);
+            open.push(ref.id);
+          }
+        } else open = await backend.GetOpenSessions();
       } catch (error) {
-        setStatus('恢复失败: ' + error, 'warn');
-      } finally {
-        restoringIDs.delete(id);
+        if (!isCurrent()) return;
+        open = [];
+        setStatus('读取待恢复会话失败: ' + error, 'warn');
+      }
+      if (!isCurrent()) return;
+      open = Array.isArray(open) ? open : [];
+      for (const id of open) restoringIDs.add(id);
+      if (open.length) setStatus('正在后台读取历史并恢复 ' + open.length + ' 个会话，界面可继续使用', 'ok');
+      const attempted = new Set();
+      const reservedPanes = new Set();
+      let restored = false;
+      const restoreAvailable = async result => {
+        for (const id of open) {
+          if (!isCurrent()) return;
+          if (attempted.has(id) || !result.succeededProviders.includes(providerForID(id))) continue;
+          attempted.add(id);
+          if (state.closedTokens.has(id)) { restoringIDs.delete(id); continue; }
+          const session = result.sessions.find(item => item.id === id);
+          if (!session) {
+            setStatus('恢复失败：原生历史未返回上次会话 ' + id + '，请刷新历史后重试', 'warn');
+            restoringIDs.delete(id);
+            continue;
+          }
+          const panes = paneController?.getPaneFillOrder?.() || paneController?.getVisiblePaneIds?.() || [];
+          const paneId = panes.find(pane => !reservedPanes.has(pane) && !state.panes.find(item => item.id === pane)?.token);
+          if (paneId) reservedPanes.add(paneId);
+          try {
+            const restoreOptions = { paneId, focus: !paneController && !state.activeToken,
+              backgroundRestore: true, restoreToken: restoreBatches.get(providerForID(id)) };
+            if (paneController && !paneId) restoreOptions.show = false;
+            const ok = await openFromList(session, restoreOptions);
+            if (ok && paneId) restored = true;
+            else if (paneId) reservedPanes.delete(paneId);
+          } catch (error) {
+            if (paneId) reservedPanes.delete(paneId);
+            if (isCurrent()) setStatus('恢复失败: ' + error, 'warn');
+          } finally {
+            if (isCurrent()) restoringIDs.delete(id);
+          }
+        }
+      };
+      await loadHistorySnapshot({ isCurrent, restoreBatches, onHistory: restoreAvailable });
+      if (!isCurrent()) return;
+      // A failed source never authorizes an empty baseline or a fresh session.
+      for (const id of open) {
+        if (!attempted.has(id) && !state.closedTokens.has(id)) setStatus('恢复失败：读取 ' + providerForID(id) + ' 历史失败，请稍后重试', 'warn');
+      }
+      restoringIDs.clear();
+      renderSessions(lastLoaded);
+      if (paneController && restored && !state.activeToken) paneController.focusFirstAssigned?.();
+    } finally {
+      await Promise.allSettled([...restoreBatches.values()].map(token => {
+        activeRestoreTokens.delete(token);
+        return backend.EndSessionRestore?.(token);
+      }));
+      if (initializationRun === run) {
+        restoringIDs.clear();
+        initializationRun = null;
       }
     }
-    restoringIDs.clear();
-    if (lifecycle !== adoptionGeneration) return;
-    renderSessions(lastLoaded);
-    if (paneController && restored) paneController.focusFirstAssigned?.();
   }
 
   function start() {
@@ -932,6 +1086,10 @@ export function createSessionController(deps) {
     latestAgentIdentities = [];
     setArchiveOpen(false, false);
     filterReady = false;
+    initializationRun = null;
+    for (const token of activeRestoreTokens) Promise.resolve(backend.EndSessionRestore?.(token)).catch(() => {});
+    activeRestoreTokens.clear();
+    restoringIDs.clear();
     if (started) {
       started = false;
       clearIntervalFn(refreshTimer);

@@ -250,7 +250,8 @@ function renderSessionRow({
   badge.dataset.provider = provider;
   badge.dataset.temporary = String(Boolean(session.temporary));
   const providerName = state.agentProviders?.get(provider)?.name || provider[0].toUpperCase() + provider.slice(1);
-  badge.title = providerName + ' · 未打开' + (session.temporary ? ' · 临时终端，重启不自动恢复' : '');
+  badge.title = providerName + ' · 未打开' + (session.temporary
+    ? provider === 'antigravity' ? ' · 退出时确认保存后恢复' : ' · 临时终端，重启不自动恢复' : '');
   badge.setAttribute('role', 'img');
   badge.setAttribute('aria-label', badge.title);
   paintProviderStatusIcon(badge, provider);

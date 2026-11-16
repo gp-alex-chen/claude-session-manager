@@ -39,6 +39,29 @@ function fixture(fetch = async () => []) {
 
 const agent = (sessionId, fields = {}) => ({ sessionId, ...fields });
 
+test('Antigravity idle, errors and missing callbacks never imply successful completion', () => {
+  const f = fixture();
+  const token = 'new-antigravity-test';
+  f.state.agentProviders.set('antigravity', { hasStatus: true });
+  f.state.sessionProviders.set(token, 'antigravity');
+  f.state.terminals.set(token, { exited: false });
+  const update = (state, status) => f.controller.applyAgents([agent(token, { provider: 'antigravity', runtimeToken: token, kind: 'interactive', state, status })]);
+  assert.equal(f.controller.classifyAgent(token), 'unknown-open');
+  update('working', 'busy');
+  assert.equal(f.controller.classifyAgent(token), 'working');
+  update('blocked', 'waiting');
+  assert.equal(f.controller.classifyAgent(token), 'blocked');
+  update('working', 'busy');
+  update('idle', 'idle');
+  assert.equal(f.controller.classifyAgent(token), 'open');
+  update('failed', 'error');
+  assert.equal(f.controller.classifyAgent(token), 'failed');
+  f.controller.applyAgents([]);
+  assert.equal(f.notices.length, 0);
+  assert.equal(f.completions.length, 0);
+  assert.equal(f.state.unreadSessions.size, 0);
+});
+
 test('Codex waits, failures, interruptions and disconnects never signal success', () => {
   const f = fixture();
   f.state.agentProviders.set('codex', { hasStatus: true });

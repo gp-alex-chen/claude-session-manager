@@ -94,6 +94,25 @@ func TestPtyCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestUnboundNativeLaunchNeverWritesCanonicalRuntimeToOpenSessions(t *testing.T) {
+	pty := &fakePty{read: make(chan struct{})}
+	var snapshots [][]string
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error { snapshots = append(snapshots, append([]string(nil), ids...)); return nil }, func(string, string, int, int, []string) (Pty, error) { return pty, nil })
+	key := "antigravity:01900000-0000-7000-8000-000000000001"
+	if err := m.StartUnboundWithOptions(key, "fixture", t.TempDir(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.OpenIDs()) != 0 {
+		t.Fatal("unconfirmed canonical runtime persisted")
+	}
+	m.CloseAll()
+	for _, ids := range snapshots {
+		if len(ids) != 0 {
+			t.Fatal("identity briefly reached disk before verification", ids)
+		}
+	}
+}
+
 func TestWriteAndCloseAreMutuallyExclusive(t *testing.T) {
 	p := &fakePty{writeStart: make(chan struct{}), allowWrite: make(chan struct{})}
 	r := &ptyRef{pty: p}
@@ -549,6 +568,30 @@ func TestCloseAllPersistsOpenIDsBeforeClearing(t *testing.T) {
 	m.finishRead("session-a", first)
 	if len(persisted) != 1 {
 		t.Fatalf("reader teardown persisted an extra snapshot: %v", persisted)
+	}
+}
+
+func TestCloseAllNativeReferencesOnlyPersistSurvivingOriginalTerminals(t *testing.T) {
+	var snapshots [][]string
+	m := NewManagerWithStart(Callbacks{}, func(ids []string) error { snapshots = append(snapshots, ids); return nil }, nil)
+	key := "antigravity:01900000-0000-7000-8000-000000000001"
+	m.terms["new-antigravity-live"] = &ptyRef{pty: &fakePty{}}
+	m.terms["new-antigravity-exited"] = &ptyRef{pty: &fakePty{}, closed: true}
+	m.terms["new-antigravity-killed"] = &ptyRef{pty: &fakePty{}}
+	m.persistIDByToken["new-antigravity-live"] = ""
+	m.persistIDByToken["new-antigravity-killed"] = ""
+	m.Kill("new-antigravity-killed")
+	m.CloseAllWithNativeReferences(nil, nil, map[string]string{
+		"new-antigravity-live": key, "new-antigravity-exited": key, "new-antigravity-killed": key,
+		"new-antigravity-never-started": key,
+	})
+	if !reflect.DeepEqual(snapshots[len(snapshots)-1], []string{key}) {
+		t.Fatal("closed or missing terminal revived", snapshots)
+	}
+	count := len(snapshots)
+	m.CloseAllWithNativeReferences(nil, nil, nil)
+	if len(snapshots) != count {
+		t.Fatal("repeated shutdown overwrote the restore snapshot", snapshots)
 	}
 }
 

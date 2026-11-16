@@ -60,8 +60,14 @@ type OpenSessionRef struct {
 }
 
 func (a *App) GetOpenSessionRefs() []OpenSessionRef {
+	a.lifecycleMu.Lock()
+	keys, err := a.captureStartupRestoreReferencesLocked()
+	a.lifecycleMu.Unlock()
+	if err != nil {
+		a.log("读取启动恢复清单失败: " + err.Error())
+	}
 	out := []OpenSessionRef{}
-	for _, key := range a.GetOpenSessions() {
+	for _, key := range keys {
 		ref, err := provider.DecodeKey(key)
 		if err == nil {
 			_, err = a.providers.Lookup(ref.Provider)
@@ -80,8 +86,8 @@ func (a *App) GetOpenSessionRefs() []OpenSessionRef {
 func (a *App) AdoptSession(runtimeToken, sessionID string) error {
 	runtimeToken = strings.TrimSpace(runtimeToken)
 	sessionID = strings.TrimSpace(sessionID)
-	if strings.HasPrefix(runtimeToken, "new-codex-") {
-		return errors.New("Codex temporary terminals cannot be adopted by directory matching")
+	if strings.HasPrefix(runtimeToken, "new-codex-") || strings.HasPrefix(runtimeToken, "new-antigravity-") {
+		return errors.New("native temporary terminals cannot be adopted by directory matching")
 	}
 	if runtimeToken == "" || sessionID == "" {
 		return errors.New("runtime token and session ID are required")

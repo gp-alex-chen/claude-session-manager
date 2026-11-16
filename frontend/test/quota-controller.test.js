@@ -117,6 +117,35 @@ test('fixed quota source survives persistence and restart without a terminal', a
   assert.equal(saved['quota-source'], 'auto');
 });
 
+test('Antigravity quota source persists and auto follows its terminal', async () => {
+  const saved = new Map();
+  const storage = { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) };
+  const f = fixture(undefined, storage); f.controller.start();
+  f.controller.setSource('antigravity');
+  assert.equal(f.requests.at(-1).provider, 'antigravity');
+  assert.equal(saved.get('quota-source'), 'antigravity');
+  f.controller.stop();
+  const restored = fixture(undefined, storage); restored.controller.start();
+  assert.equal(restored.requests[0].provider, 'antigravity');
+  restored.controller.setSource('auto');
+  restored.state.terminals.set('new-antigravity-1', { provider: 'antigravity' });
+  restored.state.activeToken = 'new-antigravity-1'; restored.controller.sync();
+  assert.equal(restored.rendered.at(-1).provider, 'antigravity');
+  restored.controller.stop();
+});
+
+test('Antigravity sync rereads local observations without a fifteen minute cache', async () => {
+  const f = fixture(); f.controller.start(); f.controller.setSource('antigravity');
+  f.requests[0].resolve({ provider: 'antigravity', status: 'available', windows: [] });
+  await Promise.resolve(); await Promise.resolve();
+  f.controller.sync();
+  assert.equal(f.requests.length, 2);
+  f.requests[1].resolve({ provider: 'antigravity', status: 'unavailable', windows: [] });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(f.rendered.at(-1).snapshot.status, 'unavailable');
+  f.controller.stop();
+});
+
 test('source switching keeps caches separate and errors do not change the selection', async () => {
   const f = fixture(); f.controller.start();
   f.controller.setSource('codex'); f.controller.setSource('claude');

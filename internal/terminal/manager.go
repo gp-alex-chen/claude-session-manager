@@ -483,10 +483,23 @@ func (m *Manager) CloseAllWithPending(pending []string) {
 // under the same lifecycle lock, so an in-flight Adopt cannot recreate an ID
 // between those two operations.
 func (m *Manager) CloseAllWithPendingAndForget(pending, forget []string) {
+	m.CloseAllWithNativeReferences(pending, forget, nil)
+}
+
+// Native references are applied only to this atomic exit snapshot, and only
+// when their original terminal is still alive. They never recreate a PTY.
+func (m *Manager) CloseAllWithNativeReferences(pending, forget []string, refs map[string]string) error {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
 	terms := m.terms
+	for token, key := range refs {
+		ref, err := provider.DecodeKey(key)
+		r := terms[token]
+		if err == nil && ref.Provider == provider.Antigravity && (strings.HasPrefix(token, "new-antigravity-") || token == key) && r != nil && !r.Closed() {
+			m.persistIDByToken[token] = key
+		}
+	}
 	hasPending := false
 	for _, id := range pending {
 		if id != "" {
@@ -500,15 +513,17 @@ func (m *Manager) CloseAllWithPendingAndForget(pending, forget []string) {
 	if len(terms) == 0 && !hasPending {
 		if len(forget) > 0 {
 			m.mu.Unlock()
-			m.persistWithRetry(nil)
-			return
+			if err := m.persistAndReport(nil); err != nil {
+				return m.retryPersistenceLocked()
+			}
+			return nil
 		}
 		dirty := m.persistDirty
 		m.mu.Unlock()
 		if dirty {
-			m.retryPersistenceLocked()
+			return m.retryPersistenceLocked()
 		}
-		return
+		return nil
 	}
 	ids := mergeIDs(m.openIDsLocked(), pending)
 	m.terms = make(map[string]*ptyRef)
@@ -524,8 +539,9 @@ func (m *Manager) CloseAllWithPendingAndForget(pending, forget []string) {
 	if err := m.persistAndReport(ids); err != nil {
 		// Shutdown/update is the last normal opportunity to make the restore
 		// snapshot durable, so perform one immediate retry.
-		m.retryPersistenceLocked()
+		return m.retryPersistenceLocked()
 	}
+	return nil
 }
 
 func (m *Manager) Start(token, cmdLine, dir string) error {
@@ -536,6 +552,16 @@ func (m *Manager) Start(token, cmdLine, dir string) error {
 // The caller closes its resource on failure; all successful teardown paths
 // use ptyRef.Close, including reader exit, replacement, Kill and shutdown.
 func (m *Manager) StartWithOptions(token, cmdLine, dir string, overrides []string, cleanup func()) error {
+	return m.startWithOptions(token, cmdLine, dir, overrides, cleanup, false)
+}
+
+// StartUnboundWithOptions prevents even a canonical runtime token from reaching
+// disk. Its lifecycle owner may separately confirm an exit-time native reference.
+func (m *Manager) StartUnboundWithOptions(token, cmdLine, dir string, overrides []string, cleanup func()) error {
+	return m.startWithOptions(token, cmdLine, dir, overrides, cleanup, true)
+}
+
+func (m *Manager) startWithOptions(token, cmdLine, dir string, overrides []string, cleanup func(), unbound bool) error {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 	m.retryPersistenceLocked()
@@ -557,7 +583,9 @@ func (m *Manager) StartWithOptions(token, cmdLine, dir string, overrides []strin
 	r := &ptyRef{pty: pty, resourceClose: cleanup}
 	m.mu.Lock()
 	m.terms[token] = r
-	if old == nil {
+	if unbound {
+		m.persistIDByToken[token] = ""
+	} else if old == nil {
 		delete(m.persistIDByToken, token)
 	}
 	ids := m.openIDsLocked()

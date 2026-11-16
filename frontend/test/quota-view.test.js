@@ -48,9 +48,11 @@ function fixture() {
   });
   const button = root.children[0];
   const panel = root.children[1];
-  const chart = () => button.children[1].children[0];
+  const allCharts = node => [...(node.tag === 'svg' ? [node] : []), ...node.children.flatMap(allCharts)];
+  const charts = () => allCharts(button);
+  const chart = () => charts()[0];
   const byClass = name => chart().children.filter(node => node.getAttribute('class') === name);
-  return { root, documentRef, view, button, panel, timers, intervals, chart, byClass, sources, uses,
+  return { root, documentRef, view, button, panel, timers, intervals, chart, charts, byClass, sources, uses,
     advance: ms => { time += ms; for (const callback of [...timers.values()]) callback(); },
     refreshes: () => refreshes,
   };
@@ -201,7 +203,7 @@ test('quota popup exposes persistent source selector independent of refresh and 
   assert.ok(field, 'popup must include a source selector');
   const select = field.children.find(node => node.tag === 'select');
   assert.deepEqual(select.children.map(node => [node.value, node.textContent]), [
-    ['auto', '自动跟随会话'], ['codex', 'Codex / ChatGPT'], ['claude', 'Claude'],
+    ['auto', '自动跟随会话'], ['codex', 'Codex / ChatGPT'], ['claude', 'Claude'], ['antigravity', 'Antigravity'],
   ]);
   assert.equal(select.value, 'codex');
   select.value = 'claude'; select.dispatch('change');
@@ -219,6 +221,60 @@ test('quota popup exposes persistent source selector independent of refresh and 
 
 
 const findNodes = (node, name) => [ ...(node.className === name ? [node] : []), ...node.children.flatMap(child => findNodes(child, name)) ];
+
+test('Antigravity renders two adaptive double rings and removes absent groups and layers', () => {
+  const f = fixture(); f.view.start();
+  const windows = [
+    { ...windowAt(10080, 0.25, 60), id: '3p-weekly', label: '第三方 · 周', scope: '第三方' },
+    { ...windowAt(300, 0.75, 20), id: 'gemini-5h', label: 'Gemini · 5 小时', scope: 'Gemini' },
+    { ...windowAt(300, 0.5, 100), id: '3p-5h', label: '第三方 · 5 小时', scope: '第三方' },
+    { ...windowAt(10080, 0.5, 0), id: 'gemini-weekly', label: 'Gemini · 周', scope: 'Gemini' },
+  ];
+  const render = values => f.view.render({ provider: 'antigravity', source: 'antigravity', snapshot: {
+    status: 'available', windows: values, message: '来自最近终端回调', readAt: new Date(now).toISOString(),
+  } });
+  render(windows);
+  assert.equal(f.charts().length, 2);
+  for (const chart of f.charts()) {
+    assert.deepEqual(chart.children.filter(n => n.getAttribute('class') === 'quota-track').map(n => n.getAttribute('r')), ['25', '20']);
+    assert.equal(chart.children.filter(n => n.getAttribute('class') === 'quota-pace-marker').length, 2);
+  }
+  assert.match(textOf(f.button), /Gemini/); assert.match(textOf(f.button), /第三方/);
+  assert.match(textOf(f.button), /80%/); assert.match(textOf(f.button), /100%/); assert.match(textOf(f.button), /0%/);
+  assert.equal(findNodes(f.panel, 'quota-bucket-select').length, 0);
+  assert.match(textOf(f.panel), /最近.*终端回调/);
+  assert.doesNotMatch(textOf(f.panel), /当前登录账户/);
+  render(windows.filter(w => w.scope === 'Gemini'));
+  assert.equal(f.charts().length, 1); assert.doesNotMatch(textOf(f.button), /第三方/);
+  render(windows.filter(w => w.id === 'gemini-weekly'));
+  assert.equal(f.charts().length, 1);
+  assert.equal(f.byClass('quota-track').length, 1); assert.equal(f.byClass('quota-week').filter(n => n.tag === 'text').length, 1);
+  render(windows);
+  assert.equal(f.charts().length, 2, 'a returning group should reappear from fresh data');
+  f.button.dispatch('click');
+  assert.equal(f.refreshes(), 1, 'opening the popup reads the latest local callback');
+  assert.equal(findNodes(f.panel, 'quota-credit-view').length, 0);
+  f.view.stop();
+});
+
+test('quota ring groups preserve unknown buckets and more than two windows without truncation', () => {
+  const f = fixture();
+  f.view.render({ provider: 'antigravity', snapshot: { status: 'available', windows: [
+    { id: 'third', label: 'Third window', scope: 'Future group', usedPercent: 30, windowMinutes: 10080 },
+    { id: 'first', label: 'First window', scope: 'Future group', usedPercent: 10, windowMinutes: 60 },
+    { id: 'second', label: 'Second window', scope: 'Future group', usedPercent: 20, windowMinutes: 300 },
+    { id: 'unknown-one', label: 'Unknown one', scope: 'unknown-one', usedPercent: 0 },
+    { id: 'unknown-two', label: 'Unknown two', scope: 'unknown-two', usedPercent: 100 },
+  ] } });
+  assert.equal(f.charts().length, 3);
+  const counts = f.charts().map(chart => chart.children.filter(n => n.getAttribute('class') === 'quota-track').length);
+  assert.deepEqual(counts, [3, 1, 1]);
+  assert.ok(Number(f.charts()[0].getAttribute('width')) > 36, 'extra layers need additional drawing room');
+  assert.match(textOf(f.button), /90%.*80%.*70%/);
+  assert.match(textOf(f.button), /100%/); assert.match(textOf(f.button), /0%/);
+  assert.match(textOf(f.panel), /Unknown one/); assert.match(textOf(f.panel), /Unknown two/);
+  assert.equal(f.charts()[1].children.filter(n => n.getAttribute('class') === 'quota-pace-marker').length, 0);
+});
 test('reset cards show authoritative count and require explicit confirmation before consuming', () => {
  const f = fixture(); f.view.start();
  const summary = { availableCount: 3, credits: [

@@ -337,6 +337,7 @@
 .badge.provider-status-icon svg { display: block; width: 18px; height: 18px; }
 .badge.provider-status-icon.open[data-provider="claude"] { color: #d97757; text-shadow: none; }
 .badge.provider-status-icon.open[data-provider="codex"] { color: #3b82f6; text-shadow: none; }
+.badge.provider-status-icon.open[data-provider="antigravity"] { color: #4285f4; text-shadow: none; }
 .badge.idle { color: var(--idle); font-family: inherit; font-size: 9px; }
 .badge.open { color: var(--live-green); text-shadow: 0 0 6px var(--glow-green); }
 .badge.running { color: var(--live-orange); text-shadow: 0 0 5px var(--glow-orange); }

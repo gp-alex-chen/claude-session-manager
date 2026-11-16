@@ -39,7 +39,7 @@ function fixture(provider) {
 }
 
 test('open and idle states use a provider SVG that inherits the status color', () => {
-  for (const provider of ['claude', 'codex']) {
+  for (const provider of ['claude', 'codex', 'antigravity']) {
     const f = fixture(provider);
     f.controller.repaintBadge(f.badge);
     assert.match(f.badge.innerHTML, /<svg/);

@@ -4,7 +4,7 @@ export {
   ReferenceCodexSession,
   GetAgents, GetOpenSessions, GetOpenSessionRefs, GetShell, ShellInstalled, SetShell, NotifyBeep, SetCompletionBadge, SetTaskbarStatus, SetNotificationAttention,
   DebugLog, ListSessions, ListHiddenSessions, ListSessionsForProviders, ListHiddenSessionsForProviders, RenameSession, DeleteSession,
-  UnhideSession, AdoptSession, StartSession, StartNew, StartNewAgent, ListAgentProviders, OpenFolder, TermWrite, TermResize, TermKill,
+  UnhideSession, AdoptSession, BeginSessionRestore, RestoreSession, EndSessionRestore, StartSession, StartNew, StartNewAgent, ListAgentProviders, OpenFolder, TermWrite, TermResize, TermKill,
   GetVersion, GetUsageSummary, GetAccountQuota, GetCodexResetCredits, ConsumeCodexResetCredit, CheckForUpdate, UpdateToLatest,
   LoadPreferences, SetPreference,
   GetNotificationConfig, SetNotificationConfig, GetNotificationStatus, TestNotification,

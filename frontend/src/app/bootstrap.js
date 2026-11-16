@@ -362,8 +362,11 @@ export function createApplication(deps) {
       await initialize(paneController);
       if (!current()) return;
       await initialize(settingsController);
-      if (current()) await initialize(sessionController);
-      if (current()) nodes.terminal.inert = false;
+      if (!current()) return;
+      // Local layout and themes are ready. Native history may take seconds;
+      // keep the workspace usable while restoration continues in background.
+      nodes.terminal.inert = false;
+      await initialize(sessionController);
     });
     return readyPromise;
   }

@@ -39,7 +39,7 @@ export function createAgentController(deps) {
       return terminal && !terminal.exited ? 'unknown-open' : 'idle';
     }
     const agent = state.runningAgents.get(id) || state.runningAgents.get(state.realToNew.get(id));
-    if (provider === 'codex') {
+    if (provider === 'codex' || provider === 'antigravity') {
       const owner = state.newToReal.get(id);
       if (owner && owner !== id) return 'idle';
       if (!isBusy(agent) && agent?.state !== 'blocked' && ['failed', 'interrupted'].includes(agent?.turnStatus)) return agent.turnStatus;
@@ -126,7 +126,8 @@ export function createAgentController(deps) {
   function describeBadge(badge, description) {
     const provider = badge.dataset.provider || state.sessionProviders.get(badge.dataset.id) || 'claude';
     const name = state.agentProviders.get(provider)?.name || provider[0].toUpperCase() + provider.slice(1);
-    badge.title = name + ' · ' + description + (badge.dataset.temporary === 'true' ? ' · 临时终端，重启不自动恢复' : '');
+    badge.title = name + ' · ' + description + (badge.dataset.temporary === 'true'
+      ? provider === 'antigravity' ? ' · 退出时确认保存后恢复' : ' · 临时终端，重启不自动恢复' : '');
     badge.setAttribute('role', 'img');
     badge.setAttribute('aria-label', badge.title);
   }
@@ -184,7 +185,7 @@ export function createAgentController(deps) {
     onAgents?.(safeList);
     const next = new Map();
     for (const agent of safeList) {
-      const id = agent?.provider === 'codex' && agent.runtimeToken
+      const id = agent?.provider && agent.provider !== 'claude' && agent.runtimeToken
         ? (state.newToReal.get(agent.runtimeToken) === agent.sessionId ? agent.sessionId : agent.runtimeToken)
         : agent?.sessionId;
       if (id) next.set(id, agent);
@@ -193,7 +194,7 @@ export function createAgentController(deps) {
 
     if (baselineReady) {
       for (const [id, previous] of state.previousRunningAgents) {
-        if ((previous.provider || state.sessionProviders?.get(id)) === 'codex') continue;
+        if (['codex', 'antigravity'].includes(previous.provider || state.sessionProviders?.get(id))) continue;
         const current = next.get(id);
         const previousBusy = isBusy(previous);
         const currentBusy = isBusy(current);

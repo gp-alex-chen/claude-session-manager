@@ -171,6 +171,7 @@ function makeFixture(options = {}) {
     DeleteSession: options.DeleteSession || (async () => {}),
     UnhideSession: async () => {},
     StartSession: options.StartSession || (async () => {}),
+	TermKill: options.TermKill,
     StartNew: options.StartNew || (async () => 'new-1'),
     StartNewAgent: options.StartNewAgent,
     ListAgentProviders: options.ListAgentProviders,
@@ -179,6 +180,9 @@ function makeFixture(options = {}) {
     }),
     GetOpenSessions: options.GetOpenSessions || (async () => { openCalls.push(true); return []; }),
     GetOpenSessionRefs: options.GetOpenSessionRefs,
+    BeginSessionRestore: options.BeginSessionRestore,
+    RestoreSession: options.RestoreSession,
+    EndSessionRestore: options.EndSessionRestore,
     ListProjects: options.ListProjects || (async () => {
       const result = projectResults[Math.min(projectIndex++, projectResults.length - 1)];
       if (result instanceof Error) throw result;
@@ -656,6 +660,330 @@ test('Claude pending sessions never pair with Codex history in the same director
   ], newToReal, realToNew: new Map() });
   assert.deepEqual(remaining, pending);
   assert.equal(newToReal.size, 0);
+});
+
+test('Antigravity terminals update titles without directory adoption and explain exit-time recovery', async () => {
+  let counter = 0;
+  const f = makeFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasStatus: true, hasHistory: false, hasRename: false, newSessionRestorable: false }],
+    StartNewAgent: async () => 'new-antigravity-' + (++counter),
+  });
+  await f.controller.initialize();
+  await f.controller.startNew('C:\\synthetic', 'antigravity');
+  await f.controller.startNew('C:\\synthetic', 'antigravity');
+  assert.match(f.statuses.at(-1).message, /退出时确认保存.*下次启动自动打开/);
+  assert.doesNotMatch(f.statuses.at(-1).message, /自动加入恢复/);
+  f.controller.handleAgentIdentities([{ provider: 'antigravity', runtimeToken: 'new-antigravity-1', name: 'First native title' }]);
+  assert.equal(f.state.terminals.get('new-antigravity-1').labelText, 'First native title');
+  assert.notEqual(f.state.terminals.get('new-antigravity-2').labelText, 'First native title');
+  assert.equal(f.state.newToReal.size, 0);
+  assert.equal(f.adoptionCalls.length, 0);
+  const rows = f.listRoot.children.flatMap(group => group.children[1]?.children || []);
+  assert.ok(rows.length >= 2);
+  f.controller.closeRealSession('new-antigravity-1');
+  f.controller.handleAgentIdentities([{ provider: 'antigravity', runtimeToken: 'new-antigravity-1', name: 'Late title' }]);
+  assert.equal(f.state.terminals.has('new-antigravity-1'), false);
+  assert.equal(f.state.terminals.has('new-antigravity-2'), true);
+});
+
+test('Antigravity pending title follows native history when status-line title stays empty', async () => {
+  const key = 'antigravity:01900000-0000-7000-8000-000000000001';
+  const token = 'new-antigravity-generated-title';
+  let paneRefreshes = 0;
+  const f = makeFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasStatus: true, hasHistory: true, hasRename: false, newSessionRestorable: false }],
+    StartNewAgent: async () => token,
+    paneController: { setSessionOptions() {}, refresh() { paneRefreshes++; } },
+  });
+  await f.controller.initialize();
+  await f.controller.startNew('C:\\synthetic', 'antigravity');
+  f.controller.handleAgentIdentities([{ provider: 'antigravity', runtimeToken: token, sessionId: key, name: '', state: 'idle' }]);
+  const before = paneRefreshes;
+  f.controller.renderSessions([{ id: key, provider: 'antigravity', dir: 'C:\\synthetic', name: 'Native generated greeting title', time: 'now' }]);
+  assert.equal(f.state.pendingNew[0].name, 'Native generated greeting title');
+  assert.equal(f.state.terminals.get(token).labelText, 'Native generated greeting title');
+  assert.equal(f.state.sessionNames.get(token), 'Native generated greeting title');
+  assert.ok(paneRefreshes > before);
+  assert.deepEqual(visibleIDs(f), [token]);
+  assert.equal(f.state.newToReal.size, 0);
+  assert.equal(f.adoptionCalls.length, 0);
+});
+
+test('Antigravity title handles history arriving first and preserves a later native rename', async () => {
+  const key = 'antigravity:01900000-0000-7000-8000-000000000001';
+  const token = 'new-antigravity-history-first';
+  const native = { id: key, provider: 'antigravity', dir: 'C:\\synthetic', name: 'Generated title' };
+  const f = makeFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasHistory: true }],
+    StartNewAgent: async () => token,
+  });
+  await f.controller.initialize();
+  await f.controller.startNew(native.dir, 'antigravity');
+  const initialTitle = f.state.terminals.get(token).labelText;
+  f.controller.renderSessions([native]);
+  assert.equal(f.state.terminals.get(token).labelText, initialTitle, 'history alone cannot identify the live terminal');
+  const identity = { provider: 'antigravity', runtimeToken: token, sessionId: key, name: '' };
+  f.controller.handleAgentIdentities([identity]);
+  assert.equal(f.state.terminals.get(token).labelText, native.name);
+  f.controller.handleAgentIdentities([{ ...identity, name: 'Explicit native rename' }]);
+  f.controller.renderSessions([{ ...native, name: 'Older cached title' }]);
+  f.controller.handleAgentIdentities([identity]);
+  assert.equal(f.state.pendingNew[0].name, 'Explicit native rename');
+  assert.equal(f.state.terminals.get(token).labelText, 'Explicit native rename');
+});
+
+test('Antigravity title matches both observed identity and directory and ignores exited terminals', async () => {
+  const key = 'antigravity:01900000-0000-7000-8000-000000000001';
+  const token = 'new-antigravity-isolated-title';
+  const native = { id: key, provider: 'antigravity', dir: 'C:\\synthetic', name: 'Matching generated title' };
+  const f = makeFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasHistory: true }],
+    StartNewAgent: async () => token,
+  });
+  await f.controller.initialize();
+  await f.controller.startNew(native.dir, 'antigravity');
+  f.controller.handleAgentIdentities([{ provider: 'antigravity', runtimeToken: token, sessionId: key, name: '' }]);
+  const terminal = f.state.terminals.get(token);
+  const initialTitle = terminal.labelText;
+  f.controller.renderSessions([
+    { ...native, id: 'antigravity:01900000-0000-7000-8000-000000000002', name: 'Other session in same directory' },
+    { ...native, dir: 'C:\\elsewhere', name: 'Mismatched directory' },
+  ]);
+  assert.equal(terminal.labelText, initialTitle);
+  f.controller.renderSessions([{ ...native, dir: 'c:/synthetic/' }]);
+  assert.equal(terminal.labelText, native.name);
+  terminal.exited = true;
+  f.controller.renderSessions([{ ...native, name: 'Late title after exit' }]);
+  assert.equal(terminal.labelText, native.name);
+});
+
+test('Antigravity live title keeps refreshing when its history filter is deselected', async () => {
+  const key = 'antigravity:01900000-0000-7000-8000-000000000001';
+  const token = 'new-antigravity-filtered-title';
+  const native = { id: key, provider: 'antigravity', dir: 'C:\\synthetic', name: 'Generated while filtered out' };
+  const f = makeFilterFixture({
+    ListAgentProviders: async () => [{ id: 'claude', name: 'Claude' }, { id: 'antigravity', name: 'Antigravity', hasHistory: true }],
+    saved: new Map([['session-provider-filter', '["claude"]']]),
+    StartNewAgent: async () => token,
+    read: async ids => ({ sessions: ids.includes('antigravity') ? [native] : [], succeededProviders: ids, warnings: [] }),
+  });
+  await f.controller.initialize();
+  await f.controller.startNew(native.dir, 'antigravity');
+  f.controller.handleAgentIdentities([{ provider: 'antigravity', runtimeToken: token, sessionId: key, name: '' }]);
+  await f.controller.loadSessions();
+  assert.ok(f.queries.at(-1).includes('antigravity'));
+  assert.equal(f.state.terminals.get(token).labelText, native.name);
+  assert.deepEqual(visibleIDs(f), [token]);
+  assert.equal(f.state.newToReal.size, 0);
+  assert.equal(f.adoptionCalls.length, 0);
+});
+
+test('Antigravity native history is hidden behind its live temporary terminal without adopting it', async () => {
+  const key = 'antigravity:01900000-0000-7000-8000-000000000001';
+  const token = 'new-antigravity-live-history';
+  const native = { id: key, provider: 'antigravity', name: 'Saved native title', dir: 'C:\\synthetic', time: 'now' };
+  const f = makeFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasStatus: true, hasHistory: true, hasRename: false, newSessionRestorable: false }],
+    listResults: [[native]], StartNewAgent: async () => token,
+  });
+  await f.controller.initialize();
+  await f.controller.startNew(native.dir, 'antigravity');
+  f.controller.handleAgentIdentities([{ provider: 'antigravity', runtimeToken: token, sessionId: key, name: native.name }]);
+  assert.deepEqual(visibleIDs(f), [token]);
+  assert.equal(f.state.newToReal.size, 0);
+  assert.equal(f.adoptionCalls.length, 0);
+  f.controller.closeRealSession(token);
+  assert.deepEqual(visibleIDs(f), [key]);
+});
+
+test('Antigravity known history opens the exact ID and waits for native confirmation', async () => {
+  const calls = [];
+  const native = { id: 'antigravity:01900000-0000-7000-8000-000000000001', provider: 'antigravity', name: 'Native title', dir: 'C:\\synthetic', time: 'now' };
+  const f = makeFixture({ listResults: [[native]], StartSession: async (...args) => calls.push(args) });
+  await f.controller.initialize();
+  await f.controller.openFromList(native);
+  assert.deepEqual(calls, [[native.id, native.dir]]);
+  assert.match(f.statuses.at(-1).message, /等待原生会话确认/);
+  f.controller.handleAgentIdentities([{ provider: 'antigravity', runtimeToken: native.id, sessionId: native.id, name: 'Renamed natively' }]);
+  assert.equal(f.state.terminals.get(native.id).labelText, 'Renamed natively');
+  assert.equal(f.state.newToReal.size, 0);
+});
+
+test('startup automatically opens saved Antigravity IDs even when its history filter is off', async () => {
+  const native = { id: 'antigravity:01900000-0000-7000-8000-000000000001', provider: 'antigravity', dir: 'C:\\synthetic', name: 'Saved native context' };
+  const opened = [];
+  const f = makeFilterFixture({
+    ListAgentProviders: async () => [{ id: 'claude', name: 'Claude' }, { id: 'antigravity', name: 'Antigravity', hasHistory: true, newSessionRestorable: true }],
+    saved: new Map([['session-provider-filter', '["claude"]']]),
+    GetOpenSessionRefs: async () => [{ id: native.id, provider: native.provider }],
+    read: async ids => ({ sessions: ids.includes('antigravity') ? [native] : [], succeededProviders: ids, warnings: [] }),
+    StartSession: async (...args) => opened.push(args),
+    StartNewAgent: async () => { throw new Error('restore must never create a fresh conversation'); },
+  });
+  await f.controller.initialize();
+  assert.deepEqual(opened, [[native.id, native.dir]]);
+  assert.equal(f.state.terminals.has(native.id), true);
+  assert.equal(f.state.selectedProviders.has('antigravity'), false);
+  assert.ok(visibleIDs(f).includes(native.id));
+});
+
+test('startup restores Antigravity when a periodic refresh fires during slow history lookup', async () => {
+  const native = { id: 'antigravity:01900000-0000-7000-8000-000000000001', provider: 'antigravity', dir: 'C:\\synthetic', name: 'Saved native context' };
+  let enterHistory, finishHistory, finishRefresh;
+  const historyEntered = new Promise(resolve => { enterHistory = resolve; });
+  const historyPending = new Promise(resolve => { finishHistory = resolve; });
+  const refreshPending = new Promise(resolve => { finishRefresh = resolve; });
+  const opened = [];
+  let reads = 0;
+  const f = makeFilterFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasHistory: true, newSessionRestorable: true }],
+    GetOpenSessionRefs: async () => [{ id: native.id, provider: native.provider }],
+    read: async ids => {
+      reads++;
+      if (reads === 1) { enterHistory(); await historyPending; }
+      else await refreshPending;
+      return { sessions: [native], succeededProviders: ids, warnings: [] };
+    },
+    StartSession: async (...args) => opened.push(args),
+  });
+  f.controller.start();
+  const initializing = f.controller.initialize();
+  await historyEntered;
+  const refreshing = f.controller.autoRefreshSessions();
+  finishHistory();
+  await initializing;
+  finishRefresh();
+  await refreshing;
+  assert.deepEqual(opened, [[native.id, native.dir]]);
+  assert.equal(f.state.terminals.has(native.id), true);
+  assert.equal(f.statuses.some(status => /恢复失败/.test(status.message)), false);
+  f.controller.stop();
+});
+
+test('startup restores its Antigravity snapshot when a filter change supersedes its UI request', async () => {
+  const native = { id: 'antigravity:01900000-0000-7000-8000-000000000001', provider: 'antigravity', dir: 'C:\\synthetic', name: 'Saved native context' };
+  let enterHistory, finishHistory;
+  const entered = new Promise(resolve => { enterHistory = resolve; });
+  const pending = new Promise(resolve => { finishHistory = resolve; });
+  const opened = [];
+  const f = makeFilterFixture({
+    ListAgentProviders: async () => [{ id: 'claude', name: 'Claude' }, { id: 'antigravity', name: 'Antigravity', hasHistory: true }],
+    GetOpenSessionRefs: async () => [{ id: native.id, provider: native.provider }],
+    read: async (ids, call) => {
+      if (call === 1) { enterHistory(); await pending; }
+      return { sessions: call === 1 ? [native] : [], succeededProviders: ids, warnings: [] };
+    },
+    StartSession: async (...args) => opened.push(args),
+  });
+  const initializing = f.controller.initialize();
+  await entered;
+  await f.controller.toggleProvider('antigravity');
+  finishHistory();
+  await initializing;
+  assert.deepEqual(opened, [[native.id, native.dir]]);
+  assert.deepEqual([...f.state.selectedProviders], ['claude']);
+  assert.equal(f.state.terminals.has(native.id), true);
+  assert.ok(visibleIDs(f).includes(native.id));
+  f.controller.handleAgentIdentities([{ provider: 'antigravity', runtimeToken: native.id, sessionId: native.id, name: 'Native updated title' }]);
+  assert.equal(f.state.sessionNames.get(native.id), 'Native updated title');
+  assert.equal(f.state.terminals.get(native.id).labelText, 'Native updated title');
+  f.controller.closeRealSession(native.id);
+  assert.equal(visibleIDs(f).includes(native.id), false);
+  assert.equal(f.statuses.some(status => /恢复失败/.test(status.message)), false);
+});
+
+test('a late old startup cannot release a newer startup or consume its restore snapshot', async () => {
+  for (const stop of [false, true]) {
+    const native = { id: 'antigravity:01900000-0000-7000-8000-000000000001', provider: 'antigravity', dir: 'C:\\synthetic', name: 'Saved native context' };
+    const entered = [], finish = [], opened = [];
+    let notify;
+    const f = makeFilterFixture({
+      ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasHistory: true }],
+      GetOpenSessionRefs: async () => [{ id: native.id, provider: native.provider }],
+      read: async ids => {
+        const pending = new Promise(resolve => { finish.push(resolve); });
+        entered.push(true); notify?.();
+        await pending;
+        return { sessions: [native], succeededProviders: ids, warnings: [] };
+      },
+      StartSession: async (...args) => opened.push(args),
+    });
+    const waitForRead = async count => { while (entered.length < count) await new Promise(resolve => { notify = resolve; }); };
+    const old = f.controller.initialize();
+    await waitForRead(1);
+    if (stop) f.controller.stop();
+    const fresh = f.controller.initialize();
+    await waitForRead(2);
+    finish[0]();
+    await old;
+    const refresh = f.controller.autoRefreshSessions();
+    const readsBeforeFinish = entered.length;
+    // A broken owner may start an extra request; release it for clean teardown.
+    finish[2]?.();
+    finish[1]();
+    await Promise.all([refresh, fresh]);
+    assert.equal(readsBeforeFinish, 2, 'old finally released the new initialization guard');
+    assert.deepEqual(opened, [[native.id, native.dir]], 'only the current startup restores once');
+    assert.equal(f.state.terminals.has(native.id), true);
+    assert.equal(f.statuses.some(status => /恢复失败/.test(status.message)), false);
+  }
+});
+
+test('startup distinguishes unavailable Antigravity history from a genuinely missing ID', async () => {
+  const key = 'antigravity:01900000-0000-7000-8000-000000000001';
+  let starts = 0;
+  const f = makeFilterFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasHistory: true }],
+    GetOpenSessionRefs: async () => [{ id: key, provider: 'antigravity' }],
+    read: async () => ({ sessions: [], succeededProviders: [], warnings: ['ACP unavailable'] }),
+    StartSession: async () => { starts++; }, StartNewAgent: async () => { starts++; },
+  });
+  await f.controller.initialize();
+  assert.equal(starts, 0);
+  assert.ok(f.statuses.some(status => /恢复失败.*读取.*历史失败/.test(status.message)));
+  assert.equal(f.statuses.some(status => /原生历史未返回/.test(status.message)), false);
+});
+
+test('startup reports a missing saved Antigravity conversation without silently creating one', async () => {
+  const key = 'antigravity:01900000-0000-7000-8000-000000000001';
+  let starts = 0;
+  const f = makeFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasHistory: true, newSessionRestorable: true }],
+    GetOpenSessionRefs: async () => [{ id: key, provider: 'antigravity' }],
+    StartSession: async () => { starts++; }, StartNewAgent: async () => { starts++; },
+  });
+  await f.controller.initialize();
+  assert.equal(starts, 0);
+  assert.ok(f.statuses.some(status => /恢复失败.*原生历史未返回/.test(status.message)));
+});
+
+test('closing Antigravity while native preflight is pending cannot revive the tab', async () => {
+  let resolveStart;
+  const killed = [];
+  const native = { id: 'antigravity:01900000-0000-7000-8000-000000000001', provider: 'antigravity', name: 'Saved', dir: 'C:\\synthetic' };
+  const f = makeFixture({ StartSession: () => new Promise(resolve => { resolveStart = resolve; }), TermKill: token => killed.push(token) });
+  const opening = f.controller.openFromList(native);
+  f.controller.closeRealSession(native.id);
+  resolveStart();
+  assert.equal(await opening, false);
+  assert.equal(f.state.terminals.has(native.id), false);
+  assert.deepEqual(killed, [native.id]);
+  assert.equal(f.statuses.some(item => /等待原生会话确认/.test(item.message)), false);
+});
+
+test('failed old Antigravity open cannot dispose a replacement tab with the same native key', async () => {
+  const starts = [];
+  const native = { id: 'antigravity:01900000-0000-7000-8000-000000000001', provider: 'antigravity', name: 'Saved', dir: 'C:\\synthetic' };
+  const f = makeFixture({ StartSession: () => new Promise((resolve, reject) => starts.push({ resolve, reject })) });
+  const first = f.controller.openFromList(native);
+  f.controller.closeRealSession(native.id);
+  const second = f.controller.openFromList(native);
+  const replacement = f.state.terminals.get(native.id);
+  starts[0].reject(new Error('old canceled request'));
+  assert.equal(await first, false);
+  assert.equal(f.state.terminals.get(native.id), replacement);
+  starts[1].resolve();
+  assert.equal(await second, true);
 });
 
 test('Codex temporary terminals remain visible without adopting new history', async () => {
@@ -1690,4 +2018,170 @@ test('hidden sessions show product icons without changing names or restore targe
     row.children[3].click();
   }
   assert.deepEqual(restored, list);
+});
+
+
+test('background restoration preserves panes and focus used while its backend is pending', async () => {
+  let enteredStart, finishStart;
+  const entered = new Promise(resolve => { enteredStart = resolve; });
+  const pending = new Promise(resolve => { finishStart = resolve; });
+  const shown = [];
+  let focused = 0;
+  const paneController = {
+    getPaneFillOrder: () => ['pane-0', 'pane-1'],
+    showSession: (token, options) => { shown.push([token, options]); return true; },
+    focusFirstAssigned: () => { focused++; }, setSessionOptions() {}, refresh() {},
+  };
+  const f = makeFixture({ paneController, listResults: [[session('saved')]],
+    GetOpenSessions: async () => ['saved'],
+    StartSession: async () => { enteredStart(); await pending; },
+  });
+  const initializing = f.controller.initialize();
+  await entered;
+  f.terminalController.openTab('manual', 'Manual session');
+  f.state.panes[0].token = 'manual';
+  f.state.activeToken = 'manual';
+  finishStart();
+  await initializing;
+  assert.deepEqual(shown, [['saved', { paneId: 'pane-1', focus: false }]]);
+  assert.equal(focused, 0);
+  assert.equal(f.state.activeToken, 'manual');
+});
+
+
+test('startup uses one backend-owned Antigravity batch and releases it after both restores', async () => {
+  const rows = [1,2].map(n => ({ id: 'antigravity:01900000-0000-7000-8000-00000000000' + n,
+    provider: 'antigravity', dir: 'C:\\synthetic', name: 'Saved ' + n }));
+  const calls = [];
+  const f = makeFilterFixture({
+    ListAgentProviders: async () => [{ id: 'antigravity', name: 'Antigravity', hasHistory: true }],
+    GetOpenSessionRefs: async () => rows.map(row => ({ id: row.id, provider: row.provider })),
+    BeginSessionRestore: async provider => { calls.push(['begin',provider]); return { token: 'opaque', history: { sessions: rows, succeededProviders: [provider], warnings: [] } }; },
+    RestoreSession: async (...args) => { calls.push(['restore',...args]); },
+    EndSessionRestore: async token => { calls.push(['end',token]); },
+    StartSession: async () => { throw new Error('startup must reuse its trusted batch'); },
+  });
+  await f.controller.initialize();
+  assert.deepEqual(calls, [['begin','antigravity'], ['restore','opaque',rows[0].id], ['restore','opaque',rows[1].id], ['end','opaque']]);
+  assert.equal(f.state.terminals.size,2);
+  assert.deepEqual(f.queries,[],'startup must not read the same catalog through the ordinary API');
+});
+
+
+test('an unavailable Antigravity startup batch does not prevent Claude restoration', async () => {
+  const opened=[];
+  const f=makeFilterFixture({
+    ListAgentProviders:async()=>[{id:'claude',name:'Claude'},{id:'antigravity',name:'Antigravity',hasHistory:true}],
+    GetOpenSessionRefs:async()=>[{id:filterClaude.id,provider:'claude'}],
+    BeginSessionRestore:async()=>{throw new Error('agy unavailable');},
+    read:async ids=>({sessions:[filterClaude],succeededProviders:ids,warnings:[]}),
+    StartSession:async(...args)=>opened.push(args),
+  });
+  await f.controller.initialize();
+  assert.deepEqual(opened,[[filterClaude.id,filterClaude.dir]]);
+  assert.ok(f.statuses.some(s=>s.message.includes('agy unavailable')));
+});
+
+
+test('closing a saved session before startup history completes prevents automatic reopening', async () => {
+ let enter,finish;
+ const entered=new Promise(resolve=>{enter=resolve;});
+ const pending=new Promise(resolve=>{finish=resolve;});
+ const opened=[];
+ const f=makeFilterFixture({GetOpenSessionRefs:async()=>[{id:filterCodex.id,provider:'codex'}],
+  read:async ids=>{enter();await pending;return {sessions:[filterCodex],succeededProviders:ids,warnings:[]};},
+  StartSession:async id=>opened.push(id)});
+ const initializing=f.controller.initialize();await entered;
+ f.state.closedTokens.add(filterCodex.id);
+ finish();await initializing;
+ assert.deepEqual(opened,[]);
+});
+
+
+test('fast provider history and restoration complete while Antigravity history is pending', async () => {
+ let finishAgy;
+ const agyPending=new Promise(resolve=>{finishAgy=resolve;});
+ const opened=[];
+ const agy={id:'antigravity:01900000-0000-7000-8000-000000000001',provider:'antigravity',dir:'C:\\synthetic',name:'Agy'};
+ const f=makeFilterFixture({
+  ListAgentProviders:async()=>[{id:'claude',name:'Claude'},{id:'antigravity',name:'Antigravity',hasHistory:true}],
+  GetOpenSessionRefs:async()=>[{id:filterClaude.id,provider:'claude'},{id:agy.id,provider:'antigravity'}],
+  BeginSessionRestore:async()=>{await agyPending;return {token:'batch',history:{sessions:[agy],succeededProviders:['antigravity'],warnings:[]}};},
+  read:async ids=>({sessions:[filterClaude],succeededProviders:ids,warnings:[]}),
+  StartSession:async id=>opened.push(id),RestoreSession:async(_,id)=>opened.push(id),EndSessionRestore:async()=>{},
+ });
+ const initializing=f.controller.initialize();
+ await new Promise(resolve=>setImmediate(resolve));
+ const fastWasVisible=visibleIDs(f).includes(filterClaude.id);
+ const fastWasOpened=opened.includes(filterClaude.id);
+ finishAgy();await initializing;
+ assert.equal(fastWasVisible,true,'fast history waited for the slow provider');
+ assert.equal(fastWasOpened,true,'fast automatic restoration waited for the slow provider');
+ assert.deepEqual(opened,[filterClaude.id,agy.id]);
+ assert.equal(f.state.terminals.size,2);
+});
+
+
+test('progressive history preserves a fast update and cached rows when another source fails', async () => {
+ let failSlow;
+ let second=false;
+ const pending=new Promise(resolve=>{failSlow=resolve;});
+ const f=makeFilterFixture({BeginSessionRestore:async()=>{throw new Error('not requested');},
+  read:async ids=>{
+   const id=ids[0];
+   if(second && id==='codex'){await pending;return {sessions:[],succeededProviders:[],warnings:['codex offline']};}
+   const row=id==='claude'?{...filterClaude,name:second?'Updated Claude':filterClaude.name}:filterCodex;
+   return {sessions:[row],succeededProviders:ids,warnings:[]};
+  }});
+ await f.controller.initialize();second=true;
+ const loading=f.controller.loadSessions();
+ await new Promise(resolve=>setImmediate(resolve));
+ const earlyName=f.state.sessionNames.get(filterClaude.id);
+ failSlow();await loading;
+ assert.equal(earlyName,'Updated Claude');
+ assert.equal(f.state.sessionNames.get(filterClaude.id),'Updated Claude');
+ assert.ok(visibleIDs(f).includes(filterCodex.id));
+ assert.ok(f.statuses.some(s=>s.message.includes('codex offline')));
+});
+
+test('progressive startup restores a filtered-out source without overwriting newer visible history', async () => {
+ let finishAgy;
+ const pending=new Promise(resolve=>{finishAgy=resolve;});
+ const agy={id:'antigravity:01900000-0000-7000-8000-000000000001',provider:'antigravity',dir:'C:\\synthetic',name:'Agy'};
+ let reads=0;const opened=[],ended=[];
+ const f=makeFilterFixture({
+  ListAgentProviders:async()=>[{id:'claude',name:'Claude'},{id:'antigravity',name:'Antigravity',hasHistory:true}],
+  GetOpenSessionRefs:async()=>[{id:agy.id,provider:'antigravity'}],
+  BeginSessionRestore:async()=>{await pending;return {token:'original',history:{sessions:[agy],succeededProviders:['antigravity'],warnings:[]}};},
+  read:async ids=>{reads++;return {sessions:[{...filterClaude,name:reads>1?'Latest Claude':'Old Claude'}],succeededProviders:ids,warnings:[]};},
+  RestoreSession:async(...args)=>opened.push(args),EndSessionRestore:async token=>ended.push(token),
+ });
+ const initializing=f.controller.initialize();
+ await new Promise(resolve=>setImmediate(resolve));
+ await f.controller.toggleProvider('antigravity');
+ finishAgy();await initializing;
+ assert.deepEqual(opened,[['original',agy.id]]);
+ assert.deepEqual([...f.state.selectedProviders],['claude']);
+ assert.equal(f.state.sessionNames.get(filterClaude.id),'Latest Claude');
+ assert.ok(visibleIDs(f).includes(agy.id));
+ assert.deepEqual(ended,['original']);
+});
+
+test('a startup batch returned after stop is released without restoring or painting late rows', async () => {
+ let finish;
+ const pending=new Promise(resolve=>{finish=resolve;});
+ const ended=[],opened=[];
+ const agy={id:'antigravity:01900000-0000-7000-8000-000000000001',provider:'antigravity',dir:'C:\\synthetic',name:'Agy'};
+ const f=makeFilterFixture({
+  ListAgentProviders:async()=>[{id:'antigravity',name:'Antigravity',hasHistory:true}],
+  GetOpenSessionRefs:async()=>[{id:agy.id,provider:'antigravity'}],
+  BeginSessionRestore:async()=>{await pending;return {token:'late',history:{sessions:[agy],succeededProviders:['antigravity'],warnings:[]}};},
+  RestoreSession:async(...args)=>opened.push(args),EndSessionRestore:async token=>ended.push(token),
+ });
+ const initializing=f.controller.initialize();
+ await new Promise(resolve=>setImmediate(resolve));
+ const showedProgress=f.statuses.some(status=>status.message.includes('正在后台'));
+ f.controller.stop();finish();await initializing;
+ assert.equal(showedProgress,true);
+ assert.deepEqual(opened,[]);assert.deepEqual(ended,['late']);assert.deepEqual(visibleIDs(f),[]);
 });

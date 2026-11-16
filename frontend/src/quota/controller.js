@@ -1,5 +1,5 @@
 const QUOTA_REFRESH_MS = 15 * 60_000;
-const QUOTA_SOURCES = new Set(['auto', 'codex', 'claude']);
+const QUOTA_SOURCES = new Set(['auto', 'codex', 'claude', 'antigravity']);
 
 export function activeQuotaProvider(state) {
   const token = state.activeToken;
@@ -40,7 +40,7 @@ export function createQuotaController({ state, view, GetAccountQuota, storage, G
     if (!started || !id || pending.has(id)) return;
     if (!force && apiPaused()) return;
     const old = cache.get(id);
-    if (!force && old && nowFn() - old.attempted < QUOTA_REFRESH_MS) return;
+    if (id !== 'antigravity' && !force && old && nowFn() - old.attempted < QUOTA_REFRESH_MS) return;
     const epoch = generation;
     const stamp = revision(id);
     const request = {};

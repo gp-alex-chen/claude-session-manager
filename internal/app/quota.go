@@ -22,6 +22,11 @@ func (a *App) GetAccountQuota(id string, force bool) (provider.QuotaSnapshot, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if provider.ID(id) == provider.Antigravity {
+		// A local observation already has its own collection time and lifetime.
+		// Do not hide new callbacks or closed terminals behind account caching.
+		return a.providers.AccountQuota(ctx, provider.Antigravity)
+	}
 	return a.quotaCache.Read(ctx, provider.ID(id), force), nil
 }
 

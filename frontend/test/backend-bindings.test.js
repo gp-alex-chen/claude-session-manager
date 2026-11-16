@@ -16,7 +16,7 @@ const expected = [
   'LoadPreferences', 'SetPreference',
   'GetNotificationConfig', 'SetNotificationConfig', 'GetNotificationStatus', 'TestNotification',
   'ListSessionsForProviders', 'ListHiddenSessionsForProviders',
-  'GetOpenSessionRefs', 'GetAccountQuota', 'GetCodexResetCredits', 'ConsumeCodexResetCredit',
+  'BeginSessionRestore', 'RestoreSession', 'EndSessionRestore', 'GetOpenSessionRefs', 'GetAccountQuota', 'GetCodexResetCredits', 'ConsumeCodexResetCredit',
 ];
 
 const wrapperNames = [...binding.matchAll(/export function (\w+)\s*\(/g)].map((match) => match[1]);
@@ -128,4 +128,11 @@ test('directory project wrappers forward arguments unchanged', () => {
 test('reset credit binding forwards offer and selected card unchanged', () => {
  assert.match(binding, /export function ConsumeCodexResetCredit\(offerToken, creditId\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['ConsumeCodexResetCredit'\]\(offerToken, creditId\);\s*\}/);
  assert.match(binding, /export function GetCodexResetCredits\(\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['GetCodexResetCredits'\]\(\);\s*\}/);
+});
+
+
+test('startup restore wrappers forward only provider or opaque token and exact ID', () => {
+  for (const [name,args] of [['BeginSessionRestore','provider'],['RestoreSession','token, id'],['EndSessionRestore','token']]) {
+    assert.ok(binding.includes(`export function ${name}(${args}) { return window['go']['app']['App']['${name}'](${args}); }`));
+  }
 });

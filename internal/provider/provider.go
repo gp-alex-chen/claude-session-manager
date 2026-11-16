@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -20,8 +21,9 @@ import (
 type ID string
 
 const (
-	Claude ID = "claude"
-	Codex  ID = "codex"
+	Claude      ID = "claude"
+	Codex       ID = "codex"
+	Antigravity ID = "antigravity"
 )
 
 type SessionRef struct {
@@ -100,6 +102,9 @@ type OpenRequest struct {
 	Ref          *SessionRef
 	Dir          string
 	RuntimeToken string
+	// RuntimeContext outlives cancellable metadata preparation. A successful
+	// launch owns its worker until PTY teardown or application shutdown.
+	RuntimeContext context.Context
 }
 type LaunchSpec struct {
 	Command string
@@ -269,18 +274,35 @@ func (r *Registry) QuerySessions(ctx context.Context, ids []ID) ([]Session, []ID
 	for _, id := range ids {
 		selected[id] = true
 	}
-	var out []Session
-	var warnings []error
-	var succeeded []ID
+	type historyResult struct {
+		provider AgentProvider
+		sessions []Session
+		err      error
+	}
+	results := []historyResult{}
 	for _, p := range r.providers {
 		if ids != nil && !selected[p.Descriptor().ID] {
 			continue
 		}
-		h, ok := p.(HistoryProvider)
-		if !ok {
-			continue
+		if _, ok := p.(HistoryProvider); ok {
+			results = append(results, historyResult{provider: p})
 		}
-		list, err := h.ListSessions(ctx)
+	}
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			item := &results[i]
+			item.sessions, item.err = item.provider.(HistoryProvider).ListSessions(ctx)
+		}(i)
+	}
+	wg.Wait()
+	var out []Session
+	var warnings []error
+	var succeeded []ID
+	for _, item := range results {
+		p, list, err := item.provider, item.sessions, item.err
 		if err != nil {
 			warnings = append(warnings, fmt.Errorf("%s history: %w", p.Descriptor().Name, err))
 		} else {
@@ -298,14 +320,22 @@ func (r *Registry) QuerySessions(ctx context.Context, ids []ID) ([]Session, []ID
 }
 
 func (r *Registry) Status(ctx context.Context) ([]agent.AgentInfo, []error) {
-	return r.StatusExcept(ctx, "")
+	return r.status(ctx, nil)
+}
+
+func (r *Registry) StatusOnly(ctx context.Context, id ID) ([]agent.AgentInfo, []error) {
+	return r.status(ctx, func(candidate ID) bool { return candidate == id })
 }
 
 func (r *Registry) StatusExcept(ctx context.Context, excluded ID) ([]agent.AgentInfo, []error) {
+	return r.status(ctx, func(candidate ID) bool { return candidate != excluded })
+}
+
+func (r *Registry) status(ctx context.Context, include func(ID) bool) ([]agent.AgentInfo, []error) {
 	var out []agent.AgentInfo
 	var warnings []error
 	for _, p := range r.providers {
-		if p.Descriptor().ID == excluded {
+		if include != nil && !include(p.Descriptor().ID) {
 			continue
 		}
 		s, ok := p.(StatusSource)

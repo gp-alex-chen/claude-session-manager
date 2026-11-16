@@ -1,10 +1,13 @@
-#account-quota { position: static; flex: 0 0 auto; margin-left: auto; }
+#account-quota { position: static; flex: 0 1 auto; margin-left: auto; min-width: 0; max-width: 100%; }
 #account-quota[hidden] { display: none; }
-.quota-ring-button { display: flex; align-items: center; gap: 6px; padding: 0 3px; color: var(--text-dim); background: transparent; border: 0; border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
+.quota-ring-button { display: flex; align-items: center; gap: 6px; padding: 0 3px; max-width: 100%; box-sizing: border-box; color: var(--text-dim); background: transparent; border: 0; border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
 .quota-agent-label { font-size: 11px; }
-.quota-meter { width: 36px; height: 36px; display: block; }
+.quota-meter { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .quota-meter svg { display: block; }
+.quota-ring-group { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; min-width: 36px; }
+.quota-ring-group-label { max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 .quota-meter text { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.quota-meter .quota-many-layers text { font-size: 12px; }
 .quota-track { stroke: var(--border-strong); }
 .quota-short { stroke: #438af4; fill: #438af4; }
 .quota-week { stroke: #d97757; fill: #d97757; }

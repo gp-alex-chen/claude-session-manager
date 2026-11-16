@@ -5,6 +5,8 @@
 - **Claude**：取自 [Claude 官方网站](https://claude.com/) 的 Claude wordmark 中独立星形符号；保留原始路径、比例及橙色 `#D97757`。图标属于 Anthropic。
 - **Codex**：取自 OpenAI 官方 Windows 应用包 `OpenAI.Codex` 版本 `26.1002.7124.0` 的 `webview/assets/codex_new-f14177b03534.svg`。保留原始路径和比例，单色使用 `currentColor` 适配应用主题。图标属于 OpenAI，参见 [OpenAI 品牌指引](https://openai.com/brand/)。
 
+- **Antigravity**：当前使用项目自绘的单色 A 字母标识，作为 provider 的临时识别图形，不是 Google 官方产品标志；已打开时使用蓝色 `#4285F4`。
+
 这些标志仅用于识别会话所属产品。新增 provider 若没有内置图标，则显示其名称。
 
 普通会话行将产品来源与打开状态合并到左侧：未打开使用灰色产品图标，

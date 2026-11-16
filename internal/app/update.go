@@ -9,6 +9,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/gp-alex-chen/claude-session-manager/internal/provider"
 	"os"
 	"path/filepath"
 	"time"
@@ -89,8 +90,21 @@ func (a *App) UpdateToLatest() error {
 }
 
 func (a *App) applyDownloadedUpdate(downloaded string, apply func(string, bool) error, onReady func()) error {
+	generation, done, owner := a.claimStop()
+	if !owner {
+		return fmt.Errorf("应用正在关闭或已经关闭")
+	}
+	defer a.completeStop(generation, done, true)
+	a.cancelAgentLaunches(generation)
+	refs := a.antigravityRestoreReferences()
 	a.launchMu.Lock()
 	defer a.launchMu.Unlock()
+	a.lifecycleMu.Lock()
+	current := a.lifecycleID == generation && a.stopping
+	a.lifecycleMu.Unlock()
+	if !current {
+		return fmt.Errorf("应用生命周期已变化，更新已取消")
+	}
 	a.codexStatusLocked(a.runtimeContext(), true)
 	if err := a.persistOpenSessions(); err != nil {
 		a.log("更新前持久化打开会话失败: " + err.Error())
@@ -98,7 +112,9 @@ func (a *App) applyDownloadedUpdate(downloaded string, apply func(string, bool) 
 	}
 	a.sealProviderRestoration()
 	a.codexStatusLocked(a.runtimeContext(), true)
-	a.closeAllTerms()
+	if err := a.closeAllTermsWithNativeReferences(refs, generation); err != nil {
+		return fmt.Errorf("无法保存原生会话恢复清单，已取消更新: %w", err)
+	}
 	a.closeProviderServices()
 	if onReady != nil {
 		onReady()
@@ -136,13 +152,34 @@ func CleanupUpdateArtifacts() {
 // closeAllTerms 关闭全部 ConPTY 会话（与 shutdown 相同的幂等路径，
 // 仅用于"更新替换前"的主动收尾）。
 func (a *App) closeAllTerms() {
+	a.closeAllTermsWithNativeReferences(nil)
+}
+
+func (a *App) closeAllTermsWithNativeReferences(refs map[string]string, generations ...uint64) error {
 	if a.terms == nil {
-		return
+		return nil
+	}
+	a.agentLaunchMu.Lock()
+	defer a.agentLaunchMu.Unlock()
+	var generation uint64
+	if len(generations) > 0 {
+		generation = generations[0]
+	} else {
+		a.lifecycleMu.Lock()
+		generation = a.lifecycleID
+		a.lifecycleMu.Unlock()
+	}
+	carry := a.pendingStartupRestoreReferences(generation)
+	if p, err := a.providers.Lookup(provider.Antigravity); err == nil {
+		if source, ok := p.(antigravityRestoreSource); ok {
+			refs = source.FilterRestoreReferences(refs)
+		}
 	}
 	a.adoptionMu.Lock()
 	defer a.adoptionMu.Unlock()
-	a.terms.CloseAllWithPendingAndForget(
-		a.pendingAdoptionIDsLocked(),
+	return a.terms.CloseAllWithNativeReferences(
+		append(carry, a.pendingAdoptionIDsLocked()...),
 		a.cancelledAdoptionTokensLocked(),
+		refs,
 	)
 }

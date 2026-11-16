@@ -24,6 +24,9 @@ export function AdoptSession(runtimeToken, sessionID) { return window['go']['app
 export function StartNew(dir) { return window['go']['app']['App']['StartNew'](dir); }
 export function StartNewAgent(provider, dir) { return window['go']['app']['App']['StartNewAgent'](provider, dir); }
 export function ListAgentProviders() { return window['go']['app']['App']['ListAgentProviders'](); }
+export function BeginSessionRestore(provider) { return window['go']['app']['App']['BeginSessionRestore'](provider); }
+export function RestoreSession(token, id) { return window['go']['app']['App']['RestoreSession'](token, id); }
+export function EndSessionRestore(token) { return window['go']['app']['App']['EndSessionRestore'](token); }
 export function StartSession(id, dir) { return window['go']['app']['App']['StartSession'](id, dir); }
 export function OpenFolder(dir) { return window['go']['app']['App']['OpenFolder'](dir); }
 export function TermKill(token) { return window['go']['app']['App']['TermKill'](token); }

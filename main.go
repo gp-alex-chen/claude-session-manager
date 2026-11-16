@@ -2,12 +2,14 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/gp-alex-chen/claude-session-manager/internal/app"
 	"github.com/gp-alex-chen/claude-session-manager/internal/notify"
+	"github.com/gp-alex-chen/claude-session-manager/internal/provider"
 	"github.com/gp-alex-chen/claude-session-manager/internal/state"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -19,6 +21,14 @@ import (
 var assets embed.FS
 
 func main() {
+	// CLI callbacks must exit before any GUI, updater or user-state startup.
+	if len(os.Args) == 2 && os.Args[1] == provider.AntigravityHelperFlag {
+		if err := provider.WriteAntigravitySnapshot(os.Stdin, os.Getenv("THEONE_AGY_SNAPSHOT")); err != nil {
+			fmt.Fprintln(os.Stderr, "TheOne Antigravity status:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	app.CleanupUpdateArtifacts()
 	dataDir := state.DefaultDir()
 	if dataDir == "" {

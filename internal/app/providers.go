@@ -6,6 +6,7 @@ import (
 	"github.com/gp-alex-chen/claude-session-manager/internal/agent"
 	"github.com/gp-alex-chen/claude-session-manager/internal/provider"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"path/filepath"
 )
 
 func (a *App) newProviderRegistry(withCodex bool) *provider.Registry {
@@ -25,26 +26,50 @@ func (a *App) newProviderRegistry(withCodex bool) *provider.Registry {
 	if withCodex {
 		lookup := func(name string) (string, error) { return a.lookPath(name) }
 		_ = r.Register(provider.NewSharedCodexLive(lookup, a.signalProviderUpdate, a.store))
+		userSettings := ""
+		runtimeRoot := ""
+		if home, err := userHomeDir(); err == nil && home != "" {
+			userSettings = filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
+			runtimeRoot = filepath.Join(home, ".cache", "TheOne", "antigravity-runtime")
+		}
+		_ = r.Register(provider.NewAntigravity(provider.AntigravityConfig{
+			Lookup: lookup, OnChange: a.signalProviderUpdate,
+			UserSettingsPath: userSettings,
+			OnError:          func(err error) { a.log("清理 Antigravity 临时文件失败: " + err.Error()) },
+			TempRoot:         runtimeRoot,
+		}))
 	}
 	return r
 }
 
 func (a *App) startAgentPTY(token string, id provider.ID, ref *provider.SessionRef, dir string) error {
+	// Capture startup intent before any newly opened terminal can persist a
+	// different live set, including a manually created temporary session.
+	a.lifecycleMu.Lock()
+	_, startupErr := a.captureStartupRestoreReferencesLocked()
+	a.lifecycleMu.Unlock()
+	if startupErr != nil {
+		a.log("读取启动恢复清单失败: " + startupErr.Error())
+	}
+	if id == provider.Antigravity {
+		return a.startAntigravityPTY(token, ref, dir)
+	}
+	runtimeCtx := a.runtimeContext()
 	a.launchMu.Lock()
 	defer a.launchMu.Unlock()
 	a.lifecycleMu.Lock()
-	closed := a.lifecycleID != 0 && a.ctx == nil
+	closed := a.stopping || (a.lifecycleID != 0 && a.ctx == nil)
 	a.lifecycleMu.Unlock()
 	if closed {
 		return errors.New("应用已关闭，无法启动终端")
 	}
 	if ref != nil && a.terms.IsRunning(token) {
-		if !a.terms.IsSession(token, token) {
+		if !a.agentRuntimeMatches(token, *ref) {
 			return errors.New("此终端已切换会话，请先关闭再恢复原会话")
 		}
 		return nil
 	}
-	spec, err := a.providers.PrepareLaunch(a.runtimeContext(), id, provider.OpenRequest{Ref: ref, Dir: dir, RuntimeToken: token})
+	spec, err := a.providers.PrepareLaunch(runtimeCtx, id, provider.OpenRequest{Ref: ref, Dir: dir, RuntimeToken: token, RuntimeContext: runtimeCtx})
 	if err != nil {
 		return err
 	}
@@ -61,6 +86,9 @@ func (a *App) startAgentPTY(token string, id provider.ID, ref *provider.SessionR
 	}
 	if err != nil && spec.Close != nil {
 		spec.Close()
+	}
+	if err == nil {
+		a.noteStartupSessionStarted(token)
 	}
 	if err == nil && id == provider.Codex {
 		// A fast native reply can arrive before Manager registers the PTY.
@@ -85,7 +113,10 @@ func (a *App) codexStatusLocked(ctx context.Context, force bool) []agent.AgentIn
 			}
 		}
 	}
-	list, _ := a.providers.StatusExcept(ctx, provider.Claude)
+	list, warnings := a.providers.StatusExcept(ctx, provider.Claude)
+	for _, warning := range warnings {
+		a.log(warning.Error())
+	}
 	for i := range list {
 		info := &list[i]
 		if info.Provider != string(provider.Codex) || info.RuntimeToken == "" || a.terms == nil || !a.terms.IsRunning(info.RuntimeToken) {
@@ -118,16 +149,20 @@ func (a *App) sealProviderRestoration() {
 }
 
 func (a *App) beginProviderServices() {
-	if p, err := a.providers.Lookup(provider.Codex); err == nil {
-		if service, ok := p.(provider.ServiceLifecycle); ok {
-			service.BeginService()
+	for _, id := range []provider.ID{provider.Codex, provider.Antigravity} {
+		if p, err := a.providers.Lookup(id); err == nil {
+			if service, ok := p.(provider.ServiceLifecycle); ok {
+				service.BeginService()
+			}
 		}
 	}
 }
 func (a *App) closeProviderServices() {
-	if p, err := a.providers.Lookup(provider.Codex); err == nil {
-		if service, ok := p.(provider.ServiceLifecycle); ok {
-			service.CloseService()
+	for _, id := range []provider.ID{provider.Codex, provider.Antigravity} {
+		if p, err := a.providers.Lookup(id); err == nil {
+			if service, ok := p.(provider.ServiceLifecycle); ok {
+				service.CloseService()
+			}
 		}
 	}
 }
@@ -166,7 +201,15 @@ func (a *App) emitAgentUpdate(ctx context.Context) {
 	}
 	a.launchMu.Unlock()
 	if current && watcher != nil {
-		a.observeNotificationSource(ctx, "codex", others)
+		// Only Codex has a verified completion event. Other native providers
+		// still update UI/approval attention, without inheriting its source.
+		codex := make([]agent.AgentInfo, 0, len(others))
+		for _, info := range others {
+			if info.Provider == string(provider.Codex) {
+				codex = append(codex, info)
+			}
+		}
+		a.observeNotificationSource(ctx, "codex", codex)
 		runtime.EventsEmit(ctx, "agents:update", list)
 	}
 }
@@ -177,7 +220,7 @@ func (a *App) ListAgentProviders() []provider.Descriptor {
 }
 
 func (a *App) GetAgents() []agent.AgentInfo {
-	list, warnings := a.providers.Status(a.runtimeContext())
+	list, warnings := a.providers.StatusOnly(a.runtimeContext(), provider.Claude)
 	for _, warning := range warnings {
 		a.log(warning.Error())
 	}

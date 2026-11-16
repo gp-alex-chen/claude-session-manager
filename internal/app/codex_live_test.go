@@ -74,7 +74,7 @@ func (h codexHistoryFunc) ListSessions(ctx context.Context) ([]provider.Session,
 }
 
 func TestCodexBindingWaitsForSuccessfulPersistenceAndCannotReviveAfterKill(t *testing.T) {
-	a, store, _, _ := testApp(t)
+	a, store, logs, _ := testApp(t)
 	id := "01900000-0000-7000-8000-000000000001"
 	var client, server func([]byte)
 	live := provider.NewCodexLive(provider.NewCodex(fakeCodexHistory{sessions: []provider.Session{{Ref: provider.SessionRef{Provider: provider.Codex, ID: id}, Dir: `C:\work`}}}), func(_ context.Context, _ string, c, s func([]byte), _ func()) (provider.LaunchSpec, error) {
@@ -103,7 +103,7 @@ func TestCodexBindingWaitsForSuccessfulPersistenceAndCannotReviveAfterKill(t *te
 	}
 	fail.Store(false)
 	if list := a.GetAgents(); len(list) != 1 || !list[0].Restorable || !reflect.DeepEqual(a.GetOpenSessions(), []string{"codex:" + id}) {
-		t.Fatal("persistence retry failed", list, a.GetOpenSessions())
+		t.Fatal("persistence retry failed", list, "memory", a.terms.OpenIDs(), "disk", a.GetOpenSessions(), "logs", *logs)
 	}
 	a.TermKill(token)
 	server([]byte(`{"method":"thread/status/changed","params":{"threadId":"` + id + `","status":{"type":"idle"}}}`))

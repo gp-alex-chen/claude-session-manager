@@ -283,6 +283,24 @@ test('start is idempotent and initializes session/settings once', async () => {
   assert.deepEqual(fixture.calls.initializes, { agent: 0, terminal: 0, session: 1, settings: 1, usage: 0 });
 });
 
+test('terminal becomes interactive after local setup while background restoration is pending', async () => {
+  const fixture = makeFixture();
+  let enteredRestore, finishRestore;
+  const entered = new Promise(resolve => { enteredRestore = resolve; });
+  const pending = new Promise(resolve => { finishRestore = resolve; });
+  fixture.app.controllers.session.initialize = async () => { enteredRestore(); await pending; };
+  let completed = false;
+  const ready = fixture.app.start().then(() => { completed = true; });
+  await entered;
+  const interactive = !fixture.elements.get('terminal').inert;
+  const stillRestoring = !completed;
+  finishRestore();
+  await ready;
+  assert.equal(interactive, true, 'slow history must not disable the terminal workspace');
+  assert.equal(stillRestoring, true, 'ready still tracks completion for lifecycle callers');
+  fixture.app.stop();
+});
+
 test('runtime and resize events route to the matching controllers', async () => {
   const fixture = makeFixture();
   await fixture.app.start();

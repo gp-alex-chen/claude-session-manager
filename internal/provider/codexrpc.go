@@ -145,13 +145,24 @@ type rpcRead struct {
 	err error
 }
 type rpcSession struct {
-	ctx    context.Context
-	conn   io.ReadWriteCloser
-	reads  <-chan rpcRead
-	nextID int
+	ctx      context.Context
+	conn     io.ReadWriteCloser
+	reads    <-chan rpcRead
+	nextID   int
+	protocol string
+	jsonRPC  bool
 }
 
 func newRPCSession(ctx context.Context, conn io.ReadWriteCloser) *rpcSession {
+	return newRPCSessionWithNotificationFilter(ctx, conn, false)
+}
+
+// Metadata-only connections must keep draining notifications even while idle.
+// Other RPC consumers retain the notification stream used by integration clients.
+func newMetadataRPCSession(ctx context.Context, conn io.ReadWriteCloser) *rpcSession {
+	return newRPCSessionWithNotificationFilter(ctx, conn, true)
+}
+func newRPCSessionWithNotificationFilter(ctx context.Context, conn io.ReadWriteCloser, dropNotifications bool) *rpcSession {
 	reads := make(chan rpcRead)
 	go func() {
 		defer close(reads)
@@ -160,6 +171,9 @@ func newRPCSession(ctx context.Context, conn io.ReadWriteCloser) *rpcSession {
 		for sc.Scan() {
 			var msg rpcMessage
 			err := json.Unmarshal(sc.Bytes(), &msg)
+			if err == nil && dropNotifications && msg.ID == nil {
+				continue
+			}
 			select {
 			case reads <- rpcRead{msg, err}:
 			case <-ctx.Done():
@@ -182,9 +196,21 @@ func newRPCSession(ctx context.Context, conn io.ReadWriteCloser) *rpcSession {
 }
 
 func (r *rpcSession) call(method string, params any, result any) error {
+	return r.callContext(r.ctx, method, params, result)
+}
+
+func (r *rpcSession) callContext(ctx context.Context, method string, params any, result any) error {
+	protocol := r.protocol
+	if protocol == "" {
+		protocol = "Codex"
+	}
 	r.nextID++
 	id := r.nextID
-	request, err := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
+	message := map[string]any{"id": id, "method": method, "params": params}
+	if r.jsonRPC {
+		message["jsonrpc"] = "2.0"
+	}
+	request, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
@@ -193,30 +219,30 @@ func (r *rpcSession) call(method string, params any, result any) error {
 	}
 	for {
 		select {
-		case <-r.ctx.Done():
-			return r.ctx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		case read, ok := <-r.reads:
 			if !ok {
 				return io.EOF
 			}
 			if read.err != nil {
-				return fmt.Errorf("Codex protocol: %w", read.err)
+				return fmt.Errorf("%s protocol: %w", protocol, read.err)
 			}
 			m := read.msg
 			if m.ID == nil {
 				continue
 			}
 			if m.Method != "" {
-				return errors.New("unexpected Codex server request during metadata operation")
+				return fmt.Errorf("unexpected %s server request during metadata operation", protocol)
 			}
 			if *m.ID != id {
-				return errors.New("unexpected Codex response ID")
+				return fmt.Errorf("unexpected %s response ID", protocol)
 			}
 			if m.Error != nil {
-				return fmt.Errorf("Codex %s: %s", method, m.Error.Message)
+				return fmt.Errorf("%s %s: %s", protocol, method, m.Error.Message)
 			}
 			if len(m.Result) == 0 || string(m.Result) == "null" {
-				return errors.New("missing Codex result")
+				return fmt.Errorf("missing %s result", protocol)
 			}
 			return json.Unmarshal(m.Result, result)
 		}

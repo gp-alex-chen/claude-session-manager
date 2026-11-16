@@ -22,6 +22,25 @@ export function ringWindows(windows = []) {
   return shared.slice(0, 2);
 }
 
+// A group owns all its windows. The renderer handles any number of groups
+// and layers; provider adapters establish the actual group identities.
+export function quotaRingGroups(windows = [], { includeScoped = false } = {}) {
+  const groups = new Map();
+  const visible = includeScoped ? windows.filter(w => remainingPercent(w) !== null) : ringWindows(windows);
+  for (const window of visible) {
+    const id = window.scope || '';
+    if (!groups.has(id)) groups.set(id, { id, label: id, windows: [] });
+    groups.get(id).windows.push(window);
+  }
+  return [...groups.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).map(group => ({
+    ...group,
+    label: group.windows.length === 1 && !(group.windows[0].windowMinutes > 0)
+      ? group.windows[0].label || group.label : group.label,
+    windows: group.windows.sort((a, b) => (a.windowMinutes > 0 ? a.windowMinutes : Infinity)
+      - (b.windowMinutes > 0 ? b.windowMinutes : Infinity) || String(a.id || a.label || '').localeCompare(String(b.id || b.label || ''))),
+  }));
+}
+
 function resetText(window) {
   return window.resetsAt > 0 ? new Date(window.resetsAt * 1000).toLocaleString('zh-CN', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
@@ -50,7 +69,7 @@ export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, 
   panel.setAttribute('aria-label', '订阅额度');
   const sourceField = el('label', 'quota-source-field');
   const sourceSelect = el('select', 'quota-source-select');
-  for (const [value, text] of [['auto', '自动跟随会话'], ['codex', 'Codex / ChatGPT'], ['claude', 'Claude']]) {
+  for (const [value, text] of [['auto', '自动跟随会话'], ['codex', 'Codex / ChatGPT'], ['claude', 'Claude'], ['antigravity', 'Antigravity']]) {
     const option = el('option', '', text); option.value = value; sourceSelect.append(option);
   }
   sourceField.append(el('span', '', '额度来源'), sourceSelect);
@@ -61,7 +80,7 @@ export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, 
   const refresh = el('button', 'quota-refresh', '刷新额度'); refresh.type = 'button';
   panel.append(sourceField, sourceNote, content, resets, refresh); root.append(button, panel); root.hidden = true;
   function close() { panel.hidden = true; button.setAttribute('aria-expanded', 'false'); confirmation = null; resets.replaceChildren(); }
-  const toggle = () => { if (!panel.hidden) { close(); return; } panel.hidden = false; button.setAttribute('aria-expanded', 'true'); if (lastRender) render(lastRender); };
+  const toggle = () => { if (!panel.hidden) { close(); return; } panel.hidden = false; button.setAttribute('aria-expanded', 'true'); if (lastRender) render(lastRender); if (lastRender?.provider === 'antigravity') onRefresh?.(); };
   const outside = (event) => { if (!root.contains?.(event.target)) close(); };
   const escape = (event) => { if (event.key === 'Escape' && !panel.hidden) { close(); button.focus?.(); } };
   const refreshClick = () => onRefresh?.();
@@ -88,44 +107,63 @@ export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, 
     sourceSelect.value = source;
     root.hidden = !provider;
     if (!provider) { syncPaceTimer(false); close(); return; }
-    const name = provider === 'codex' ? 'Codex' : provider === 'claude' ? 'Claude' : provider;
+    const name = provider === 'codex' ? 'Codex' : provider === 'claude' ? 'Claude' : provider === 'antigravity' ? 'Antigravity' : provider;
+    sourceNote.textContent = provider === 'antigravity'
+      ? '显示最近更新的 Antigravity 终端回调。请在终端运行 /usage，再读取额度；不同终端的数据不合并。'
+      : '读取本机所选 CLI 当前登录账户的订阅额度。';
     label.textContent = name;
     const windows = snapshot?.status === 'available' ? snapshot.windows || [] : [];
-    const selected = ringWindows(windows);
+    const groups = quotaRingGroups(windows, { includeScoped: provider === 'antigravity' });
+    const selected = groups.flatMap(group => group.windows);
     const stale = !!snapshot?.stale || !!error;
     root.classList.toggle('quota-stale', stale);
     button.setAttribute('aria-busy', String(loading));
-    const chart = svgEl('svg', { viewBox: '0 0 56 56', width: 36, height: 36 });
     const descriptions = [];
-    const tracks = selected.length ? selected : [null];
     const now = nowFn();
     syncPaceTimer(selected.some(window => expectedRemainingPercent(window, now) !== null));
-    tracks.forEach((window, index) => {
-      const radius = index === 0 ? 25 : 20;
-      const remaining = remainingPercent(window);
-      const used = remaining === null ? null : 100 - remaining;
-      const colorClass = window?.windowMinutes === 10080 ? 'quota-week' : 'quota-short';
-      chart.append(svgEl('circle', { cx: 28, cy: 28, r: radius, class: 'quota-track', fill: 'none', 'stroke-width': 3 }));
-      // SVG circles run clockwise; rotate the used arc's start to noon.
-      if (used > 0) chart.append(svgEl('circle', { cx: 28, cy: 28, r: radius, class: colorClass,
-        fill: 'none', 'stroke-width': 3, pathLength: 100, 'stroke-dasharray': `${used} 100`,
-        'stroke-linecap': 'round', transform: 'rotate(-90 28 28)' }));
-      const expected = expectedRemainingPercent(window, now);
-      if (expected !== null) {
-        const angle = (100 - expected) / 100 * 2 * Math.PI - Math.PI / 2;
-        const points = { x1: 28 + (radius - 1.3) * Math.cos(angle), y1: 28 + (radius - 1.3) * Math.sin(angle),
-          x2: 28 + (radius + 1.3) * Math.cos(angle), y2: 28 + (radius + 1.3) * Math.sin(angle) };
-        chart.append(svgEl('line', { ...points, class: 'quota-pace-outline', 'stroke-width': 3.5 }),
-          svgEl('line', { ...points, class: 'quota-pace-marker', 'stroke-width': 1.7, 'stroke-linecap': 'round' }));
-      }
-      const text = svgEl('text', { x: 28, y: tracks.length === 1 ? 33 : index === 0 ? 25 : 39,
-        class: remaining === null ? 'quota-unknown' : colorClass, 'text-anchor': 'middle' });
-      text.textContent = remaining === null ? loading ? '…' : '—' : `${remaining}%`;
-      chart.append(text);
-      if (window) descriptions.push(`${window.label || '额度'}剩余 ${remaining}%`
-        + (expected === null ? '' : ` · 均匀使用应已用 ${Math.round(100 - expected)}%`) + ` · ${resetText(window)}`);
+    const meters = (groups.length ? groups : [{ label: '', windows: [] }]).map(group => {
+      const tracks = group.windows.length ? group.windows : [null];
+      const outerRadius = tracks.length <= 2 ? 25 : Math.max(20, tracks.length * 6 + 4) + (tracks.length - 1) * 5;
+      const size = outerRadius * 2 + 6;
+      const center = size / 2;
+      const pixels = Math.round(size * 36 / 56);
+      const chart = svgEl('svg', { viewBox: `0 0 ${size} ${size}`, width: pixels, height: pixels,
+        class: tracks.length > 2 ? 'quota-many-layers' : '', 'data-quota-group': group.id || '' });
+      const groupDescriptions = [];
+      tracks.forEach((window, index) => {
+        const radius = outerRadius - index * 5;
+        const remaining = remainingPercent(window);
+        const used = remaining === null ? null : 100 - remaining;
+        const colorClass = window?.windowMinutes === 10080 ? 'quota-week' : 'quota-short';
+        chart.append(svgEl('circle', { cx: center, cy: center, r: radius, class: 'quota-track', fill: 'none', 'stroke-width': 3 }));
+        // SVG circles run clockwise; rotate the used arc's start to noon.
+        if (used > 0) chart.append(svgEl('circle', { cx: center, cy: center, r: radius, class: colorClass,
+          fill: 'none', 'stroke-width': 3, pathLength: 100, 'stroke-dasharray': `${used} 100`,
+          'stroke-linecap': 'round', transform: `rotate(-90 ${center} ${center})` }));
+        const expected = expectedRemainingPercent(window, now);
+        if (expected !== null) {
+          const angle = (100 - expected) / 100 * 2 * Math.PI - Math.PI / 2;
+          const points = { x1: center + (radius - 1.3) * Math.cos(angle), y1: center + (radius - 1.3) * Math.sin(angle),
+            x2: center + (radius + 1.3) * Math.cos(angle), y2: center + (radius + 1.3) * Math.sin(angle) };
+          chart.append(svgEl('line', { ...points, class: 'quota-pace-outline', 'stroke-width': 3.5 }),
+            svgEl('line', { ...points, class: 'quota-pace-marker', 'stroke-width': 1.7, 'stroke-linecap': 'round' }));
+        }
+        const text = svgEl('text', { x: center, y: tracks.length === 1 ? center + 5
+          : tracks.length === 2 ? center + (index === 0 ? -3 : 11) : center - (tracks.length - 1) * 6 + index * 12 + 4,
+          class: remaining === null ? 'quota-unknown' : colorClass, 'text-anchor': 'middle' });
+        text.textContent = remaining === null ? loading ? '…' : '—' : `${remaining}%`;
+        chart.append(text);
+        if (window) groupDescriptions.push(`${window.label || '额度'}剩余 ${remaining}%`
+          + (expected === null ? '' : ` · 均匀使用应已用 ${Math.round(100 - expected)}%`) + ` · ${resetText(window)}`);
+      });
+      descriptions.push(...groupDescriptions);
+      const groupNode = el('span', 'quota-ring-group');
+      groupNode.title = [group.label, ...groupDescriptions].filter(Boolean).join('\n');
+      groupNode.append(chart);
+      if (group.label) groupNode.append(el('span', 'quota-ring-group-label', group.label));
+      return groupNode;
     });
-    meter.replaceChildren(chart);
+    meter.replaceChildren(...meters);
     let message = error || snapshot?.message || (loading ? '正在查询订阅额度' : '暂无额度数据');
     if (stale) descriptions.push(message || '显示上次读取的额度');
     const tooltip = [name + ' 订阅额度', ...descriptions];
@@ -139,11 +177,11 @@ export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, 
       if (expected !== null) row.append(el('small', '', `参考刻度：均匀使用应已用 ${Math.round(100 - expected)}%`));
       return row;
     });
-    if (!windows.length || stale) rows.push(el('p', 'quota-message', message));
+    if (!windows.length || stale || provider === 'antigravity') rows.push(el('p', 'quota-message', message));
     if (snapshot?.readAt && !String(snapshot.readAt).startsWith('0001')) rows.push(el('small', 'quota-read-time',
       `${stale ? '上次读取' : '读取于'} ${new Date(snapshot.readAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`));
     content.replaceChildren(title, ...rows);
-    refresh.disabled = loading || (provider === 'codex' && (input.resetLoading || input.resetUsing)); refresh.textContent = loading || input.resetLoading ? '查询中…' : '刷新额度';
+    refresh.disabled = loading || (provider === 'codex' && (input.resetLoading || input.resetUsing)); refresh.textContent = loading || input.resetLoading ? '查询中…' : provider === 'antigravity' ? '读取终端额度' : '刷新额度';
     renderResets(input);
   }
   function renderResets(input) {

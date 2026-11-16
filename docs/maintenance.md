@@ -235,6 +235,16 @@ CI 对 PR/main 只做 validate；`v*-wails` tag 或手动触发才运行 Windows
 
 ConPTY 会结束更新前的会话进程，但 open-sessions 清单会供新版恢复。Claude 的 `/theme auto` 可能因 conhost 背景查询误判亮色，需要在 Claude 内手动 `/theme light`。未读状态是内存态。pwsh 必须是 PowerShell 7 的 `pwsh`，不可用时回退 cmd。
 
+## Antigravity 终端与退出恢复
+
+Antigravity 的独立适配器、会话级状态回调、官方 ACP 只读历史、指定 ID 打开和 Windows 进程测试见 [Antigravity 接入](antigravity.md)。PTY 运行时保持 unbound，正常退出／更新前在全局启动锁外核对已确认的原生引用，再原子关闭并保存存活终端；待启动请求可取消，成功后的状态 worker 使用独立运行上下文。身份切换歧义会撤销本 runtime 的恢复资格；成功通知和 Token 用量仍分别设验收门槛。
+
 ## Codex 安装路径与环境兼容
 
 CLI 查找先尊重当前进程 PATH，缺失时检查绝对路径形式的 `CODEX_INSTALL_DIR` 和官方 `%LOCALAPPDATA%/Programs/OpenAI/Codex/bin/codex.exe`。Windows 安装器更新用户 PATH 后，已运行的 TheOne 可能仍保留旧快照；不全盘扫描、不修改全局环境。已解析程序目录只加入该 Codex 终端的 PATH，其余继承路径继续保留；App 不再用旧 PATH 重复否决已解析的程序。此修复不刷新全部环境变量，其他自定义变量变更仍需要从环境已更新的启动器重新启动 TheOne。
+
+启动时先加载本地偏好、布局和主题，再解除工作区交互限制；会话历史和自动恢复继续异步执行，`start()` 的 promise 仍覆盖完整恢复便于生命周期协调。Registry 并发读取各来源后按注册顺序聚合；前端在同一个 request/run 内按来源渐进提交，筛选变化只淘汰显示，不能丢弃本轮恢复的局部结果。Antigravity 使用 `StartupHistory` 私有快照和三段式恢复绑定，每轮一次 fresh 目录读取，凭据按 generation、已保存 ID、CLI、目录及短 TTL 限定；普通手动打开和退出确认仍使用原有 fresh 核对。新增绑定必须同步 Go、`frontend/wailsjs/go/app/App.js`、`src/api/backend.js` 与 binding 测试。
+
+渐进恢复使用 lifecycle 内固定的原始 saved-ref 集合，而非后续实时 open-sessions 文件作为授权；用户关闭和成功 PTY 注册分别撤销原引用的恢复资格及退出 carry。尚未成功启动、未明确关闭的旧引用在最终原子退出快照中保留，generation 不匹配不携带；已启动但身份未确认或退出核对失败的 agy 不得通过 carry 复活。
+
+Antigravity 元数据通过 `sharedAntigravityACP` 复用应用级 stdio 进程，query gate 保护 initialize 与完整分页，epoch/state mutex 保护所有权，状态锁内不做 Open/Close/Wait。所有已取得连接的摘除路径登记 retiring completion，CloseService 不取 query gate 但等待已登记回收；BeginService 保持 lazy。请求取消通过实例限定的 Abort 解阻同步管道写入，撤销 AfterFunc 后才释放 query gate；connection context 独立于 UI/request。仅 metadata RPC reader 丢弃无 ID 通知并持续读取，通用 Codex reader 的通知流不变。cache epoch 隔离服务关闭/重开，fresh 仍实际请求列表；服务不创建、加载或提示原生会话。
