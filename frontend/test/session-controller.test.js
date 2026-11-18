@@ -549,6 +549,33 @@ test('archive follows selection and rejects stale counts from older requests', a
   assert.equal(fixture.hiddenPanel.children.length, 1);
 });
 
+test('archive accepts successful providers and retains cached rows for failed providers', async () => {
+  const agy = { ...session('antigravity:archived', 'work', 'Antigravity archived'), provider: 'antigravity' };
+  const warning = 'Antigravity history: agy unavailable';
+  let response = { sessions: [filterClaude], succeededProviders: ['claude', 'codex'], warnings: [warning] };
+  const f = makeFilterFixture({
+    ListAgentProviders: async () => [...filterAgents, { id: 'antigravity', name: 'Antigravity' }],
+    readHidden: async () => response,
+  });
+  await f.controller.initialize();
+  f.hiddenButton.click();
+  await f.controller.refreshHidden(false);
+  assert.equal(f.hiddenCount.textContent, ' · 1');
+  assert.equal(f.hiddenPanel.children.length, 1);
+  assert.ok(f.statuses.some(status => status.kind === 'warn' && status.message.includes(warning)));
+
+  response = { sessions: [filterClaude, agy], succeededProviders: ['claude', 'codex', 'antigravity'], warnings: [] };
+  await f.controller.refreshHidden(false);
+  assert.equal(f.hiddenCount.textContent, ' · 2');
+
+  response = { sessions: [], succeededProviders: ['claude', 'codex'], warnings: [warning] };
+  await f.controller.refreshHidden(false);
+  assert.equal(f.hiddenCount.textContent, ' · 1');
+  f.archiveSearch.value = agy.name;
+  f.archiveSearch.dispatchEvent({ type: 'input' });
+  assert.notEqual(f.hiddenPanel.children[0].textContent, '没有匹配的归档会话');
+});
+
 test('late successful history response cannot replace a newer filter result', async () => {
   const fixture = makeFilterFixture();
   await fixture.controller.initialize();
@@ -2142,6 +2169,51 @@ test('progressive history preserves a fast update and cached rows when another s
  assert.equal(f.state.sessionNames.get(filterClaude.id),'Updated Claude');
  assert.ok(visibleIDs(f).includes(filterCodex.id));
  assert.ok(f.statuses.some(s=>s.message.includes('codex offline')));
+});
+
+test('an unchanged multi-provider poll shares archive data and skips sidebar and usage work', async () => {
+  const agy = { ...session('antigravity:current'), provider: 'antigravity' };
+  const archived = { ...session('antigravity:archived'), provider: 'antigravity' };
+  const providers = [...filterAgents, { id: 'antigravity', name: 'Antigravity' }];
+  let agyName = agy.name;
+  let archiveReads = 0;
+  const history = ids => ({
+    sessions: [filterClaude, filterCodex, { ...agy, name: agyName }].filter(row => ids.includes(row.provider)),
+    archivedSessions: ids.includes('antigravity') ? [archived] : [],
+    succeededProviders: ids,
+    warnings: [],
+  });
+  const f = makeFixture({
+    ListAgentProviders: async () => providers,
+    GetOpenSessionRefs: async () => [],
+    ListSessionsForProviders: async ids => history(ids),
+    BeginSessionRestore: async id => ({ token: 'batch', history: history([id]) }),
+    ListHiddenSessionsForProviders: async ids => {
+      archiveReads++;
+      return { sessions: [], succeededProviders: ids, warnings: [] };
+    },
+  });
+  f.controller.start();
+  await f.controller.initialize();
+  assert.equal(f.hiddenCount.textContent, ' · 1');
+  assert.equal(archiveReads, 0);
+  const renders = f.renderCount;
+  const prefetches = f.projectCalls.length;
+  const tick = f.intervals.find(timer => timer.delay === 5000).callback;
+  tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.renderCount, renders);
+  assert.equal(archiveReads, 0);
+  assert.equal(f.projectCalls.length, prefetches);
+
+  agyName = 'Updated Antigravity title';
+  tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.renderCount, renders + 1);
+  assert.equal(f.state.sessionNames.get(agy.id), agyName);
+  assert.equal(f.hiddenCount.textContent, ' · 1');
+  assert.equal(archiveReads, 0);
+  f.controller.stop();
 });
 
 test('progressive startup restores a filtered-out source without overwriting newer visible history', async () => {

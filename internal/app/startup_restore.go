@@ -98,7 +98,7 @@ func (a *App) BeginSessionRestore(id string) (SessionRestoreResult, error) {
 			valid = append(valid, row)
 		}
 	}
-	result := a.formatProviderSessions(false, valid, []provider.ID{batch.provider}, nil)
+	result := a.formatProviderSessions(valid, []provider.ID{batch.provider}, nil)
 	a.restoreMu.Lock()
 	defer a.restoreMu.Unlock()
 	a.lifecycleMu.Lock()

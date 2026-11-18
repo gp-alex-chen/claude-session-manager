@@ -256,22 +256,26 @@ func (a *App) shutdown(context.Context) {
 func (a *App) Startup(ctx context.Context)  { a.startup(ctx) }
 func (a *App) Shutdown(ctx context.Context) { a.shutdown(ctx) }
 func (a *App) ListSessions() []SessionInfo {
-	return a.listProviderSessions(false, nil).Sessions
+	return a.listProviderSessions(nil).Sessions
 }
 
 type ProviderSessionsResult struct {
 	Sessions           []SessionInfo `json:"sessions"`
+	ArchivedSessions   []SessionInfo `json:"archivedSessions"`
 	SucceededProviders []string      `json:"succeededProviders"`
 	Warnings           []string      `json:"warnings"`
 }
 
 func (a *App) ListSessionsForProviders(ids []string) (ProviderSessionsResult, error) {
-	return a.filteredProviderSessions(false, ids)
+	return a.filteredProviderSessions(ids)
 }
 func (a *App) ListHiddenSessionsForProviders(ids []string) (ProviderSessionsResult, error) {
-	return a.filteredProviderSessions(true, ids)
+	result, err := a.filteredProviderSessions(ids)
+	result.Sessions = result.ArchivedSessions
+	result.ArchivedSessions = nil
+	return result, err
 }
-func (a *App) filteredProviderSessions(hidden bool, ids []string) (ProviderSessionsResult, error) {
+func (a *App) filteredProviderSessions(ids []string) (ProviderSessionsResult, error) {
 	if len(ids) == 0 {
 		return ProviderSessionsResult{}, errors.New("至少选择一种会话来源")
 	}
@@ -286,21 +290,23 @@ func (a *App) filteredProviderSessions(hidden bool, ids []string) (ProviderSessi
 			seen[id] = true
 		}
 	}
-	return a.listProviderSessions(hidden, out), nil
+	return a.listProviderSessions(out), nil
 }
-func (a *App) listProviderSessions(wantHidden bool, ids []provider.ID) ProviderSessionsResult {
+func (a *App) listProviderSessions(ids []provider.ID) ProviderSessionsResult {
 	list, succeeded, warnings := a.providers.QuerySessions(a.runtimeContext(), ids)
-	return a.formatProviderSessions(wantHidden, list, succeeded, warnings)
+	return a.formatProviderSessions(list, succeeded, warnings)
 }
 
-func (a *App) formatProviderSessions(wantHidden bool, list []provider.Session, succeeded []provider.ID, warnings []error) ProviderSessionsResult {
-	result := ProviderSessionsResult{Sessions: []SessionInfo{}, SucceededProviders: []string{}, Warnings: []string{}}
+func (a *App) formatProviderSessions(list []provider.Session, succeeded []provider.ID, warnings []error) ProviderSessionsResult {
+	result := ProviderSessionsResult{
+		Sessions: []SessionInfo{}, ArchivedSessions: []SessionInfo{},
+		SucceededProviders: []string{}, Warnings: []string{},
+	}
 	st, err := a.store.Load()
 	if err != nil {
 		a.DebugLog("读取 favorites.json 失败: " + err.Error())
 	}
 	hidden, aliases := st.HiddenSet(), st.Aliases
-	out := []SessionInfo{}
 	for _, id := range succeeded {
 		result.SucceededProviders = append(result.SucceededProviders, string(id))
 	}
@@ -314,9 +320,6 @@ func (a *App) formatProviderSessions(wantHidden bool, list []provider.Session, s
 		if err != nil {
 			continue
 		}
-		if hidden[key] != wantHidden {
-			continue
-		}
 		name := s.Name
 		p, _ := a.providers.Lookup(s.Ref.Provider)
 		_, nativeRename := p.(provider.RenameProvider)
@@ -327,13 +330,17 @@ func (a *App) formatProviderSessions(wantHidden bool, list []provider.Session, s
 		if !s.Time.IsZero() {
 			when = s.Time.Format("01-02 15:04")
 		}
-		out = append(out, SessionInfo{ID: key, Dir: s.Dir, Name: name, Time: when, Provider: string(s.Ref.Provider), RawID: s.Ref.ID})
+		row := SessionInfo{ID: key, Dir: s.Dir, Name: name, Time: when, Provider: string(s.Ref.Provider), RawID: s.Ref.ID}
+		if hidden[key] {
+			result.ArchivedSessions = append(result.ArchivedSessions, row)
+		} else {
+			result.Sessions = append(result.Sessions, row)
+		}
 	}
-	result.Sessions = out
 	return result
 }
 func (a *App) ListHiddenSessions() []SessionInfo {
-	return a.listProviderSessions(true, nil).Sessions
+	return a.listProviderSessions(nil).ArchivedSessions
 }
 func (a *App) sessionSnapshot() []*session.Session {
 	snapshot, err := a.sessionSnapshotDetailed()

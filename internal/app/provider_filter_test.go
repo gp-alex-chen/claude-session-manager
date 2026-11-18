@@ -46,6 +46,11 @@ func TestFilteredHistorySkipsUnselectedAdaptersAndFiltersArchive(t *testing.T) {
 	if err := store.SetHidden("codex:"+id, true); err != nil {
 		t.Fatal(err)
 	}
+	list, err = a.ListSessionsForProviders([]string{"claude"})
+	if err != nil || len(list.Sessions) != 0 || len(list.ArchivedSessions) != 1 ||
+		list.ArchivedSessions[0].ID != id || claudeCalls != 2 || h.calls != 0 {
+		t.Fatalf("combined list=%+v calls=%d/%d err=%v", list, claudeCalls, h.calls, err)
+	}
 	hidden, err := a.ListHiddenSessionsForProviders([]string{"claude"})
 	if err != nil || len(hidden.Sessions) != 1 || hidden.Sessions[0].ID != id || h.calls != 0 {
 		t.Fatalf("archive=%+v err=%v", hidden, err)
@@ -55,7 +60,7 @@ func TestFilteredHistorySkipsUnselectedAdaptersAndFiltersArchive(t *testing.T) {
 			t.Fatalf("accepted providers=%v", ids)
 		}
 	}
-	if claudeCalls != 2 || h.calls != 0 {
+	if claudeCalls != 3 || h.calls != 0 {
 		t.Fatal("invalid selection invoked adapters")
 	}
 }

@@ -61,7 +61,8 @@ export function createSessionController(deps) {
   const activeRestoreTokens = new Set();
   let searchQuery = '';
   let openedOnly = false;
-  let archivedSessions = [];
+  const archiveByProvider = new Map();
+  let lastArchiveSignature = '';
   const nativeSessions = new Map();
   let latestAgentIdentities = [];
   let identitiesEnabled = true;
@@ -123,9 +124,7 @@ export function createSessionController(deps) {
     filterGeneration++;
     storageRef?.setItem('session-provider-filter', JSON.stringify([...state.selectedProviders].sort()));
     renderProviderFilters();
-    hiddenCount.textContent = '';
-    if (hiddenOpen) hiddenPanel.innerHTML = '';
-    archivedSessions = [];
+    syncArchiveView();
     renderSessions(lastLoaded);
     await loadSessions();
   }
@@ -460,7 +459,9 @@ export function createSessionController(deps) {
           activeRestoreTokens.add(batch.token);
           result = historyResponse(batch.history, [id]);
         } else result = historyResponse(await backend.ListSessionsForProviders([id]), [id]);
-        result = { sessions: result.sessions.filter(row => (row.provider || 'claude') === id),
+        const belongsToProvider = row => (row.provider || 'claude') === id;
+        result = { sessions: result.sessions.filter(belongsToProvider),
+          archivedSessions: Array.isArray(result.archivedSessions) ? result.archivedSessions.filter(belongsToProvider) : undefined,
           succeededProviders: result.succeededProviders.filter(provider => provider === id), warnings: result.warnings || [] };
       } catch (error) {
         result = { sessions: [], succeededProviders: [], warnings: [id + ': ' + error] };
@@ -471,7 +472,21 @@ export function createSessionController(deps) {
     const rejected = settled.find(item => item.status === 'rejected');
     if (rejected) throw rejected.reason;
     const parts = settled.map(item => item.value);
-    return { sessions: parts.flatMap(item => item.sessions), succeededProviders: parts.flatMap(item => item.succeededProviders), warnings: parts.flatMap(item => item.warnings || []) };
+    return {
+      sessions: parts.flatMap(item => item.sessions),
+      succeededProviders: parts.flatMap(item => item.succeededProviders),
+      warnings: parts.flatMap(item => item.warnings || []),
+    };
+  }
+
+  function replaceProviderRows(cache, rows, succeededProviders) {
+    for (const id of succeededProviders) {
+      cache.set(id, rows.filter(row => (row.provider || 'claude') === id));
+    }
+  }
+
+  function cachedProviderRows(cache) {
+    return providers.flatMap(({ id }) => cache.get(id) || []);
   }
 
   async function commitHistory(result, request, selection, isCurrent = () => true) {
@@ -480,32 +495,35 @@ export function createSessionController(deps) {
       await pairNewSessions(result.sessions.filter((item) => (item.provider || 'claude') === 'claude'));
     }
     if (!isCurrent() || request !== requestGeneration || selection !== filterGeneration) return false;
-    for (const id of result.succeededProviders) {
-      historyByProvider.set(id, result.sessions.filter((item) => (item.provider || 'claude') === id));
-    }
+    replaceProviderRows(historyByProvider, result.sessions, result.succeededProviders);
     return true;
-  }
-
-  function mergedHistory(result) {
-    const updated = new Set(result.succeededProviders);
-    return [...result.sessions.filter((item) => updated.has(item.provider || 'claude')),
-      ...lastLoaded.filter((item) => !updated.has(item.provider || 'claude'))];
   }
 
   // A UI refresh may supersede rendering, but startup still needs the exact
   // response it requested to match persisted IDs. Keep those two results apart.
   async function loadHistorySnapshot({ quiet = false, skipUnchanged = false, isCurrent = () => true, restoreBatches = null, onHistory = null } = {}) {
     const request = ++requestGeneration;
+    const archiveRequest = ++hiddenRequestGeneration;
     const selection = filterGeneration;
+    const current = () => isCurrent() && request === requestGeneration && selection === filterGeneration;
     let result = null;
+    let needsLegacyArchive = false;
     try {
       result = await readHistory(historyProviders(), restoreBatches, async partial => {
         if (!isCurrent()) return;
-        if (await commitHistory(partial, request, selection, isCurrent)) {
-          if (!isCurrent()) return;
-          const list = mergedHistory(partial);
+        if (await commitHistory(partial, request, selection, isCurrent) && current()) {
+          const list = cachedProviderRows(historyByProvider);
           sessionsLoaded = true;
-          if (!skipUnchanged || listSig(list) !== lastListSignature) renderSessions(list);
+          const redraw = !skipUnchanged || listSig(list) !== lastListSignature;
+          if (redraw) renderSessions(list);
+          if (archiveRequest === hiddenRequestGeneration && partial.succeededProviders.length) {
+            if (Array.isArray(partial.archivedSessions)) {
+              replaceProviderRows(archiveByProvider, partial.archivedSessions, partial.succeededProviders);
+              syncArchiveView();
+            } else if (redraw) {
+              needsLegacyArchive = true;
+            }
+          }
           if (!quiet && partial.warnings?.length) setStatus('读取会话失败: ' + partial.warnings.join('; '), 'warn');
         }
         // A filter may supersede rendering without revoking startup's local
@@ -513,7 +531,8 @@ export function createSessionController(deps) {
         if (isCurrent()) await onHistory?.(partial);
       });
       if (!isCurrent()) return { status: null, result: null };
-      if (request !== requestGeneration || selection !== filterGeneration) return { status: null, result };
+      if (!current()) return { status: null, result };
+      if (needsLegacyArchive && archiveRequest === hiddenRequestGeneration) void refreshHidden(true);
       return { status: !result.warnings?.length, result };
     } catch (error) {
       if (!isCurrent()) return { status: null, result: null };
@@ -557,7 +576,6 @@ export function createSessionController(deps) {
     }
     renderNavigation();
     onProjects?.(visibleHistory(list));
-    refreshHidden(true);
     agentController.refreshAgents();
     paneController?.setSessionOptions?.(navigationSessions());
     if (antigravityTitleChanged) paneController?.refresh?.();
@@ -652,7 +670,8 @@ export function createSessionController(deps) {
         if (request !== requestGeneration || selection !== filterGeneration) return;
         if (!result.succeededProviders.includes('claude')) throw new Error('无法读取 Claude 历史，不能安全建立新会话身份');
         if (!(await commitHistory(result, request, selection))) return;
-        renderSessions(mergedHistory(result));
+        if (request !== requestGeneration || selection !== filterGeneration) return;
+        renderSessions(cachedProviderRows(historyByProvider));
       }
       const token = provider === 'claude'
         ? await backend.StartNew(dir)
@@ -879,31 +898,46 @@ export function createSessionController(deps) {
   async function refreshHidden(silent) {
     const generation = filterGeneration;
     const request = ++hiddenRequestGeneration;
-    let list;
+    const ids = [...state.selectedProviders].sort();
+    let result;
     try {
-      const result = typeof backend.ListHiddenSessionsForProviders === 'function'
-        ? await backend.ListHiddenSessionsForProviders([...state.selectedProviders].sort()) : await backend.ListHiddenSessions();
-      list = Array.isArray(result) ? result : result?.sessions;
-      if (!Array.isArray(result) && result?.warnings?.length) throw new Error(result.warnings.join('; '));
+      const response = typeof backend.ListHiddenSessionsForProviders === 'function'
+        ? await backend.ListHiddenSessionsForProviders(ids) : await backend.ListHiddenSessions();
+      result = historyResponse(response, ids);
     } catch (error) {
       if (generation !== filterGeneration || request !== hiddenRequestGeneration) return;
       if (!silent || hiddenOpen) setStatus('加载归档失败: ' + error, 'warn');
       return;
     }
     if (generation !== filterGeneration || request !== hiddenRequestGeneration) return;
-    list = Array.isArray(list) ? list : [];
-    list = list.filter((item) => state.selectedProviders.has(item.provider || 'claude'));
-    archivedSessions = list;
-    hiddenCount.textContent = list.length ? ' · ' + list.length : '';
-    if (!hiddenOpen) return;
-    renderArchive();
+    const succeeded = result.succeededProviders.filter(id => ids.includes(id));
+    replaceProviderRows(archiveByProvider, result.sessions, succeeded);
+    syncArchiveView();
+    if ((!silent || hiddenOpen) && result.warnings?.length) {
+      const prefix = succeeded.length ? '部分会话来源的归档读取失败: ' : '加载归档失败: ';
+      setStatus(prefix + result.warnings.join('; '), 'warn');
+    }
+  }
+
+  function visibleArchivedSessions() {
+    return cachedProviderRows(archiveByProvider).filter(item => state.selectedProviders.has(item.provider || 'claude'));
+  }
+
+  function syncArchiveView() {
+    const rows = visibleArchivedSessions();
+    const signature = listSig(rows);
+    if (signature === lastArchiveSignature) return;
+    lastArchiveSignature = signature;
+    const count = rows.length;
+    hiddenCount.textContent = count ? ' · ' + count : '';
+    if (hiddenOpen) renderArchive();
   }
 
   function renderArchive() {
     const query = String(archiveSearch?.value || '').trim().toLocaleLowerCase();
     renderHiddenSessions({
       hiddenPanel,
-      list: archivedSessions.filter(item => matchesSearch(item, query)),
+      list: visibleArchivedSessions().filter(item => matchesSearch(item, query)),
       emptyMessage: query ? '没有匹配的归档会话' : '（无归档会话）',
       el,
       onRestore: async (session) => {
