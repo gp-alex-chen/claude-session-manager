@@ -15,6 +15,7 @@ export function createQuotaController({ state, view, GetAccountQuota, storage, G
   const pending = new Map();
   let started = false; let timer = null; let generation = 0; let provider = null;
   let source = 'auto';
+  let observedAntigravityRevision = 0;
   const revisions = new Map();
   const revision = id => revisions.get(id) || 0;
   const advance = id => { const value = revision(id) + 1; revisions.set(id, value); return value; };
@@ -63,8 +64,19 @@ export function createQuotaController({ state, view, GetAccountQuota, storage, G
         if (id===provider && timer!==null) {clearIntervalFn(timer);timer=null;}
         syncTimer();
       }
-      if (started && generation === epoch) notify();
+      if (started && generation === epoch) {
+        // A newer event invalidated this response. Read the most recent local
+        // observation once even if several events arrived during this call.
+        if (id === 'antigravity' && provider === id && revision(id) !== stamp) void refresh();
+        else notify();
+      }
     }
+  }
+  function observeAntigravityQuota(version) {
+    if (!started || !Number.isSafeInteger(version) || version <= observedAntigravityRevision) return;
+    observedAntigravityRevision = version;
+    advance('antigravity');
+    if (provider === 'antigravity') void refresh();
   }
   function sync({ keepOpen = false } = {}) {
     if (!started) return;
@@ -144,9 +156,10 @@ export function createQuotaController({ state, view, GetAccountQuota, storage, G
   function stop() {
     if (!started) return;
     started = false; generation++; pending.clear(); cache.clear();
+    observedAntigravityRevision = 0;
     resetDetails = null; resetLoading = null; resetUsing = null; resetMessage = ''; revisions.clear();
     if (timer !== null) clearIntervalFn(timer); timer = null;
     view.stop?.();
   }
-  return { start, stop, sync, refresh, setSource, viewResetCredits: loadResetCredits, consumeResetCredit };
+  return { start, stop, sync, refresh, setSource, observeAntigravityQuota, viewResetCredits: loadResetCredits, consumeResetCredit };
 }

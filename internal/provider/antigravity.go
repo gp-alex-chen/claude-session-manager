@@ -115,6 +115,7 @@ type AntigravityAdapter struct {
 	historyEpoch uint64
 	mu           sync.Mutex
 	runtimes     map[string]*antigravityRuntime
+	quotaVersion uint64
 	historyGate  chan struct{}
 	historyCache []Session
 	historyAt    time.Time
@@ -313,6 +314,9 @@ func (p *AntigravityAdapter) prepareLaunch(ctx context.Context, req OpenRequest,
 			<-r.done
 			p.mu.Lock()
 			if p.runtimes[req.RuntimeToken] == r {
+				if r.quota.Status == "available" {
+					p.quotaVersion++
+				}
 				delete(p.runtimes, req.RuntimeToken)
 			}
 			p.mu.Unlock()
@@ -410,7 +414,11 @@ func (p *AntigravityAdapter) refresh(token string, r *antigravityRuntime) {
 		return
 	}
 	r.last = string(data)
-	r.quota = antigravityQuota(snapshot)
+	quota := antigravityQuota(snapshot)
+	if antigravityQuotaChanged(r.quota, quota) {
+		p.quotaVersion++
+	}
+	r.quota = quota
 	r.info = antigravityAgent(token, snapshot)
 	if r.expectedID == "" && uuidPattern.MatchString(snapshot.ConversationID) {
 		r.expectedID = snapshot.ConversationID

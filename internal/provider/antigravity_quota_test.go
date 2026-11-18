@@ -81,6 +81,35 @@ func TestAntigravityMalformedQuotaDoesNotBreakTaskStatus(t *testing.T) {
 	}
 }
 
+func TestAntigravityQuotaRevisionOnlyTracksQuotaObservations(t *testing.T) {
+	p := NewAntigravity(AntigravityConfig{})
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	p.runtimes["runtime"] = &antigravityRuntime{snapshotPath: path}
+	status := func(data string) uint64 {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.Status(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return p.QuotaRevision()
+	}
+	if got := status(`{"agent_state":"working","quota_observed_at":1000}`); got != 0 {
+		t.Fatal("task-only callback advanced quota", got)
+	}
+	const quota = `"quota_observed_at":1000,"quota":{"gemini-5h":{"remaining_fraction":0.25}}`
+	if got := status(`{"agent_state":"working",` + quota + `}`); got != 1 {
+		t.Fatal("new quota was not observed", got)
+	}
+	if got := status(`{"agent_state":"idle",` + quota + `}`); got != 1 {
+		t.Fatal("task state changed without a quota change", got)
+	}
+	if got := status(`{"agent_state":"idle","quota_observed_at":2000}`); got != 2 {
+		t.Fatal("missing quota did not invalidate the earlier observation", got)
+	}
+}
+
 func TestAntigravityQuotaKeepsModelGroupsAndWindowDurations(t *testing.T) {
 	q := antigravityQuota(antigravitySnapshot{QuotaObservedAt: 1, Quota: json.RawMessage(`{
 		"gemini-5h":{"remaining_fraction":0.8},"gemini-weekly":{"remaining_fraction":0.6},

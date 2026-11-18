@@ -146,6 +146,40 @@ test('Antigravity sync rereads local observations without a fifteen minute cache
   f.controller.stop();
 });
 
+test('Antigravity quota events ignore duplicates and coalesce changes during a read', async () => {
+  const f = fixture();
+  f.controller.start();
+  f.controller.setSource('antigravity');
+  const snapshot = (status, plan) => ({ provider: 'antigravity', status, plan, windows: [] });
+  f.requests[0].resolve(snapshot('available', 'initial'));
+  await Promise.resolve();
+  f.controller.observeAntigravityQuota(1);
+  assert.equal(f.requests.length, 2);
+  f.requests[1].resolve(snapshot('available', 'fresh'));
+  await Promise.resolve();
+  f.controller.observeAntigravityQuota(1);
+  assert.equal(f.requests.length, 2);
+
+  f.controller.observeAntigravityQuota(2);
+  f.controller.observeAntigravityQuota(3);
+  f.controller.observeAntigravityQuota(4);
+  f.controller.observeAntigravityQuota(3);
+  assert.equal(f.requests.length, 3);
+  f.requests[2].resolve(snapshot('available', 'obsolete'));
+  await Promise.resolve();
+  assert.equal(f.requests.length, 4);
+  assert.equal(f.rendered.at(-1).snapshot.plan, 'fresh');
+  f.requests[3].resolve(snapshot('unavailable'));
+  await Promise.resolve();
+  assert.equal(f.rendered.at(-1).snapshot.status, 'unavailable');
+
+  f.controller.setSource('claude');
+  const count = f.requests.length;
+  f.controller.observeAntigravityQuota(5);
+  assert.equal(f.requests.length, count);
+  f.controller.stop();
+});
+
 test('source switching keeps caches separate and errors do not change the selection', async () => {
   const f = fixture(); f.controller.start();
   f.controller.setSource('codex'); f.controller.setSource('claude');

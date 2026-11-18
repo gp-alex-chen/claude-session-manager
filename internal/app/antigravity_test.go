@@ -470,6 +470,7 @@ func TestAntigravityQuotaReadsNewCallbacksAndClearsAfterTerminalClose(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	revision := p.QuotaRevision()
 	for _, fraction := range []string{"0.75", "0"} {
 		if err := provider.WriteAntigravitySnapshot(strings.NewReader(`{"agent_state":"idle","quota":{"synthetic-model":{"remaining_fraction":`+fraction+`}}}`), snapshot); err != nil {
 			t.Fatal(err)
@@ -481,13 +482,21 @@ func TestAntigravityQuotaReadsNewCallbacksAndClearsAfterTerminalClose(t *testing
 		if (fraction == "0" && q.Windows[0].UsedPercent != 100) || (fraction == "0.75" && q.Windows[0].UsedPercent != 25) {
 			t.Fatal("new callback hidden by cache", q)
 		}
+		next := p.QuotaRevision()
+		if next != revision+1 {
+			t.Fatalf("new quota callback did not advance exactly once: %d -> %d", revision, next)
+		}
+		revision = next
 		before := q.ReadAt
 		q, err = a.GetAccountQuota("antigravity", true)
-		if err != nil || !q.ReadAt.Equal(before) || starts != 1 {
+		if err != nil || !q.ReadAt.Equal(before) || starts != 1 || p.QuotaRevision() != revision {
 			t.Fatal("read changed collection time or launched CLI", q, err)
 		}
 	}
 	a.TermKill(token)
+	if got := p.QuotaRevision(); got != revision+1 {
+		t.Fatalf("closed terminal did not notify quota removal: %d -> %d", revision, got)
+	}
 	if q, err := a.GetAccountQuota("antigravity", false); err != nil || q.Status == "available" || len(q.Windows) != 0 {
 		t.Fatal("closed callback remained available", q, err)
 	}

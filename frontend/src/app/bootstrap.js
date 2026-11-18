@@ -342,7 +342,10 @@ export function createApplication(deps) {
       else terminalController.resizeActive();
     };
     windowRef.addEventListener('resize', resizeHandler);
-    subscribe('agents:update', (list) => agentController.applyAgents(list));
+    subscribe('agents:update', (list, antigravityQuotaRevision) => {
+      agentController.applyAgents(list);
+      quotaController.observeAntigravityQuota(antigravityQuotaRevision);
+    });
     subscribe('term:data', (token, b64) => terminalController.handleData(token, b64));
     subscribe('term:exit', (token) => terminalController.handleExit(token));
     subscribe('update:state', (phase) => updateController.handleState(phase));

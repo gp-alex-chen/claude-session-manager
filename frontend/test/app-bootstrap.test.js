@@ -435,6 +435,32 @@ test('bootstrap quota follows actual terminal activation and clears on an empty 
   assert.equal(f.elements.get('account-quota').hidden, true);
   f.app.stop();
 });
+
+test('bootstrap updates the Antigravity quota from the agent event revision', async () => {
+  const queries = [];
+  const f = makeFixture({
+    LoadPreferences: async () => ({ 'quota-source': 'antigravity' }),
+    GetAccountQuota: async provider => {
+      queries.push(provider);
+      return { provider, status: 'available', windows: [] };
+    },
+  });
+  try {
+    await f.app.start();
+    assert.deepEqual(queries, ['antigravity']);
+    const emitAgents = f.runtimeListeners.get('agents:update');
+    emitAgents([{ provider: 'antigravity' }], 1);
+    await Promise.resolve();
+    assert.deepEqual(queries, ['antigravity', 'antigravity']);
+    emitAgents([], 1);
+    assert.equal(queries.length, 2);
+    emitAgents([], 2);
+    assert.equal(queries.length, 3);
+  } finally {
+    f.app.stop();
+  }
+});
+
 test('pairing acknowledges completed canonical identity only when its original runtime is currently viewed', async () => {
   const f = makeFixture();
   await f.app.start();

@@ -109,7 +109,7 @@ export function createQuotaView({ root, documentRef, onRefresh, onSourceChange, 
     if (!provider) { syncPaceTimer(false); close(); return; }
     const name = provider === 'codex' ? 'Codex' : provider === 'claude' ? 'Claude' : provider === 'antigravity' ? 'Antigravity' : provider;
     sourceNote.textContent = provider === 'antigravity'
-      ? '显示最近更新的 Antigravity 终端回调。请在终端运行 /usage，再读取额度；不同终端的数据不合并。'
+      ? '收到新的 Antigravity 额度回调后自动刷新。可在终端运行 /usage 获取新额度。'
       : '读取本机所选 CLI 当前登录账户的订阅额度。';
     label.textContent = name;
     const windows = snapshot?.status === 'available' ? snapshot.windows || [] : [];

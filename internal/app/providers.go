@@ -194,10 +194,15 @@ func (a *App) emitAgentUpdate(ctx context.Context) {
 	watcher := a.watcher
 	a.lifecycleMu.Unlock()
 	var list, others []agent.AgentInfo
+	var antigravityQuotaRevision uint64
 	if current && watcher != nil {
 		list = watcher.Snapshot()
 		others = a.codexStatusLocked(ctx, false)
 		list = append(list, others...)
+		p, _ := a.providers.Lookup(provider.Antigravity)
+		if source, ok := p.(interface{ QuotaRevision() uint64 }); ok {
+			antigravityQuotaRevision = source.QuotaRevision()
+		}
 	}
 	a.launchMu.Unlock()
 	if current && watcher != nil {
@@ -210,7 +215,7 @@ func (a *App) emitAgentUpdate(ctx context.Context) {
 			}
 		}
 		a.observeNotificationSource(ctx, "codex", codex)
-		runtime.EventsEmit(ctx, "agents:update", list)
+		runtime.EventsEmit(ctx, "agents:update", list, antigravityQuotaRevision)
 	}
 }
 

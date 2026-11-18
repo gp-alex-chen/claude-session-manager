@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -55,7 +56,7 @@ func sanitizeAntigravityQuota(raw json.RawMessage) json.RawMessage {
 }
 
 func antigravityQuota(s antigravitySnapshot) QuotaSnapshot {
-	q := QuotaSnapshot{Provider: Antigravity, Status: "unavailable", Windows: []QuotaWindow{}, Message: "尚未收到可用的终端额度回调。请打开 Antigravity，在终端运行 /usage 后读取额度。"}
+	q := QuotaSnapshot{Provider: Antigravity, Status: "unavailable", Windows: []QuotaWindow{}, Message: "尚未收到可用的终端额度回调。请打开 Antigravity 并在终端运行 /usage。"}
 	if s.QuotaObservedAt <= 0 {
 		return q
 	}
@@ -83,7 +84,7 @@ func antigravityQuota(s antigravitySnapshot) QuotaSnapshot {
 	}
 	if len(q.Windows) > 0 {
 		q.Status, q.Plan = "available", s.PlanTier
-		q.Message = "来自最近更新的 Antigravity 终端回调；运行 /usage 后可读取新额度。仅显示原生回调提供的百分比。"
+		q.Message = "来自最近更新的 Antigravity 终端回调。收到新额度后会自动刷新。"
 	}
 	return q
 }
@@ -104,6 +105,22 @@ func antigravityQuotaWindowIdentity(id string) (scope, label string, minutes int
 	default:
 		return "bucket:" + id, id, 0
 	}
+}
+
+func antigravityQuotaChanged(previous, next QuotaSnapshot) bool {
+	if previous.Status != "available" && next.Status != "available" {
+		return false
+	}
+	return previous.Status != next.Status || previous.Plan != next.Plan ||
+		!previous.ReadAt.Equal(next.ReadAt) || !slices.Equal(previous.Windows, next.Windows)
+}
+
+// QuotaRevision lets the UI reread local quota when an observation changes
+// without putting quota data into the agent status event.
+func (p *AntigravityAdapter) QuotaRevision() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.quotaVersion
 }
 
 func (p *AntigravityAdapter) AccountQuota(ctx context.Context) (QuotaSnapshot, error) {
@@ -127,7 +144,7 @@ func (p *AntigravityAdapter) AccountQuota(ctx context.Context) (QuotaSnapshot, e
 	selected.Windows = append([]QuotaWindow{}, selected.Windows...)
 	if selected.Status == "available" && p.now().Sub(selected.ReadAt) >= 15*time.Minute {
 		selected.Stale = true
-		selected.Message = "终端额度回调已超过 15 分钟；请在 Antigravity 运行 /usage 后读取新额度。"
+		selected.Message = "终端额度回调已超过 15 分钟。请在 Antigravity 运行 /usage。"
 	}
 	return selected, nil
 }
