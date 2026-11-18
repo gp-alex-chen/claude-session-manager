@@ -1019,6 +1019,7 @@ export function createSessionController(deps) {
     restoringIDs.clear();
     const lifecycle = adoptionGeneration;
     const isCurrent = () => initializationRun === run && lifecycle === adoptionGeneration;
+    const initialPaneId = state.focusedPaneId;
     try {
       await loadAgentProviders(isCurrent);
       if (!isCurrent()) return;
@@ -1053,7 +1054,12 @@ export function createSessionController(deps) {
       if (open.length) setStatus('正在后台读取历史并恢复 ' + open.length + ' 个会话，界面可继续使用', 'ok');
       const attempted = new Set();
       const reservedPanes = new Set();
-      let restored = false;
+      let autoFocused = false;
+      const canFocusFirst = () => {
+        const active = documentRef.activeElement;
+        return isCurrent() && !autoFocused && !state.activeToken && state.focusedPaneId === initialPaneId
+          && (!active || active === documentRef.body || active === documentRef.documentElement);
+      };
       const restoreAvailable = async result => {
         for (const id of open) {
           if (!isCurrent()) return;
@@ -1070,12 +1076,16 @@ export function createSessionController(deps) {
           const paneId = panes.find(pane => !reservedPanes.has(pane) && !state.panes.find(item => item.id === pane)?.token);
           if (paneId) reservedPanes.add(paneId);
           try {
-            const restoreOptions = { paneId, focus: !paneController && !state.activeToken,
+            const restoreOptions = { paneId, focus: false,
               backgroundRestore: true, restoreToken: restoreBatches.get(providerForID(id)) };
             if (paneController && !paneId) restoreOptions.show = false;
             const ok = await openFromList(session, restoreOptions);
-            if (ok && paneId) restored = true;
-            else if (paneId) reservedPanes.delete(paneId);
+            if (!ok && paneId) reservedPanes.delete(paneId);
+            if (ok && (!paneController || paneId) && canFocusFirst()) {
+              autoFocused = true;
+              if (paneController) paneController.focusFirstAssigned?.();
+              else terminalController.activate(state.realToNew.get(id) || id);
+            }
           } catch (error) {
             if (paneId) reservedPanes.delete(paneId);
             if (isCurrent()) setStatus('恢复失败: ' + error, 'warn');
@@ -1084,7 +1094,8 @@ export function createSessionController(deps) {
           }
         }
       };
-      await loadHistorySnapshot({ isCurrent, restoreBatches, onHistory: restoreAvailable });
+      const needsAntigravityBatch = open.some(id => providerForID(id) === 'antigravity' && !state.closedTokens.has(id));
+      await loadHistorySnapshot({ isCurrent, restoreBatches: needsAntigravityBatch ? restoreBatches : null, onHistory: restoreAvailable });
       if (!isCurrent()) return;
       // A failed source never authorizes an empty baseline or a fresh session.
       for (const id of open) {
@@ -1092,7 +1103,6 @@ export function createSessionController(deps) {
       }
       restoringIDs.clear();
       renderSessions(lastLoaded);
-      if (paneController && restored && !state.activeToken) paneController.focusFirstAssigned?.();
     } finally {
       await Promise.allSettled([...restoreBatches.values()].map(token => {
         activeRestoreTokens.delete(token);

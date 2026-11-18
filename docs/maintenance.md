@@ -243,7 +243,7 @@ Antigravity 的独立适配器、会话级状态回调、官方 ACP 只读历史
 
 CLI 查找先尊重当前进程 PATH，缺失时检查绝对路径形式的 `CODEX_INSTALL_DIR` 和官方 `%LOCALAPPDATA%/Programs/OpenAI/Codex/bin/codex.exe`。Windows 安装器更新用户 PATH 后，已运行的 TheOne 可能仍保留旧快照；不全盘扫描、不修改全局环境。已解析程序目录只加入该 Codex 终端的 PATH，其余继承路径继续保留；App 不再用旧 PATH 重复否决已解析的程序。此修复不刷新全部环境变量，其他自定义变量变更仍需要从环境已更新的启动器重新启动 TheOne。
 
-启动时先加载本地偏好、布局和主题，再解除工作区交互限制；会话历史和自动恢复继续异步执行，`start()` 的 promise 仍覆盖完整恢复便于生命周期协调。Registry 并发读取各来源后按注册顺序聚合；前端在同一个 request/run 内按来源渐进提交，筛选变化只淘汰显示，不能丢弃本轮恢复的局部结果。Antigravity 使用 `StartupHistory` 私有快照和三段式恢复绑定，每轮一次 fresh 目录读取，凭据按 generation、已保存 ID、CLI、目录及短 TTL 限定；普通手动打开和退出确认仍使用原有 fresh 核对。新增绑定必须同步 Go、`frontend/wailsjs/go/app/App.js`、`src/api/backend.js` 与 binding 测试。
+启动时先加载本地偏好、布局和主题，再解除工作区交互限制；会话历史和自动恢复继续异步执行，`start()` 的 promise 仍覆盖完整恢复便于生命周期协调。在用户尚未主动选择焦点时，第一个恢复的可见窗格立即聚焦。Registry 并发读取各来源后按注册顺序聚合；前端在同一个 request/run 内按来源渐进提交，筛选变化只淘汰显示，不能丢弃本轮恢复的局部结果。有待恢复的 Antigravity 会话时使用 `StartupHistory` 私有快照和三段式恢复绑定，每轮一次 fresh 目录读取，凭据按 generation、已保存 ID、CLI、目录及短 TTL 限定；普通手动打开和退出确认仍使用原有 fresh 核对。新增绑定必须同步 Go、`frontend/wailsjs/go/app/App.js`、`src/api/backend.js` 与 binding 测试。
 
 渐进恢复使用 lifecycle 内固定的原始 saved-ref 集合，而非后续实时 open-sessions 文件作为授权；用户关闭和成功 PTY 注册分别撤销原引用的恢复资格及退出 carry。尚未成功启动、未明确关闭的旧引用在最终原子退出快照中保留，generation 不匹配不携带；已启动但身份未确认或退出核对失败的 agy 不得通过 carry 复活。
 

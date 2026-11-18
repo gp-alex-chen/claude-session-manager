@@ -1626,8 +1626,8 @@ test('pane-aware opening assigns sessions without using the legacy single-termin
   assert.deepEqual(fixture.terminalController.activations, []);
   assert.deepEqual(calls, [
     ['show', 'one', { paneId: 'pane-0', focus: false }],
-    ['show', 'two', { paneId: 'pane-1', focus: false }],
     ['focus-first'],
+    ['show', 'two', { paneId: 'pane-1', focus: false }],
   ]);
 });
 
@@ -1650,10 +1650,10 @@ test('pane-aware restoration uses the layout-specific four-pane fill order', asy
 
   assert.deepEqual(calls, [
     ['show', 'one', { paneId: 'pane-0', focus: false }],
+    ['focus-first'],
     ['show', 'two', { paneId: 'pane-2', focus: false }],
     ['show', 'three', { paneId: 'pane-1', focus: false }],
     ['show', 'four', { paneId: 'pane-3', focus: false }],
-    ['focus-first'],
   ]);
 });
 
@@ -1677,8 +1677,8 @@ test('pane-aware restoration does not replace earlier sessions when more are ope
 
   assert.deepEqual(calls, [
     ['show', 'one', { paneId: 'pane-0', focus: false }],
-    ['show', 'two', { paneId: 'pane-1', focus: false }],
     ['focus-first'],
+    ['show', 'two', { paneId: 'pane-1', focus: false }],
   ]);
   assert.deepEqual(starts, [['one', 'work'], ['two', 'work'], ['three', 'work']]);
 });
@@ -2099,7 +2099,8 @@ test('an unavailable Antigravity startup batch does not prevent Claude restorati
   const opened=[];
   const f=makeFilterFixture({
     ListAgentProviders:async()=>[{id:'claude',name:'Claude'},{id:'antigravity',name:'Antigravity',hasHistory:true}],
-    GetOpenSessionRefs:async()=>[{id:filterClaude.id,provider:'claude'}],
+    GetOpenSessionRefs:async()=>[{id:filterClaude.id,provider:'claude'},
+      {id:'antigravity:01900000-0000-7000-8000-000000000001',provider:'antigravity'}],
     BeginSessionRestore:async()=>{throw new Error('agy unavailable');},
     read:async ids=>({sessions:[filterClaude],succeededProviders:ids,warnings:[]}),
     StartSession:async(...args)=>opened.push(args),
@@ -2107,6 +2108,22 @@ test('an unavailable Antigravity startup batch does not prevent Claude restorati
   await f.controller.initialize();
   assert.deepEqual(opened,[[filterClaude.id,filterClaude.dir]]);
   assert.ok(f.statuses.some(s=>s.message.includes('agy unavailable')));
+});
+
+test('startup reads ordinary Antigravity history when there is no saved Antigravity session', async () => {
+  let batches = 0;
+  const f = makeFilterFixture({
+    ListAgentProviders: async () => [...filterAgents, { id: 'antigravity', name: 'Antigravity' }],
+    GetOpenSessionRefs: async () => [{ id: filterClaude.id, provider: 'claude' }],
+    BeginSessionRestore: async () => {
+      batches++;
+      return { token: 'unused', history: { sessions: [], succeededProviders: ['antigravity'], warnings: [] } };
+    },
+  });
+  await f.controller.initialize();
+  assert.equal(batches, 0);
+  assert.ok(f.queries.some(ids => ids.length === 1 && ids[0] === 'antigravity'));
+  assert.ok(f.state.terminals.has(filterClaude.id));
 });
 
 
@@ -2129,8 +2146,15 @@ test('fast provider history and restoration complete while Antigravity history i
  let finishAgy;
  const agyPending=new Promise(resolve=>{finishAgy=resolve;});
  const opened=[];
+  const focused=[];
  const agy={id:'antigravity:01900000-0000-7000-8000-000000000001',provider:'antigravity',dir:'C:\\synthetic',name:'Agy'};
  const f=makeFilterFixture({
+   paneController:{
+    getPaneFillOrder:()=>['pane-0','pane-1'],
+    showSession(token,{paneId}){ f.state.panes.find(pane=>pane.id===paneId).token=token; return true; },
+    focusFirstAssigned(){ f.state.activeToken=f.state.panes.find(pane=>pane.token)?.token; focused.push(f.state.activeToken); },
+    setSessionOptions(){},
+   },
   ListAgentProviders:async()=>[{id:'claude',name:'Claude'},{id:'antigravity',name:'Antigravity',hasHistory:true}],
   GetOpenSessionRefs:async()=>[{id:filterClaude.id,provider:'claude'},{id:agy.id,provider:'antigravity'}],
   BeginSessionRestore:async()=>{await agyPending;return {token:'batch',history:{sessions:[agy],succeededProviders:['antigravity'],warnings:[]}};},
@@ -2141,11 +2165,39 @@ test('fast provider history and restoration complete while Antigravity history i
  await new Promise(resolve=>setImmediate(resolve));
  const fastWasVisible=visibleIDs(f).includes(filterClaude.id);
  const fastWasOpened=opened.includes(filterClaude.id);
+  const fastWasFocused=f.state.activeToken===filterClaude.id;
  finishAgy();await initializing;
  assert.equal(fastWasVisible,true,'fast history waited for the slow provider');
  assert.equal(fastWasOpened,true,'fast automatic restoration waited for the slow provider');
+  assert.equal(fastWasFocused,true,'the first restored pane waited to receive focus');
+  assert.deepEqual(focused,[filterClaude.id]);
  assert.deepEqual(opened,[filterClaude.id,agy.id]);
  assert.equal(f.state.terminals.size,2);
+});
+
+test('background restore leaves focus in an input the user chose while waiting', async () => {
+  let entered, finish;
+  const launching = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise(resolve => { finish = resolve; });
+  let focused = 0;
+  const f = makeFixture({
+    paneController: {
+      getPaneFillOrder: () => ['pane-0'],
+      showSession: () => true,
+      focusFirstAssigned: () => { focused++; },
+      setSessionOptions() {},
+    },
+    listResults: [[session('saved')]],
+    GetOpenSessions: async () => ['saved'],
+    StartSession: async () => { entered(); await pending; },
+  });
+  const initializing = f.controller.initialize();
+  await launching;
+  f.documentRef.activeElement = f.searchInput;
+  finish();
+  await initializing;
+  assert.equal(focused, 0);
+  assert.equal(f.documentRef.activeElement, f.searchInput);
 });
 
 
