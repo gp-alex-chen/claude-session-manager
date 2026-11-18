@@ -410,7 +410,7 @@ func TestStartupRestoreLateCloseDuringFinalShutdownKeepsOtherPendingReference(t 
 	a.lifecycleMu.Unlock()
 	a.TermKill(ids[1])
 	a.GetOpenSessionRefs() // A late UI read must not replace the owner's snapshot.
-	if err := a.closeAllTermsWithNativeReferences(nil, generation); err != nil {
+	if err := a.finishTerminals(nil, generation, false); err != nil {
 		t.Fatal(err)
 	}
 	refs := NewAppWithStore(store).GetOpenSessionRefs()

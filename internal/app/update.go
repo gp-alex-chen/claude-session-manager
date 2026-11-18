@@ -105,15 +105,8 @@ func (a *App) applyDownloadedUpdate(downloaded string, apply func(string, bool) 
 	if !current {
 		return fmt.Errorf("应用生命周期已变化，更新已取消")
 	}
-	a.codexStatusLocked(a.runtimeContext(), true)
-	if err := a.persistOpenSessions(); err != nil {
-		a.log("更新前持久化打开会话失败: " + err.Error())
-		return fmt.Errorf("无法保存打开的会话，已取消更新: %w", err)
-	}
-	a.sealProviderRestoration()
-	a.codexStatusLocked(a.runtimeContext(), true)
-	if err := a.closeAllTermsWithNativeReferences(refs, generation); err != nil {
-		return fmt.Errorf("无法保存原生会话恢复清单，已取消更新: %w", err)
+	if err := a.finishTerminals(refs, generation, true); err != nil {
+		return fmt.Errorf("无法保存会话恢复清单，已取消更新: %w", err)
 	}
 	a.closeProviderServices()
 	if onReady != nil {
@@ -149,26 +142,16 @@ func CleanupUpdateArtifacts() {
 	}
 }
 
-// closeAllTerms 关闭全部 ConPTY 会话（与 shutdown 相同的幂等路径，
-// 仅用于"更新替换前"的主动收尾）。
-func (a *App) closeAllTerms() {
-	a.closeAllTermsWithNativeReferences(nil)
+type codexUpdateReferencesSource interface {
+	CaptureUpdateReferences(context.Context) (map[string]string, func(bool), error)
 }
 
-func (a *App) closeAllTermsWithNativeReferences(refs map[string]string, generations ...uint64) error {
+func (a *App) finishTerminals(refs map[string]string, generation uint64, updating bool) error {
 	if a.terms == nil {
 		return nil
 	}
 	a.agentLaunchMu.Lock()
 	defer a.agentLaunchMu.Unlock()
-	var generation uint64
-	if len(generations) > 0 {
-		generation = generations[0]
-	} else {
-		a.lifecycleMu.Lock()
-		generation = a.lifecycleID
-		a.lifecycleMu.Unlock()
-	}
 	carry := a.pendingStartupRestoreReferences(generation)
 	if p, err := a.providers.Lookup(provider.Antigravity); err == nil {
 		if source, ok := p.(antigravityRestoreSource); ok {
@@ -177,9 +160,22 @@ func (a *App) closeAllTermsWithNativeReferences(refs map[string]string, generati
 	}
 	a.adoptionMu.Lock()
 	defer a.adoptionMu.Unlock()
-	return a.terms.CloseAllWithNativeReferences(
-		append(carry, a.pendingAdoptionIDsLocked()...),
-		a.cancelledAdoptionTokensLocked(),
-		refs,
-	)
+	pending := append(carry, a.pendingAdoptionIDsLocked()...)
+	forget := a.cancelledAdoptionTokensLocked()
+	if !updating {
+		return a.terms.CloseAllWithNativeReferences(pending, forget, refs)
+	}
+	ctx := a.runtimeContext()
+	return a.terms.SaveAndCloseForUpdate(pending, forget, refs, func() (map[string]string, func(bool)) {
+		p, _ := a.providers.Lookup(provider.Codex)
+		source, ok := p.(codexUpdateReferencesSource)
+		if !ok {
+			return nil, nil
+		}
+		bindings, finish, err := source.CaptureUpdateReferences(ctx)
+		if err != nil {
+			a.log("更新前确认 Codex 原生会话失败: " + err.Error())
+		}
+		return bindings, finish
+	})
 }

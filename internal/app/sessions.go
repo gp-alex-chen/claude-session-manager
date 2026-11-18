@@ -45,7 +45,7 @@ func (a *App) UnhideSession(id string) error {
 
 // GetOpenSessions 返回上次关闭时仍打开着（有存活终端）的会话 ID 集合，
 // 启动时前端据此把所有这些会话全部恢复。集合由后端在会话打开/关闭时
-// 自动维护（persistOpenSessions），前端只要启动时读一次。
+// 由终端 Manager 自动维护，前端启动时读取 GetOpenSessionRefs。
 func (a *App) GetOpenSessions() []string {
 	ids, err := a.store.LoadOpen()
 	if err != nil {

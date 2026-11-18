@@ -148,7 +148,7 @@ JSON 格式必须保持：
 
 ### Update 状态机
 
-前端更新 controller 的模式是 `idle -> checking -> ready -> applying -> idle`。检查失败、下载失败、应用失败都解除 busy/disabled 并允许重试；ready 信息跨菜单关闭/重开保留。进度经过 clamp，`重启中` 显示 toast。后端更新前持久化打开清单并关闭 ConPTY，更新成功后新进程恢复会话。
+前端更新 controller 的模式是 `idle -> checking -> ready -> applying -> idle`。检查失败、下载失败、应用失败都解除 busy/disabled 并允许重试；ready 信息跨菜单关闭/重开保留。进度经过 clamp，`重启中` 显示 toast。更新以终端 Manager 写入完整的恢复清单为提交点，成功后才关闭 ConPTY 和共享服务。Codex 身份观察在 Manager 生命周期锁内暂缓，写入失败即继续处理原生回复，写入成功则先释放身份锁再回收终端。失败的临时清单不会进入普通重试，更新后重复关闭也不会覆盖已经保存的清单。
 
 更新源只认 `v*-wails` 正式 Release；`.old`、`.update-*.old` 和 `.new` 是 Windows 自替换的临时残留，启动时尝试清理。旧程序备份带随机后缀，避免上次备份因旧进程尚未退出而阻止下一次更新。更新核对 Release 资产 SHA256、实际下载大小和 MZ 头，但不做代码签名验证；exe 目录需要可写。更新前保存打开会话失败时不会关闭终端或替换程序。
 

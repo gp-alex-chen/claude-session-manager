@@ -121,11 +121,15 @@ func (p *CodexLive) notify() {
 }
 
 func (p *CodexLive) SealRestoration() {
+	p.referenceMu.Lock()
+	defer p.referenceMu.Unlock()
+	p.sealRestorationLocked()
+}
+
+func (p *CodexLive) sealRestorationLocked() {
 	if p.shared != nil {
 		p.shared.Seal()
 	}
-	p.referenceMu.Lock()
-	defer p.referenceMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, o := range p.records {
@@ -133,6 +137,36 @@ func (p *CodexLive) SealRestoration() {
 		o.closing = true
 		o.mu.Unlock()
 	}
+}
+
+// CaptureUpdateReferences holds identity observations until finish is called.
+// The caller owns the terminal lifecycle lock and must finish before closing
+// any terminal. On a failed save, blocked observations can continue normally.
+func (p *CodexLive) CaptureUpdateReferences(ctx context.Context) (map[string]string, func(bool), error) {
+	p.referenceMu.Lock()
+	_, err := p.RestorableSessions(ctx, true)
+
+	p.mu.Lock()
+	refs := make(map[string]string, len(p.records))
+	for token, o := range p.records {
+		o.mu.Lock()
+		if o.active {
+			key := ""
+			if o.saved {
+				key, _ = EncodeKey(SessionRef{Provider: Codex, ID: o.id})
+			}
+			refs[token] = key
+		}
+		o.mu.Unlock()
+	}
+	p.mu.Unlock()
+
+	return refs, func(saved bool) {
+		if saved {
+			p.sealRestorationLocked()
+		}
+		p.referenceMu.Unlock()
+	}, err
 }
 
 func (p *CodexLive) RestorableSessions(ctx context.Context, force bool) ([]string, error) {

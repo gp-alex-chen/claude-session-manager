@@ -504,15 +504,16 @@ func TestUpdatePersistenceFailureKeepsRunningSession(t *testing.T) {
 	if err := os.WriteFile(blocker, []byte("block"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a.store = state.NewStore(blocker)
 	a.terms = terminal.NewManagerWithStart(
 		terminal.Callbacks{},
-		func([]string) error { return nil },
+		func(ids []string) error { return a.store.SaveOpen(ids) },
 		func(string, string, int, int, []string) (terminal.Pty, error) { return newShutdownPty(), nil },
 	)
 	if err := a.terms.Start("restore-me", "cmd", dir); err != nil {
 		t.Fatal(err)
 	}
+	a.store = state.NewStore(blocker)
+	defer a.terms.CloseAll()
 	applied := false
 	ready := false
 	err := a.applyDownloadedUpdate("downloaded.exe", func(string, bool) error {
@@ -524,11 +525,16 @@ func TestUpdatePersistenceFailureKeepsRunningSession(t *testing.T) {
 	if err == nil || !a.terms.IsRunning("restore-me") || applied || ready {
 		t.Fatalf("failed persistence should preserve running session: err=%v running=%v applied=%v ready=%v", err, a.terms.IsRunning("restore-me"), applied, ready)
 	}
-	a.closeAllTerms()
 }
 
 func TestUpdateShutdownPersistStartupRestore(t *testing.T) {
 	a, store, _, dir := testApp(t)
+	if err := store.SaveOpen([]string{"pending-startup"}); err != nil {
+		t.Fatal(err)
+	}
+	if refs := a.GetOpenSessionRefs(); len(refs) != 1 || refs[0].ID != "pending-startup" {
+		t.Fatalf("startup references=%v", refs)
+	}
 	a.terms = terminal.NewManagerWithStart(
 		terminal.Callbacks{},
 		func(ids []string) error { return store.SaveOpen(ids) },
@@ -537,6 +543,10 @@ func TestUpdateShutdownPersistStartupRestore(t *testing.T) {
 	if err := a.terms.Start("restore-me", "cmd", dir); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := a.registerPendingAdoption("new-cancelled", "cancelled"); err != nil {
+		t.Fatal(err)
+	}
+	a.TermKill("new-cancelled")
 	applied := false
 	if err := a.applyDownloadedUpdate("downloaded.exe", func(string, bool) error {
 		applied = true
@@ -567,7 +577,7 @@ func TestUpdateShutdownPersistStartupRestore(t *testing.T) {
 		}
 	}
 	restored.shutdown(context.Background())
-	if !reflect.DeepEqual(started, []string{"restore-me"}) {
+	if !reflect.DeepEqual(started, []string{"pending-startup", "restore-me"}) {
 		t.Fatalf("restored sessions = %v", started)
 	}
 }

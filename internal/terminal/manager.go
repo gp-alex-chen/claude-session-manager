@@ -4,6 +4,7 @@ package terminal
 import (
 	"encoding/base64"
 	"errors"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -113,6 +114,7 @@ type Manager struct {
 	persistErr       func(error)
 	persistDirty     bool // protected by mu; a failed snapshot needs a retry.
 	persistRetryIDs  []string
+	exitSnapshot     bool // an empty manager must not replace a previously captured exit snapshot.
 }
 
 func NewManager(cb Callbacks, persist func([]string) error) *Manager {
@@ -169,6 +171,12 @@ func (m *Manager) persistSnapshot(ids []string) error {
 
 func (m *Manager) persistAndReport(ids []string) error {
 	err := m.persistSnapshot(ids)
+	m.recordPersistence(ids, err)
+	m.reportPersist(err)
+	return err
+}
+
+func (m *Manager) recordPersistence(ids []string, err error) {
 	m.mu.Lock()
 	m.persistDirty = err != nil
 	if err != nil {
@@ -177,8 +185,6 @@ func (m *Manager) persistAndReport(ids []string) error {
 		m.persistRetryIDs = nil
 	}
 	m.mu.Unlock()
-	m.reportPersist(err)
-	return err
 }
 
 // retryPersistenceLocked retries the last desired snapshot. The caller must
@@ -248,16 +254,6 @@ func (m *Manager) OpenIDs() []string {
 	return m.openIDsLocked()
 }
 
-// OpenIDsWithPending adds IDs for adoption requests that have reached the App
-// boundary but have not yet been associated with a live PTY. This closes the
-// shutdown window between the Wails call and Manager.Adopt.
-func (m *Manager) OpenIDsWithPending(pending []string) []string {
-	m.mu.Lock()
-	ids := m.openIDsLocked()
-	m.mu.Unlock()
-	return mergeIDs(ids, pending)
-}
-
 func mergeIDs(left, right []string) []string {
 	seen := make(map[string]struct{}, len(left)+len(right))
 	ids := make([]string, 0, len(left)+len(right))
@@ -276,13 +272,17 @@ func mergeIDs(left, right []string) []string {
 }
 
 func (m *Manager) openIDsLocked() []string {
+	return m.openIDsWithBindingsLocked(m.persistIDByToken)
+}
+
+func (m *Manager) openIDsWithBindingsLocked(bindings map[string]string) []string {
 	ids := make([]string, 0, len(m.terms))
 	seen := make(map[string]struct{}, len(m.terms))
 	for token, r := range m.terms {
 		if token == "" || r == nil || r.Closed() {
 			continue
 		}
-		id, bound := m.persistIDByToken[token]
+		id, bound := bindings[token]
 		if bound && id == "" {
 			continue
 		}
@@ -489,17 +489,19 @@ func (m *Manager) CloseAllWithPendingAndForget(pending, forget []string) {
 // Native references are applied only to this atomic exit snapshot, and only
 // when their original terminal is still alive. They never recreate a PTY.
 func (m *Manager) CloseAllWithNativeReferences(pending, forget []string, refs map[string]string) error {
+	return m.closeAllWithNativeReferences(pending, forget, refs, false, nil)
+}
+
+// SaveAndCloseForUpdate commits the entire restore list before closing a PTY.
+// captureCodex runs under lifecycleMu, must not call back into the manager,
+// and returns a function to release its identity lock before any PTY closes.
+func (m *Manager) SaveAndCloseForUpdate(pending, forget []string, refs map[string]string, captureCodex func() (map[string]string, func(bool))) error {
+	return m.closeAllWithNativeReferences(pending, forget, refs, true, captureCodex)
+}
+
+func (m *Manager) closeAllWithNativeReferences(pending, forget []string, refs map[string]string, saveFirst bool, captureCodex func() (map[string]string, func(bool))) error {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
-	m.mu.Lock()
-	terms := m.terms
-	for token, key := range refs {
-		ref, err := provider.DecodeKey(key)
-		r := terms[token]
-		if err == nil && ref.Provider == provider.Antigravity && (strings.HasPrefix(token, "new-antigravity-") || token == key) && r != nil && !r.Closed() {
-			m.persistIDByToken[token] = key
-		}
-	}
 	hasPending := false
 	for _, id := range pending {
 		if id != "" {
@@ -507,41 +509,85 @@ func (m *Manager) CloseAllWithNativeReferences(pending, forget []string, refs ma
 			break
 		}
 	}
-	for _, token := range forget {
-		delete(m.persistIDByToken, token)
+	m.mu.Lock()
+	terms := m.terms
+	hasSnapshotWork := len(terms) > 0 || (!m.exitSnapshot && (hasPending || len(forget) > 0))
+	m.mu.Unlock()
+	if !hasSnapshotWork {
+		return m.retryPersistenceLocked()
 	}
-	if len(terms) == 0 && !hasPending {
-		if len(forget) > 0 {
-			m.mu.Unlock()
-			if err := m.persistAndReport(nil); err != nil {
-				return m.retryPersistenceLocked()
-			}
-			return nil
-		}
-		dirty := m.persistDirty
-		m.mu.Unlock()
-		if dirty {
-			return m.retryPersistenceLocked()
-		}
-		return nil
+	var codexRefs map[string]string
+	var finishCapture func(bool)
+	if captureCodex != nil {
+		codexRefs, finishCapture = captureCodex()
 	}
-	ids := mergeIDs(m.openIDsLocked(), pending)
+	m.mu.Lock()
+	ids := m.exitIDsLocked(pending, forget, refs, codexRefs)
+	m.mu.Unlock()
+	if saveFirst {
+		err := m.saveBeforeClose(ids)
+		if finishCapture != nil {
+			finishCapture(err == nil)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
 	m.terms = make(map[string]*ptyRef)
 	m.persistIDByToken = make(map[string]string)
+	m.exitSnapshot = true
 	m.mu.Unlock()
 	for _, r := range terms {
 		if r != nil {
 			r.Close()
 		}
 	}
-	// Persist the snapshot captured before clearing the map. Reader teardown
-	// waits on lifecycleMu and therefore cannot overwrite it with an empty set.
-	if err := m.persistAndReport(ids); err != nil {
-		// Shutdown/update is the last normal opportunity to make the restore
-		// snapshot durable, so perform one immediate retry.
-		return m.retryPersistenceLocked()
+	if saveFirst {
+		return nil
 	}
-	return nil
+	if err := m.persistAndReport(ids); err == nil {
+		return nil
+	}
+	return m.retryPersistenceLocked()
+}
+
+func (m *Manager) exitIDsLocked(pending, forget []string, agyRefs, codexRefs map[string]string) []string {
+	bindings := maps.Clone(m.persistIDByToken)
+	for token, key := range agyRefs {
+		ref, err := provider.DecodeKey(key)
+		if err == nil && ref.Provider == provider.Antigravity && (strings.HasPrefix(token, "new-antigravity-") || token == key) {
+			bindings[token] = key
+		}
+	}
+	for token, key := range codexRefs {
+		if !strings.HasPrefix(token, "new-codex-") && !strings.HasPrefix(token, "codex:") {
+			continue
+		}
+		ref, err := provider.DecodeKey(key)
+		if key == "" || (err == nil && ref.Provider == provider.Codex) {
+			bindings[token] = key
+		}
+	}
+	for _, token := range forget {
+		delete(bindings, token)
+	}
+	return mergeIDs(m.openIDsWithBindingsLocked(bindings), pending)
+}
+
+func (m *Manager) saveBeforeClose(ids []string) error {
+	var err error
+	for range 2 {
+		err = m.persistSnapshot(ids)
+		if err == nil {
+			m.recordPersistence(nil, nil)
+			return nil
+		}
+		m.reportPersist(err)
+	}
+	// These exit-only IDs were never committed. Leave the live bindings and
+	// any pending retry for a real live-state write intact.
+	return err
 }
 
 func (m *Manager) Start(token, cmdLine, dir string) error {
@@ -583,6 +629,7 @@ func (m *Manager) startWithOptions(token, cmdLine, dir string, overrides []strin
 	r := &ptyRef{pty: pty, resourceClose: cleanup}
 	m.mu.Lock()
 	m.terms[token] = r
+	m.exitSnapshot = false
 	if unbound {
 		m.persistIDByToken[token] = ""
 	} else if old == nil {

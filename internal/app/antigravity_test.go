@@ -635,7 +635,7 @@ func TestAntigravityOldShutdownCannotCloseNewLifecycleAfterSlowRestoreQuery(t *t
 	a.Shutdown(context.Background())
 }
 
-func observedAntigravityForExit(t *testing.T, history provider.HistoryProvider, failNativeSave bool) (*App, *state.Store, context.CancelFunc) {
+func observedAntigravityForExit(t *testing.T, history provider.HistoryProvider, checkSave func([]string) error) (*App, *state.Store, context.CancelFunc, string) {
 	t.Helper()
 	a, store, _, root := testApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -658,8 +658,10 @@ func observedAntigravityForExit(t *testing.T, history provider.HistoryProvider, 
 	}
 	var snapshot string
 	a.terms = terminal.NewManagerWithStart(terminal.Callbacks{}, func(ids []string) error {
-		if failNativeSave && len(ids) > 0 {
-			return errors.New("synthetic native-reference save failure")
+		if checkSave != nil {
+			if err := checkSave(ids); err != nil {
+				return err
+			}
 		}
 		return store.SaveOpen(ids)
 	}, func(_, _ string, _, _ int, env []string) (terminal.Pty, error) {
@@ -670,17 +672,18 @@ func observedAntigravityForExit(t *testing.T, history provider.HistoryProvider, 
 		}
 		return newShutdownPty(), nil
 	})
-	if _, err := a.StartNewAgent("antigravity", root); err != nil {
+	token, err := a.StartNewAgent("antigravity", root)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := provider.WriteAntigravitySnapshot(strings.NewReader(`{"conversation_id":"`+id+`"}`), snapshot); err != nil {
 		t.Fatal(err)
 	}
-	return a, store, cancel
+	return a, store, cancel, token
 }
 
 func TestAntigravityExitSaveSurvivesCancelledLifecycleContext(t *testing.T) {
-	a, store, cancel := observedAntigravityForExit(t, nil, false)
+	a, store, cancel, _ := observedAntigravityForExit(t, nil, nil)
 	cancel()
 	a.Shutdown(context.Background())
 	if refs := NewAppWithStore(store).GetOpenSessionRefs(); len(refs) != 1 || refs[0].Provider != "antigravity" {
@@ -689,19 +692,45 @@ func TestAntigravityExitSaveSurvivesCancelledLifecycleContext(t *testing.T) {
 }
 
 func TestAntigravityUpdateStopsWhenFinalNativeReferenceSaveFails(t *testing.T) {
-	a, _, cancel := observedAntigravityForExit(t, nil, true)
+	saveFailure := errors.New("synthetic native-reference save failure")
+	var failNativeSave atomic.Bool
+	failNativeSave.Store(true)
+	a, store, cancel, token := observedAntigravityForExit(t, nil, func(ids []string) error {
+		if len(ids) > 0 && failNativeSave.Load() {
+			return saveFailure
+		}
+		return nil
+	})
 	defer cancel()
+	defer a.Shutdown(context.Background())
 	applied := false
-	err := a.applyDownloadedUpdate("synthetic", func(string, bool) error { applied = true; return nil }, nil)
-	if err == nil || applied {
-		t.Fatal("update applied without saving native restore references", err, applied)
+	ready := false
+	apply := func(string, bool) error { applied = true; return nil }
+	onReady := func() { ready = true }
+	err := a.applyDownloadedUpdate("synthetic", apply, onReady)
+	if !errors.Is(err, saveFailure) || applied || ready || !a.terms.IsRunning(token) {
+		t.Fatalf("failed update must keep the original terminal: err=%v applied=%v ready=%v running=%v", err, applied, ready, a.terms.IsRunning(token))
+	}
+	failNativeSave.Store(false)
+	if err := a.terms.RetryPersistence(); err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := store.LoadOpen(); err != nil || len(saved) != 0 {
+		t.Fatalf("a failed update leaked tentative native references: saved=%v err=%v", saved, err)
+	}
+	if err := a.applyDownloadedUpdate("synthetic", apply, onReady); err != nil || !applied || !ready || a.terms.IsRunning(token) {
+		t.Fatalf("update retry did not save and close the terminal: err=%v applied=%v ready=%v running=%v", err, applied, ready, a.terms.IsRunning(token))
 	}
 	a.Shutdown(context.Background())
+	want := "antigravity:01900000-0000-7000-8000-000000000001"
+	if refs := NewAppWithStore(store).GetOpenSessionRefs(); len(refs) != 1 || refs[0].ID != want {
+		t.Fatalf("retry did not preserve the native reference across shutdown/startup: %v", refs)
+	}
 }
 
 func TestAntigravityShutdownWaitsForUpdateReferenceSave(t *testing.T) {
 	h := &blockingAntigravityHistory{started: make(chan struct{}), release: make(chan struct{})}
-	a, store, cancel := observedAntigravityForExit(t, h, false)
+	a, store, cancel, _ := observedAntigravityForExit(t, h, nil)
 	defer cancel()
 	updateDone := make(chan error, 1)
 	go func() {
@@ -729,7 +758,7 @@ func TestAntigravityShutdownWaitsForUpdateReferenceSave(t *testing.T) {
 
 func TestAntigravityShutdownWaitsForLongStopOwner(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		a, store, cancel := observedAntigravityForExit(t, nil, false)
+		a, store, cancel, _ := observedAntigravityForExit(t, nil, nil)
 		defer cancel()
 		generation, ownerDone, owner := a.claimStop()
 		if !owner {

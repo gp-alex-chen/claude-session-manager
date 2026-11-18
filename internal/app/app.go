@@ -245,7 +245,7 @@ func (a *App) shutdown(context.Context) {
 	if watcher != nil {
 		watcher.Stop()
 	}
-	if err := a.closeAllTermsWithNativeReferences(refs, generation); err != nil {
+	if err := a.finishTerminals(refs, generation, false); err != nil {
 		a.log("保存退出恢复清单失败: " + err.Error())
 	}
 	a.closeProviderServices()
@@ -415,15 +415,6 @@ func (a *App) TermKill(token string) {
 	a.killAgentRuntime(token)
 }
 func (a *App) NotifyBeep() { notify.Beep() }
-func (a *App) persistOpenSessions() error {
-	if a.store == nil || a.terms == nil {
-		return nil
-	}
-	a.adoptionMu.Lock()
-	defer a.adoptionMu.Unlock()
-	return a.store.SaveOpen(a.terms.OpenIDsWithPending(a.pendingAdoptionIDsLocked()))
-}
-
 func (a *App) claudeCmd(sessionID string) (string, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID != "" {

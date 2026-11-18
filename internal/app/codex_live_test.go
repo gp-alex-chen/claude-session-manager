@@ -73,6 +73,83 @@ func (h codexHistoryFunc) ListSessions(ctx context.Context) ([]provider.Session,
 	return h(ctx)
 }
 
+func TestCodexUpdateSaveFailureLetsPendingResumeComplete(t *testing.T) {
+	a, store, _, _ := testApp(t)
+	const first = "01900000-0000-7000-8000-000000000001"
+	const second = "01900000-0000-7000-8000-000000000002"
+	const dir = `C:\work`
+	var client, server func([]byte)
+	history := fakeCodexHistory{sessions: []provider.Session{
+		{Ref: provider.SessionRef{Provider: provider.Codex, ID: first}, Dir: dir},
+		{Ref: provider.SessionRef{Provider: provider.Codex, ID: second}, Dir: dir},
+	}}
+	live := provider.NewCodexLive(provider.NewCodex(history), func(_ context.Context, _ string, c, s func([]byte), _ func()) (provider.LaunchSpec, error) {
+		client, server = c, s
+		return provider.LaunchSpec{Command: "codex", Close: func() {}}, nil
+	}, nil)
+	a.providers = provider.NewRegistry()
+	if err := a.providers.Register(live); err != nil {
+		t.Fatal(err)
+	}
+	a.lookPath = func(string) (string, error) { return "codex.exe", nil }
+	saveFailure := errors.New("synthetic disk failure")
+	saving := make(chan []string, 1)
+	releaseSave := make(chan struct{})
+	var fail atomic.Bool
+	var attempts atomic.Int32
+	a.terms = terminal.NewManagerWithStart(terminal.Callbacks{}, func(ids []string) error {
+		if fail.Load() {
+			if attempts.Add(1) == 1 {
+				saving <- ids
+				<-releaseSave
+			}
+			return saveFailure
+		}
+		return store.SaveOpen(ids)
+	}, func(string, string, int, int, []string) (terminal.Pty, error) { return newShutdownPty(), nil })
+	defer a.Shutdown(context.Background())
+	token, err := a.StartNewAgent("codex", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client([]byte(`{"id":1,"method":"thread/start","params":{}}`))
+	server([]byte(`{"id":1,"result":{"thread":{"id":"` + first + `","status":{"type":"idle"}}}}`))
+	client([]byte(`{"id":2,"method":"thread/resume","params":{"threadId":"` + second + `"}}`))
+
+	fail.Store(true)
+	updated := make(chan error, 1)
+	apply := func(string, bool) error { return nil }
+	go func() { updated <- a.applyDownloadedUpdate("synthetic", apply, nil) }()
+	snapshot := <-saving
+	replyStarted, replyDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		close(replyStarted)
+		server([]byte(`{"id":2,"result":{"thread":{"id":"` + second + `","status":{"type":"idle"}}}}`))
+		close(replyDone)
+	}()
+	<-replyStarted
+	runningWhileSaving := a.terms.IsRunning(token)
+	close(releaseSave)
+	err = <-updated
+	<-replyDone
+	fail.Store(false)
+	if !reflect.DeepEqual(snapshot, []string{"codex:" + first}) || !runningWhileSaving ||
+		!errors.Is(err, saveFailure) || !a.terms.IsRunning(token) {
+		t.Fatalf("failed save snapshot=%v running=%t err=%v", snapshot, runningWhileSaving, err)
+	}
+	status, _ := live.Status(context.Background())
+	if len(status) != 1 || status[0].SessionID != second {
+		t.Fatalf("failed update lost native resume response: %+v", status)
+	}
+	if err = a.applyDownloadedUpdate("synthetic", apply, nil); err != nil {
+		t.Fatal(err)
+	}
+	a.Shutdown(context.Background())
+	if got := a.GetOpenSessions(); !reflect.DeepEqual(got, []string{"codex:" + second}) {
+		t.Fatalf("retry saved the wrong native identity: %v", got)
+	}
+}
+
 func TestCodexBindingWaitsForSuccessfulPersistenceAndCannotReviveAfterKill(t *testing.T) {
 	a, store, logs, _ := testApp(t)
 	id := "01900000-0000-7000-8000-000000000001"
