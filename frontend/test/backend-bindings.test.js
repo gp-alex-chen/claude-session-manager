@@ -10,7 +10,7 @@ const backend = fs.readFileSync(path.join(frontendDir, 'src/api/backend.js'), 'u
 const expected = [
   'GetAgents', 'GetOpenSessions', 'GetShell', 'ShellInstalled', 'SetShell',
   'NotifyBeep', 'SetCompletionBadge', 'SetTaskbarStatus', 'SetNotificationAttention', 'ReferenceCodexSession', 'DebugLog', 'ListSessions', 'ListHiddenSessions', 'RenameSession',
-  'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'StartNewAgent', 'ListAgentProviders', 'OpenFolder', 'TermWrite',
+  'DeleteSession', 'UnhideSession', 'AdoptSession', 'StartSession', 'StartNew', 'StartNewAgent', 'ListAgentProviders', 'OpenFolder', 'OpenTerminalPath', 'TermWrite',
   'TermResize', 'TermKill', 'GetVersion', 'GetUsageSummary', 'CheckForUpdate', 'UpdateToLatest',
   'ListProjects', 'ChooseProjectDir', 'AddProject', 'DeleteProject', 'ListProjectFavorites', 'SetProjectFavorite',
   'LoadPreferences', 'SetPreference',
@@ -122,6 +122,10 @@ test('directory project wrappers forward arguments unchanged', () => {
     binding,
     /export function SetProjectFavorite\(dir, favorite\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['SetProjectFavorite'\]\(dir, favorite\);\s*\}/,
   );
+});
+
+test('terminal path wrapper forwards the session directory, path and chosen action', () => {
+  assert.match(binding, /export function OpenTerminalPath\(dir, target, action\)\s*\{\s*return window\['go'\]\['app'\]\['App'\]\['OpenTerminalPath'\]\(dir, target, action\);\s*\}/);
 });
 
 

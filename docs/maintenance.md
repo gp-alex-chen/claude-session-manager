@@ -83,6 +83,8 @@ update state/progress -> update controller -> settings menu
 
 ## 关键维护边界
 
+终端路径链接使用 xterm 原生文件链接与当前显示行的本地路径识别。左键点击只显示路径菜单，选择动作后才调用 `OpenTerminalPath(dir, target, action)`。相对路径从会话目录解析，含空格的路径文字可用引号或反引号包住。Go 校验本机盘符和目标是否存在，复用资源管理器打开目录。直接打开文件交给 Windows Shell，执行文件按系统默认行为运行。
+
 ### Terminal 并发与 token
 
 统一身份使用 `SessionRef{Provider, ID}`，`EncodeKey`/`DecodeKey` 集中处理内部键。Claude 保留旧裸 ID，Codex 内部键为 `codex:<UUID>`；列表的 `id` 是内部键，同时返回 `provider` 与 `rawId`。收藏、别名、隐藏、打开清单和前端 Map 均使用内部键，CLI 参数只使用已验证的原始 ID。其他 provider 的内部键可转义编码，但是否允许恢复由注册中心与该 provider 校验；adapter 输出的启动命令/参数必须适合公共 Shell 渲染边界，不能把内部键或未经校验的输入拼进命令。

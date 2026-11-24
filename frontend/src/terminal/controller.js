@@ -1,6 +1,8 @@
 import { b64ToBytes, bytesToB64 } from '../utils.js';
 import { normalizeTerminalFontSize } from './options.js';
 import { peekReferenceDrag, takeReferenceDrag, referenceText } from '../sessions/reference-drag.js';
+import { createPathLinkProvider, createTerminalLinkHandler } from './path-links.js';
+import { createPathMenu } from './path-menu.js';
 
 export function createTerminalController(deps) {
   const {
@@ -30,6 +32,9 @@ export function createTerminalController(deps) {
   let fontFitPending = false;
   const fontFitTargets = new Set();
   const legacyVisibility = deps.layoutManaged !== true;
+  const pathMenu = documentRef?.body && typeof backend.OpenTerminalPath === 'function'
+    ? createPathMenu(documentRef, backend.OpenTerminalPath, setStatus)
+    : null;
 
   const clipboardReader = deps.readClipboard || (() => {
     if (!navigatorRef?.clipboard?.readText) return Promise.reject(new Error('剪贴板不可用'));
@@ -158,15 +163,21 @@ export function createTerminalController(deps) {
   function unmountSession(token, hostPool) {
     const session = state.terminals.get(token);
     if (!session) return;
+    pathMenu?.close(session);
     session.visible = false;
     session.host.classList.toggle('is-mounted', false);
     if (hostPool?.appendChild) hostPool.appendChild(session.host);
   }
 
   function makeTerminal(session) {
-    const term = new TerminalCtor(termOptions);
+    const activatePath = (event, target) => pathMenu.show(session, event, target);
+    const options = pathMenu
+      ? { ...termOptions, linkHandler: createTerminalLinkHandler(activatePath, documentRef.defaultView) }
+      : termOptions;
+    const term = new TerminalCtor(options);
     const fit = new FitAddonCtor();
     term.loadAddon(fit);
+    if (pathMenu) term.registerLinkProvider(createPathLinkProvider(term, activatePath));
     term.open(session.host);
     hideNativeScrollbar(term);
     preserveShiftImeInput(term);
@@ -236,6 +247,7 @@ export function createTerminalController(deps) {
     if (legacyVisibility) {
       for (const [currentToken, current] of state.terminals) {
         const visible = currentToken === token;
+        if (!visible) pathMenu?.close(current);
         current.host.classList.toggle('active', visible);
         current.visible = visible;
       }
@@ -262,6 +274,7 @@ export function createTerminalController(deps) {
   function disposeSession(token) {
     const session = state.terminals.get(token);
     if (!session) return;
+    pathMenu?.close(session);
     state.terminals.delete(token);
     onDispose?.(token);
     if (session.term) {
@@ -409,6 +422,7 @@ export function createTerminalController(deps) {
     applyFontSize,
     applyTheme,
     activate,
+    closePathMenu: pathMenu?.close,
     closeTab,
     disposeSession,
     fitAndSync,

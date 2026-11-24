@@ -103,7 +103,7 @@ export function createApplication(deps) {
   const terminalController = createTerminal({
     state,
     backend: { TermWrite: backend.TermWrite, TermResize: backend.TermResize, TermKill: backend.TermKill,
-      ReferenceCodexSession: backend.ReferenceCodexSession },
+      ReferenceCodexSession: backend.ReferenceCodexSession, OpenTerminalPath: backend.OpenTerminalPath },
     TerminalCtor,
     FitAddonCtor,
     termOptions,
@@ -391,6 +391,7 @@ export function createApplication(deps) {
     quotaController.stop();
     workspaceController.stop();
     updateController.stop?.();
+    terminalController.closePathMenu?.();
     sessionController.stop();
     paneController.stop();
     usageController.stop();

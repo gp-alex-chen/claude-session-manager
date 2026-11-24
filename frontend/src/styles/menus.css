@@ -484,8 +484,9 @@ textarea.notification-input { min-height: 76px; resize: vertical; font-family: m
 .notification-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 10px; }
 .notification-result { margin: 12px 0; padding: 10px; background: var(--panel-2); border-radius: var(--radius-sm); color: var(--text-dim); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Right-click context menu. */
-#ctx-menu {
+/* Context menus for sessions and terminal paths. */
+#ctx-menu,
+.terminal-path-menu {
   position: fixed;
   z-index: 999;
   min-width: 150px;
@@ -494,9 +495,17 @@ textarea.notification-input { min-height: 76px; resize: vertical; font-family: m
   border-radius: var(--radius);
   box-shadow: 0 12px 32px var(--shadow-lg);
   padding: 5px;
-  display: none;
 }
-#ctx-menu .ctx-item {
+#ctx-menu { display: none; }
+.terminal-path-menu .ctx-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
+:is(#ctx-menu, .terminal-path-menu) .ctx-item {
   padding: 8px 12px;
   font-size: 13px;
   color: var(--text);
@@ -504,6 +513,7 @@ textarea.notification-input { min-height: 76px; resize: vertical; font-family: m
   cursor: pointer;
   transition: background .1s;
 }
-#ctx-menu .ctx-item:hover { background: var(--menu-hover); }
+:is(#ctx-menu, .terminal-path-menu) .ctx-item:hover,
+.terminal-path-menu .ctx-item:focus-visible { background: var(--menu-hover); }
 #ctx-menu .ctx-item.danger { color: var(--danger); }
 #ctx-menu .ctx-item.danger:hover { background: var(--danger-soft); }

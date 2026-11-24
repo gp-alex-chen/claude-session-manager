@@ -115,6 +115,7 @@ class FakeTerm {
   }
   onData(handler) { this.dataHandler = handler; }
   onResize(handler) { this.resizeHandler = handler; }
+  registerLinkProvider(provider) { this.pathLinkProvider = provider; }
   attachCustomKeyEventHandler(handler) { this.keyHandler = handler; }
   write(bytes) { this.writes.push(bytes); }
   paste(text) {
@@ -146,7 +147,7 @@ function createFixture(options = {}) {
   const storageWrites = [];
   const frames = [];
   const termOptions = { ...createTermOptions(), pasteEmitsData: options.pasteEmitsData };
-  const documentRef = {
+  const documentRef = options.documentRef || {
     documentElement: { style: { setProperty() {} } },
   };
   const navigatorRef = { clipboard: { readText: async () => '粘贴内容' } };
@@ -156,6 +157,7 @@ function createFixture(options = {}) {
       TermWrite: (token, b64) => writes.push({ token, b64 }),
       TermResize: (token, cols, rows) => resizes.push({ token, cols, rows }),
       ReferenceCodexSession: options.referenceSession,
+      OpenTerminalPath: options.openTerminalPath,
       TermKill: (token) => {
         assert.equal(state.closedTokens.has(token), true);
         killed.push(token);
@@ -225,6 +227,78 @@ function openAndActivate(fixture, token = 'session-1') {
   fixture.controller.activate(token);
   return fixture.state.terminals.get(token);
 }
+
+function pathMenuFixture(openTerminalPath) {
+  class PathNode extends FakeHost {
+    style = {};
+    focus() { this.focused = true; }
+    contains(target) { return this === target || this.children.includes(target); }
+    removeEventListener(name) { this.listeners.delete(name); }
+    remove() {
+      this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
+    }
+    getBoundingClientRect() { return { width: 150, height: 60 }; }
+  }
+  const documentRef = new PathNode();
+  documentRef.body = new PathNode();
+  documentRef.documentElement = { clientWidth: 800, clientHeight: 600 };
+  documentRef.createElement = () => new PathNode();
+  return { ...createFixture({ documentRef, openTerminalPath }), documentRef };
+}
+
+test('plain left click shows only the two path actions and opens only after a choice', async () => {
+  const calls = [];
+  const fixture = pathMenuFixture(async (...args) => calls.push(args));
+  const session = openAndActivate(fixture);
+  session.dir = 'D:\\example project';
+  const label = 'outputs/windows/portable';
+  session.term.buffer = { active: {
+    getLine: (row) => row === 0 ? {
+      length: label.length,
+      getCell: (col) => ({ getWidth: () => 1, getChars: () => label[col] }),
+    } : undefined,
+    getNullCell: () => ({}),
+  } };
+  const click = { button: 0, ctrlKey: false, clientX: 799, clientY: 599 };
+  session.term.pathLinkProvider.provideLinks(1, ([link]) => link.activate(click, link.text));
+  const { body } = fixture.documentRef;
+  const [menu] = body.children;
+  assert.deepEqual(menu.children.map((button) => button.textContent), ['直接打开', '打开文件夹']);
+  assert.equal(menu.style.left, '650px');
+  assert.equal(menu.style.top, '540px');
+  assert.equal(calls.length, 0);
+  await menu.children[1].emit('click', {});
+  assert.deepEqual(calls, [[session.dir, label, 'folder']]);
+  assert.equal(body.children.length, 0);
+});
+
+test('native file links use the same path menu and dismiss when the terminal is unmounted', async () => {
+  const calls = [];
+  const fixture = pathMenuFixture(async (...args) => calls.push(args));
+  const session = openAndActivate(fixture);
+  session.dir = 'D:\\project';
+  const uri = 'file:///D:/project/outputs/my%20build.exe';
+  const click = { button: 0, ctrlKey: false, clientX: 100, clientY: 150 };
+  const handler = session.term.options.linkHandler;
+  const { body } = fixture.documentRef;
+  assert.equal(handler.allowNonHttpProtocols, true);
+  handler.activate({ ...click, button: 2 }, uri);
+  session.term.selection = 'selection';
+  handler.activate(click, uri);
+  session.term.selection = '';
+  handler.activate(click, 'https://example.com/ignored');
+  assert.equal(body.children.length, 0);
+  handler.activate(click, uri);
+  await body.children[0].children[0].emit('click', {});
+  assert.deepEqual(calls, [[session.dir, uri, 'open']]);
+  handler.activate(click, uri);
+  fixture.documentRef.emit('keydown', { key: 'Escape', preventDefault() {} });
+  assert.equal(body.children.length, 0);
+  handler.activate(click, uri);
+  fixture.controller.unmountSession(session.token);
+  assert.equal(body.children.length, 0);
+  assert.equal(calls.length, 1);
+});
 
 function referenceDrag() {
   const values = new Map();
